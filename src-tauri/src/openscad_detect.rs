@@ -108,7 +108,8 @@ pub fn find_python_in_standard_paths() -> Option<String> {
             return Some(path.to_string());
         }
     }
-    if cfg!(target_os = "windows") {
+    #[cfg(target_os = "windows")]
+    {
         if let Some(p) = find_python_in_localappdata() {
             return Some(p);
         }

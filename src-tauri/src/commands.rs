@@ -336,6 +336,7 @@ pub async fn install_deps(
 }
 
 /// 一键安装 Python(winget 静默安装 3.12);成功后返回新装的 python 路径
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn install_python(app: AppHandle) -> Result<String, AppError> {
     use tauri::Emitter;
@@ -362,6 +363,15 @@ pub async fn install_python(app: AppHandle) -> Result<String, AppError> {
             )
         })?;
     Ok(found)
+}
+
+/// 非 Windows 平台不支持一键安装 Python(发布版自带内置引擎)
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn install_python(_app: AppHandle) -> Result<String, AppError> {
+    Err(AppError::Other(
+        "一键安装 Python 仅支持 Windows;非 Windows 平台请使用内置引擎或手动安装".into(),
+    ))
 }
 
 /// 用户手动设置 Python 路径,持久化到 store
