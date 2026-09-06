@@ -4,6 +4,12 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useGerberOutline } from "../composables/useGerberOutline";
+import { useGerberStencil } from "../composables/useGerberStencil";
+import type { PadPolygon } from "../lib/gerber/pads";
+
+const props = withDefaults(defineProps<{
+  mode?: "jig" | "stencil";
+}>(), { mode: "jig" });
 
 const { t } = useI18n();
 
@@ -15,10 +21,65 @@ const emit = defineEmits<{
     outlinePoints: Array<[number, number]>;
     holes: Array<Array<[number, number]>>;
   }): void;
+  (e: "stencilDetected", payload: {
+    width: number;
+    height: number;
+    outlinePoints: Array<[number, number]>;
+    topPads: PadPolygon[];
+    bottomPads: PadPolygon[];
+  }): void;
 }>();
 
-const { loading, error, result, candidates, processFile, reset, hasResult } =
-  useGerberOutline();
+const outline = useGerberOutline();
+const stencil = useGerberStencil();
+
+const loading = computed(() => (props.mode === "stencil" ? stencil.loading.value : outline.loading.value));
+const error = computed(() => (props.mode === "stencil" ? stencil.error.value : outline.error.value));
+const hasResult = computed(() => (props.mode === "stencil" ? stencil.hasResult.value : outline.hasResult.value));
+const candidates = computed(() => (props.mode === "stencil" ? [] : outline.candidates.value));
+
+// 统一显示用的结果
+interface DisplayResult {
+  width: number;
+  height: number;
+  filename: string;
+  outlinePoints: Array<[number, number]>;
+  holes: Array<Array<[number, number]>>;
+  padCount?: number;
+  topPadCount?: number;
+  bottomPadCount?: number;
+  skipped?: number;
+  bbox?: { units: string | null };
+  parse?: { arcsLinearized: number };
+}
+const display = computed<DisplayResult | null>(() => {
+  if (props.mode === "stencil") {
+    const r = stencil.result.value;
+    if (!r) return null;
+    return {
+      width: r.width,
+      height: r.height,
+      filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
+      outlinePoints: r.outlinePoints,
+      holes: r.outlineHoles,
+      padCount: r.padCount,
+      topPadCount: r.topPads.length,
+      bottomPadCount: r.bottomPads.length,
+      skipped: r.skipped,
+    };
+  }
+  const r = outline.result.value;
+  if (!r) return null;
+  return {
+    width: r.width,
+    height: r.height,
+    filename: r.filename,
+    outlinePoints: r.outlinePoints,
+    holes: r.holes,
+    bbox: { units: r.bbox.units },
+    parse: { arcsLinearized: r.parse.arcsLinearized },
+  };
+});
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const dragOver = ref(false);
@@ -27,20 +88,38 @@ function pickFile() {
   fileInput.value?.click();
 }
 
+async function handleResult() {
+  if (props.mode === "stencil") {
+    const r = stencil.result.value;
+    if (r) {
+      emit("stencilDetected", {
+        width: r.width,
+        height: r.height,
+        outlinePoints: r.outlinePoints,
+        topPads: r.topPads,
+        bottomPads: r.bottomPads,
+      });
+    }
+  } else {
+    const r = outline.result.value;
+    if (r) {
+      emit("sizeDetected", {
+        width: r.width,
+        height: r.height,
+        filename: r.filename,
+        outlinePoints: r.outlinePoints,
+        holes: r.holes,
+      });
+    }
+  }
+}
+
 async function onFileChange(e: Event) {
   const target = e.target as HTMLInputElement;
   const file = target.files?.[0];
   if (!file) return;
-  await processFile(file);
-  if (result.value) {
-    emit("sizeDetected", {
-      width: result.value.width,
-      height: result.value.height,
-      filename: result.value.filename,
-      outlinePoints: result.value.outlinePoints,
-      holes: result.value.holes,
-    });
-  }
+  await (props.mode === "stencil" ? stencil.processFile(file) : outline.processFile(file));
+  await handleResult();
   target.value = "";
 }
 
@@ -49,16 +128,8 @@ async function onDrop(e: DragEvent) {
   dragOver.value = false;
   const file = e.dataTransfer?.files?.[0];
   if (!file) return;
-  await processFile(file);
-  if (result.value) {
-    emit("sizeDetected", {
-      width: result.value.width,
-      height: result.value.height,
-      filename: result.value.filename,
-      outlinePoints: result.value.outlinePoints,
-      holes: result.value.holes,
-    });
-  }
+  await (props.mode === "stencil" ? stencil.processFile(file) : outline.processFile(file));
+  await handleResult();
 }
 
 function onDragOver(e: DragEvent) {
@@ -77,7 +148,6 @@ async function processDroppedPaths(paths: string[]) {
   const fileName = path.split(/[/\\]/).pop() || path;
 
   try {
-    // 调用 Rust 后端读取文件字节
     const bytes = await invoke<number[]>("read_dropped_file", { path });
     const u8 = new Uint8Array(bytes);
     const file = new File([u8], fileName, {
@@ -85,16 +155,8 @@ async function processDroppedPaths(paths: string[]) {
         ? "application/zip"
         : "text/plain",
     });
-    await processFile(file);
-    if (result.value) {
-      emit("sizeDetected", {
-        width: result.value.width,
-        height: result.value.height,
-        filename: result.value.filename,
-        outlinePoints: result.value.outlinePoints,
-        holes: result.value.holes,
-      });
-    }
+    await (props.mode === "stencil" ? stencil.processFile(file) : outline.processFile(file));
+    await handleResult();
   } catch (err) {
     console.error("读取拖入文件失败:", err);
   }
@@ -129,19 +191,24 @@ onBeforeUnmount(() => {
 });
 
 function clear() {
-  reset();
+  if (props.mode === "stencil") stencil.reset();
+  else outline.reset();
 }
 
 function fmt(n: number): string {
   return n.toFixed(2);
 }
 
+const acceptAttr = computed(() =>
+  props.mode === "stencil" ? ".zip,.gtp,.gbp,.gbr" : ".zip,.gko,.gm1,.gbr"
+);
+
 /** SVG path:外框 + 内孔子路径,配合 fill-rule=evenodd 显示挖孔 */
 const outlinePath = computed(() => {
-  if (!result.value) return "";
+  if (!display.value) return "";
   const toSub = (pts: Array<[number, number]>) =>
     pts.map((p) => `${p[0]},${p[1]}`).join(" ");
-  return [toSub(result.value.outlinePoints), ...result.value.holes.map(toSub)].join(" ");
+  return [toSub(display.value.outlinePoints), ...display.value.holes.map(toSub)].join(" ");
 });
 </script>
 
@@ -150,7 +217,7 @@ const outlinePath = computed(() => {
     <input
       ref="fileInput"
       type="file"
-      accept=".zip,.gko,.gm1,.gbr"
+      :accept="acceptAttr"
       style="display: none"
       @change="onFileChange"
     />
@@ -180,7 +247,7 @@ const outlinePath = computed(() => {
     </el-alert>
 
     <!-- Result -->
-    <div v-if="result" class="result">
+    <div v-if="display" class="result">
       <div class="result-header">
         <svg viewBox="0 0 16 16" width="16" height="16" class="check-icon">
           <path d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
@@ -190,9 +257,9 @@ const outlinePath = computed(() => {
 
       <!-- SVG Preview -->
       <svg
-        v-if="result.outlinePoints.length > 0"
+        v-if="display.outlinePoints.length > 0"
         class="outline-preview"
-        :viewBox="`${-result.width / 2 - 2} ${-result.height / 2 - 2} ${result.width + 4} ${result.height + 4}`"
+        :viewBox="`${-display.width / 2 - 2} ${-display.height / 2 - 2} ${display.width + 4} ${display.height + 4}`"
         preserveAspectRatio="xMidYMid meet"
       >
         <g transform="scale(1, -1)">
@@ -205,17 +272,17 @@ const outlinePath = computed(() => {
           />
         </g>
         <line
-          :x1="-result.width/2" :y1="0"
-          :x2="result.width/2" :y2="0"
+          :x1="-display.width/2" :y1="0"
+          :x2="display.width/2" :y2="0"
           stroke="rgba(115,115,115,0.36)" stroke-width="0.2" stroke-dasharray="2,2"
         />
         <text
-          :x="result.width/2 + 2" y="3"
+          :x="display.width/2 + 2" y="3"
           font-size="3"
           fill="rgba(115,115,115,0.5)"
           font-family="JetBrains Mono, monospace"
         >
-          {{ fmt(result.width) }}×{{ fmt(result.height) }} mm
+          {{ fmt(display.width) }}×{{ fmt(display.height) }} mm
         </text>
       </svg>
 
@@ -223,28 +290,38 @@ const outlinePath = computed(() => {
       <div class="info-grid">
         <div class="info-row">
           <span class="info-label">{{ t('gerber.outlineFile') }}</span>
-          <span class="info-value" :title="result.filename">{{ result.filename }}</span>
+          <span class="info-value" :title="display.filename">{{ display.filename }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">{{ t('gerber.pcbSize') }}</span>
-          <span class="info-value">{{ fmt(result.width) }} × {{ fmt(result.height) }} mm</span>
+          <span class="info-value">{{ fmt(display.width) }} × {{ fmt(display.height) }} mm</span>
         </div>
-        <div class="info-row">
+        <div v-if="props.mode === 'stencil'" class="info-row">
+          <span class="info-label">{{ t('stencil.padCountShort') }}</span>
+          <span class="info-value">
+            {{ t('stencil.topShort') }} {{ display.topPadCount }} / {{ t('stencil.bottomShort') }} {{ display.bottomPadCount }}
+          </span>
+        </div>
+        <div v-if="props.mode === 'stencil' && display.skipped && display.skipped > 0" class="info-row">
+          <span class="info-label">{{ t('stencil.skippedShort') }}</span>
+          <span class="info-value warn">{{ t('stencil.skippedWarning', { n: display.skipped }) }}</span>
+        </div>
+        <div v-if="props.mode !== 'stencil'" class="info-row">
           <span class="info-label">{{ t('gerber.units') }}</span>
-          <span class="info-value">{{ result.bbox.units || t('gerber.unitsUnknown') }}</span>
+          <span class="info-value">{{ display.bbox?.units || t('gerber.unitsUnknown') }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">{{ t('gerber.vertices') }}</span>
           <span class="info-value">
-            {{ result.outlinePoints.length }}
-            <span v-if="result.parse.arcsLinearized > 0" class="info-sub">
-              ({{ t('gerber.arcs', { n: result.parse.arcsLinearized }) }})
+            {{ display.outlinePoints.length }}
+            <span v-if="display.parse && display.parse.arcsLinearized > 0" class="info-sub">
+              ({{ t('gerber.arcs', { n: display.parse.arcsLinearized }) }})
             </span>
           </span>
         </div>
-        <div v-if="result.holes.length > 0" class="info-row">
+        <div v-if="display.holes.length > 0" class="info-row">
           <span class="info-label">{{ t('gerber.holesLabel') }}</span>
-          <span class="info-value">{{ t('gerber.holes', { n: result.holes.length }) }}</span>
+          <span class="info-value">{{ t('gerber.holes', { n: display.holes.length }) }}</span>
         </div>
       </div>
 
@@ -392,6 +469,10 @@ const outlinePath = computed(() => {
   color: var(--text-tertiary);
   font-size: 10px;
   margin-left: 4px;
+}
+
+.info-value.warn {
+  color: #D9913D;
 }
 
 .alt-candidates {

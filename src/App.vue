@@ -11,6 +11,7 @@ import ConfigForm from "./components/ConfigForm.vue";
 import ModelPreview from "./components/ModelPreview.vue";
 import GerberImport from "./components/GerberImport.vue";
 import ScrewDiagram from "./components/ScrewDiagram.vue";
+import StencilForm from "./components/StencilForm.vue";
 import PythonSetup from "./components/PythonSetup.vue";
 import ProjectMenu from "./components/ProjectMenu.vue";
 import SettingsMenu from "./components/SettingsMenu.vue";
@@ -21,6 +22,10 @@ const { t } = useI18n();
 
 // Element Plus 内置组件文案(弹窗按钮等)跟随语言切换
 const epLocale = computed(() => (ui.locale === "en" ? enLocale : zhCn));
+const appMode = computed(() => configStore.config.appMode);
+function switchMode(mode: "jig" | "stencil") {
+  configStore.setMode(mode);
+}
 
 // ===== 自定义标题栏(decorations:false,与页眉融合) =====
 // 浏览器环境(纯 vite dev 预览)无 Tauri 窗口 API,兜底成空实现以便 UI 调试
@@ -63,6 +68,8 @@ const sidebarWidth = ref(480);
 const SIDEBAR_MIN = 340;
 const SIDEBAR_MAX = 800;
 const SIDEBAR_KEY = "psj_sidebar_width";
+// 拖拽过程中禁用 transition 保证跟手,松手后再启用,产生"惯性到位"效果
+const sidebarAnimating = ref(false);
 
 // 每个卡片的高度
 const CARD_MIN = 140;
@@ -73,6 +80,7 @@ const cardHeights = ref<Record<string, number>>({
   gerber: 300,
   config: 520,
   screw: 360,
+  stencil: 520,
 });
 // 卡片高度是否自适应内容(展开即完整显示);用户手动拖过 → false 锁定像素
 const autoHeights = ref<Record<string, boolean>>({
@@ -80,6 +88,7 @@ const autoHeights = ref<Record<string, boolean>>({
   gerber: true,
   config: true,
   screw: true,
+  stencil: true,
 });
 // Python 环境卡片默认折叠
 const collapsed = ref<Record<string, boolean>>({
@@ -87,6 +96,7 @@ const collapsed = ref<Record<string, boolean>>({
   gerber: false,
   config: false,
   screw: false,
+  stencil: false,
 });
 
 const HEIGHTS_KEY = "psj_card_heights";
@@ -143,6 +153,7 @@ function onWidthDown(e: MouseEvent) {
   widthStartW = sidebarWidth.value;
   document.body.style.cursor = "col-resize";
   document.body.style.userSelect = "none";
+  sidebarAnimating.value = false;
   e.preventDefault();
 }
 
@@ -160,10 +171,15 @@ function onWidthUp() {
     document.body.style.cursor = "";
     document.body.style.userSelect = "";
     saveSettings();
+    // 松手后下一帧开启 transition,产生"惯性到位"效果
+    requestAnimationFrame(() => {
+      sidebarAnimating.value = true;
+    });
   }
 }
 
 function resetSidebarWidth() {
+  sidebarAnimating.value = true;
   sidebarWidth.value = 480;
   saveSettings();
 }
@@ -242,7 +258,7 @@ function toggleCollapse(id: string) {
 }
 
 // 内容高度变化(高级区开合、提示出现等)后复查:锁定值装不下就恢复自适应
-const CARD_IDS = ["python", "gerber", "config", "screw"] as const;
+const CARD_IDS = ["python", "gerber", "config", "screw", "stencil"] as const;
 let contentObserver: ResizeObserver | null = null;
 
 function observeCardContent(id: string) {
@@ -309,18 +325,46 @@ onBeforeUnmount(() => {
   <div class="app-shell">
     <header class="app-header" data-tauri-drag-region @dblclick="onHeaderDblClick">
       <div class="header-brand" data-tauri-drag-region>
-        <!-- Logo:板框四孔(夹具俯视图:板框 + 四角螺丝孔 + 钢网窗口) -->
+        <!-- Logo:B1 竖向蛇形砖墙(走线 = 砖墙灰缝 · 起绿终橙) -->
         <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true" data-tauri-drag-region>
-          <rect x="5" y="5" width="54" height="54" rx="11" fill="none" stroke="var(--bg-brand)" stroke-width="6" />
-          <rect x="23" y="23" width="18" height="18" rx="4" fill="var(--brand-500)" />
-          <circle cx="14.5" cy="14.5" r="3.5" fill="var(--icon-default)" />
-          <circle cx="49.5" cy="14.5" r="3.5" fill="var(--icon-default)" />
-          <circle cx="14.5" cy="49.5" r="3.5" fill="var(--icon-default)" />
-          <circle cx="49.5" cy="49.5" r="3.5" fill="var(--icon-default)" />
+          <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="var(--bg-brand)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+          <circle cx="14" cy="14" r="5" fill="var(--bg-brand)" />
+          <circle cx="14" cy="50" r="5" fill="var(--brand-accent)" />
         </svg>
         <div class="header-titles" data-tauri-drag-region>
           <h1 data-tauri-drag-region>{{ t('app.title') }}</h1>
-          <span class="subtitle" data-tauri-drag-region>{{ t('app.subtitle') }}</span>
+          <span class="subtitle" :key="appMode" data-tauri-drag-region>
+            {{ appMode === 'stencil' ? t('app.subtitleStencil') : t('app.subtitleJig') }}
+          </span>
+        </div>
+        <!-- 模式切换 -->
+        <div class="mode-switch">
+          <div class="mode-indicator" :class="{ 'pos-jig': appMode === 'jig', 'pos-stencil': appMode === 'stencil' }" aria-hidden="true" />
+          <button
+            class="mode-btn"
+            :class="{ active: appMode === 'jig' }"
+            @click="switchMode('jig')"
+          >
+            <svg class="mode-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
+              <path d="M5 5h6v3H8.5L7 9.5v1.5H5z" fill="currentColor"/>
+            </svg>
+            {{ t('mode.jig') }}
+          </button>
+          <button
+            class="mode-btn"
+            :class="{ active: appMode === 'stencil' }"
+            @click="switchMode('stencil')"
+          >
+            <svg class="mode-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" stroke-width="1.6"/>
+              <circle cx="5.5" cy="5.5" r="1" fill="currentColor"/>
+              <circle cx="10.5" cy="5.5" r="1" fill="currentColor"/>
+              <circle cx="5.5" cy="10.5" r="1" fill="currentColor"/>
+              <circle cx="10.5" cy="10.5" r="1" fill="currentColor"/>
+            </svg>
+            {{ t('mode.stencil') }}
+          </button>
         </div>
       </div>
       <div class="spacer" data-tauri-drag-region />
@@ -364,7 +408,7 @@ onBeforeUnmount(() => {
     </header>
 
     <main class="app-main">
-      <aside class="app-sidebar" :style="{ width: sidebarWidth + 'px' }">
+      <aside class="app-sidebar" :class="{ 'is-animating': sidebarAnimating }" :style="{ width: sidebarWidth + 'px' }">
         <!-- Python Environment -->
         <div id="slot-python" class="card-slot" :style="slotStyle('python')">
           <div class="slot-header" @click="toggleCollapse('python')">
@@ -396,7 +440,8 @@ onBeforeUnmount(() => {
           />
         </div>
 
-        <!-- Gerber Import -->
+        <!-- Gerber Import (jig mode) -->
+        <template v-if="appMode === 'jig'">
         <div id="slot-gerber" class="card-slot" :style="slotStyle('gerber')">
           <div class="slot-header" @click="toggleCollapse('gerber')">
             <div class="slot-label">
@@ -464,6 +509,32 @@ onBeforeUnmount(() => {
             @dblclick="onHandleDblClick('screw')"
           />
         </div>
+        </template>
+
+        <!-- Stencil Card (stencil mode) -->
+        <template v-if="appMode === 'stencil'">
+        <div id="slot-stencil" class="card-slot" :style="slotStyle('stencil')">
+          <div class="slot-header" @click="toggleCollapse('stencil')">
+            <div class="slot-label">
+              <span class="slot-step-dot" data-step="1">1</span>
+              <span class="slot-title">{{ t('cards.stencil') }}</span>
+            </div>
+            <svg class="chevron" :class="{ 'is-collapsed': collapsed.stencil }" viewBox="0 0 16 16" width="16" height="16">
+              <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </div>
+          <div v-show="!collapsed.stencil" class="slot-body">
+            <StencilForm />
+          </div>
+          <div
+            v-if="!collapsed.stencil"
+            class="drag-handle"
+            title="拖动调整高度,双击恢复自适应"
+            @mousedown="onHeightDown('stencil', $event)"
+            @dblclick="onHandleDblClick('stencil')"
+          />
+        </div>
+        </template>
       </aside>
 
       <div
@@ -501,6 +572,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 16px;
   user-select: none;
+  position: relative;
 }
 
 /* ===== 窗口控制(融合标题栏) ===== */
@@ -546,6 +618,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* mode-switch 已用绝对定位脱离 flex 流;这里 max-width 控制不要撞到 mode-switch */
+  max-width: 460px;
+  min-width: 0;
+  overflow: hidden;
+  flex-shrink: 1;
 }
 
 .brand-mark {
@@ -573,6 +650,87 @@ onBeforeUnmount(() => {
   font-size: 11px;
   line-height: 16px;
   color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: subtitleFadeIn 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes subtitleFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.mode-switch {
+  position: absolute;
+  left: 380px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: inline-flex;
+  background: rgba(62, 125, 98, 0.10);
+  border: 1px solid rgba(62, 125, 98, 0.22);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 0;
+  /* 关键:模式按钮不允许被挤压消失 */
+  flex-shrink: 0;
+}
+/* 滑动指示器:宽度 = 容器宽度的一半,根据 active 状态左右平移 */
+.mode-switch .mode-indicator {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  height: calc(100% - 6px);
+  border-radius: 999px;
+  background: var(--brand-500);
+  box-shadow:
+    0 1px 2px rgba(62, 125, 98, 0.20),
+    0 2px 6px rgba(62, 125, 98, 0.18);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+.mode-switch .mode-indicator.pos-stencil {
+  transform: translateX(100%);
+}
+.mode-btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.18s ease;
+  line-height: 1;
+}
+.mode-btn .mode-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.mode-btn:hover:not(.active) {
+  color: var(--brand-500);
+}
+.mode-btn.active {
+  color: #ffffff;
+}
+/* 深色主题:容器底色更深、指示器用青瓷绿提亮版 */
+:root[data-theme="dark"] .mode-switch {
+  background: rgba(90, 155, 127, 0.14);
+  border-color: rgba(90, 155, 127, 0.30);
+}
+:root[data-theme="dark"] .mode-switch .mode-indicator {
+  background: var(--bg-brand);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(74, 138, 112, 0.40);
 }
 
 .spacer {
@@ -595,10 +753,13 @@ onBeforeUnmount(() => {
   overflow-x: hidden;
   padding: 12px;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: column;  gap: 8px;
   min-width: 340px;
   max-width: 600px;
+}
+/* 拖拽松手后启用宽度过渡,产生"惯性到位"效果;拖拽中不启用避免卡顿 */
+.app-sidebar.is-animating {
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ===== Card Slots ===== */
@@ -701,7 +862,7 @@ onBeforeUnmount(() => {
 .chevron {
   color: var(--text-tertiary);
   flex-shrink: 0;
-  transition: transform 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .chevron.is-collapsed {

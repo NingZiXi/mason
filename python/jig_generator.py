@@ -24,6 +24,7 @@ B 面配置:insert 翻面(凸台朝下套进 base 窗口)整体翻转后,凸台�
 import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -34,27 +35,59 @@ from build123d import (
     Plane, Polyline, RectangleRounded, make_face, add, chamfer,
     extrude, export_stl, export_step, loft,
 )
+# OCC 原生 API:焊盘开孔性能关键路径(build123d 构建器随面数二次方变慢,
+# 千级焊盘时不可用;OCP 直连构建 <1s,配合 Glue 并行布尔再快 ~4 倍)
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
+from OCP.BOPAlgo import BOPAlgo_GlueEnum
+from OCP.TopTools import TopTools_ListOfShape
+from OCP.TopAbs import TopAbs_ShapeEnum
+from OCP.BRep import BRep_Builder
+from OCP.gp import gp_Pnt, gp_Vec, gp_Trsf, gp_Ax1, gp_Dir
+from OCP.TopoDS import TopoDS_Compound, TopoDS
+from OCP.TopLoc import TopLoc_Location
+from OCP.TopExp import TopExp_Explorer
+# STL 导出用 OCC 原生网格化:build123d export_stl 默认 1e-3 相对偏差,
+# 千孔钢网网格化 66s;绝对偏差 0.01 只要 6.7s 且三角数几乎不变
+# (绝大多数面是平面多边形,对偏差不敏感)
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.StlAPI import StlAPI_Writer
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shapely_box
+from shapely.geometry.polygon import orient as shapely_orient
+from shapely.ops import unary_union as shapely_union
+from shapely.affinity import scale as shapely_scale_aff
+from shapely.affinity import translate as shapely_translate
 
 # ---------------------------------------------------------------------------
 # 公共几何工具
 # ---------------------------------------------------------------------------
 
 def poly_solid(coords, height):
-    """2D 点列 → extruded solid(z: 0..height)"""
+    """2D 点列 → extruded solid(z: 0..height)。失败返回 None。"""
     pts = list(coords)
     if len(pts) > 1 and pts[0] == pts[-1]:
         pts = pts[:-1]
+    # 去除连续重复点(浮点容差),避免退化边
+    cleaned = [pts[0]]
+    for x, y in pts[1:]:
+        px, py = cleaned[-1]
+        if abs(x - px) > 1e-6 or abs(y - py) > 1e-6:
+            cleaned.append((x, y))
+    pts = cleaned
     if len(pts) < 3:
         return None
-    with BuildPart() as p:
-        with BuildSketch(Plane.XY) as s:
-            with BuildLine() as l:
-                Polyline(*[bd.Vector(x, y, 0) for x, y in pts], close=True)
-            make_face()
-        extrude(amount=height)
-    return p.part
+    try:
+        with BuildPart() as p:
+            with BuildSketch(Plane.XY) as s:
+                with BuildLine() as l:
+                    Polyline(*[bd.Vector(x, y, 0) for x, y in pts], close=True)
+                make_face()
+            extrude(amount=height)
+        return p.part
+    except Exception:
+        return None
 
 
 def rounded_square_solid(size, height, radius):
@@ -531,28 +564,893 @@ def build_base(p):
 
 
 # ---------------------------------------------------------------------------
+# PCB 钢网(一体式,自带卡槽,独立使用)
+# ---------------------------------------------------------------------------
+
+def poly_solid_rings(exterior, holes, height):
+    """外轮廓 + 内孔列表 → 带孔 extruded solid(z: 0..height)。
+    失败返回 None(调用方可降级为 poly_solid 仅外轮廓)。"""
+    ext = list(exterior)
+    if len(ext) > 1 and tuple(ext[0]) == tuple(ext[-1]):
+        ext = ext[:-1]
+    if len(ext) < 3:
+        return None
+    ring_lists = [ext]
+    for h in holes or []:
+        # h 可能是点列表,也可能是 shapely LinearRing(geom.interiors)
+        hl = list(h.coords) if hasattr(h, "coords") else list(h)
+        if len(hl) > 1 and tuple(hl[0]) == tuple(hl[-1]):
+            hl = hl[:-1]
+        if len(hl) >= 3:
+            ring_lists.append(hl)
+    try:
+        with BuildPart() as p:
+            with BuildSketch(Plane.XY) as s:
+                with BuildLine() as l:
+                    Polyline(*[bd.Vector(x, y, 0) for x, y in ring_lists[0]], close=True)
+                make_face()
+                for hole_ring in ring_lists[1:]:
+                    with BuildLine() as l:
+                        Polyline(*[bd.Vector(x, y, 0) for x, y in hole_ring], close=True)
+                    make_face(mode=bd.Mode.SUBTRACT)
+            extrude(amount=height)
+        return p.part
+    except Exception:
+        return None
+
+
+def _pad_to_parts(pad):
+    """焊盘条目 → (parts, pad_polarity)。支持三种格式:
+    1. dict {"parts":[{polarity,points,holes}], "polarity": "D"} (光绘机新格式)
+    2. list of part dict(序列化后的新格式)
+    3. flat 顶点列表 [[x,y],...](旧格式)"""
+    if isinstance(pad, dict):
+        return pad.get("parts", []) or [], str(pad.get("polarity", "D")).upper()
+    if isinstance(pad, list) and pad and isinstance(pad[0], dict):
+        return pad, "D"
+    return ([{"polarity": "D", "points": pad}] if len(pad) >= 3 else []), "D"
+
+
+def _build_pad_solid(geom, height):
+    """shapely 几何 → extruded solid(带内孔);失败返回 None"""
+    # Y 镜像等操作会把环方向翻成 CW,先统一:外环 CCW / 内环 CW
+    geom = shapely_orient(geom, 1.0)
+    solid = poly_solid_rings(geom.exterior.coords, geom.interiors, height)
+    if solid is None:
+        solid = poly_solid(geom.exterior.coords, height)
+    return solid
+
+
+def _ring_coords(ring):
+    """shapely 环 → 干净点列(去闭合重复点)"""
+    pts = list(ring.coords) if hasattr(ring, "coords") else list(ring)
+    if len(pts) > 1 and tuple(pts[0]) == tuple(pts[-1]):
+        pts = pts[:-1]
+    return pts
+
+
+def _shapely_face(g, z):
+    """shapely 多边形(带内孔)→ z 平面上的 OCC 平面 face。失败 None。
+    外环 CCW / 内环 CW(shapely_orient 保证),face 法向 +Z。"""
+    g = shapely_orient(g, 1.0)
+    mk = BRepBuilderAPI_MakePolygon()
+    for x, y in _ring_coords(g.exterior):
+        mk.Add(gp_Pnt(x, y, z))
+    mk.Close()
+    if not mk.IsDone():
+        return None
+    mkf = BRepBuilderAPI_MakeFace(mk.Wire())
+    if not mkf.IsDone():
+        return None
+    face = mkf.Face()
+    for hole in g.interiors:
+        mkh = BRepBuilderAPI_MakePolygon()
+        for x, y in _ring_coords(hole):
+            mkh.Add(gp_Pnt(x, y, z))
+        mkh.Close()
+        if not mkh.IsDone():
+            continue
+        mkf2 = BRepBuilderAPI_MakeFace(face, mkh.Wire())
+        if mkf2.IsDone():
+            face = mkf2.Face()
+    return face
+
+
+def _ocp_prisms(geoms, z0, height):
+    """shapely 多边形列表 → OCC 棱柱 shape 列表(绕过 build123d 构建器)。
+    先 shapely union 合并:重叠焊盘融合、结果两两不相交(Glue 布尔前提)。
+    支持带内孔多边形(热焊盘等)。"""
+    if height <= 0.001:
+        return []
+    merged = shapely_union(geoms)
+    if merged.is_empty:
+        return []
+    polys = (list(merged.geoms) if merged.geom_type == "MultiPolygon"
+             else [merged] if merged.geom_type == "Polygon" else [])
+    shapes = []
+    for g in polys:
+        if g.geom_type != "Polygon" or g.area < 1e-6:
+            continue
+        g = shapely_orient(g, 1.0)
+        mk = BRepBuilderAPI_MakePolygon()
+        for x, y in _ring_coords(g.exterior):
+            mk.Add(gp_Pnt(x, y, z0))
+        mk.Close()
+        if not mk.IsDone():
+            continue
+        mkf = BRepBuilderAPI_MakeFace(mk.Wire())
+        if not mkf.IsDone():
+            continue
+        face = mkf.Face()
+        for hole in g.interiors:
+            mkh = BRepBuilderAPI_MakePolygon()
+            for x, y in _ring_coords(hole):
+                mkh.Add(gp_Pnt(x, y, z0))
+            mkh.Close()
+            if not mkh.IsDone():
+                continue
+            mkf2 = BRepBuilderAPI_MakeFace(face, mkh.Wire())
+            if mkf2.IsDone():
+                face = mkf2.Face()
+        prism = BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, height))
+        if prism.IsDone():
+            shapes.append(prism.Shape())
+    return shapes
+
+
+def _glue_cut(part, shapes):
+    """并行 + Glue 布尔切割。shapes 必须两两不相交(调用前 shapely union
+    已保证);Glue 模式让 OCC 跳过工具间求交,千级工具快 ~4 倍。
+    注意:Glue BOP 不接受 COMPOUND 作为参数(静默无效)—— 上次 Glue
+    切割的结果是包着实体的 COMPOUND,续切前必须解包成 solid。"""
+    builder = BRep_Builder()
+    comp = TopoDS_Compound()
+    builder.MakeCompound(comp)
+    for s in shapes:
+        builder.Add(comp, s)
+    cut = BRepAlgoAPI_Cut()
+    args = TopTools_ListOfShape()
+    if part.wrapped.ShapeType() == TopAbs_ShapeEnum.TopAbs_COMPOUND:
+        for solid in part.solids():
+            args.Append(solid.wrapped)
+    if args.Extent() == 0:
+        args.Append(part.wrapped)
+    tools = TopTools_ListOfShape()
+    tools.Append(comp)
+    cut.SetArguments(args)
+    cut.SetTools(tools)
+    cut.SetRunParallel(True)
+    cut.SetGlue(BOPAlgo_GlueEnum.BOPAlgo_GlueShift)
+    cut.Build()
+    if not cut.IsDone():
+        raise RuntimeError("OCC Glue 布尔切割失败")
+    return bd.Part(cut.Shape())
+
+
+def _glue_cut_or_fallback(part, shapes):
+    """Glue 切割,失败降级为 build123d 串行布尔(慢但兼容)"""
+    if not shapes:
+        return part
+    try:
+        return _glue_cut(part, shapes)
+    except Exception:
+        builder = BRep_Builder()
+        comp = TopoDS_Compound()
+        builder.MakeCompound(comp)
+        for s in shapes:
+            builder.Add(comp, s)
+        return part - bd.Compound(comp)
+
+
+def _chamfer_ring_arc(shape, total_h, pocket_half):
+    """卡槽环圈弧段的顶缘 0.2 小倒角(入口防刮伤 PCB)。
+    只在环圈小实体上做(边数 ~几十),避免在带几千焊盘孔的完整件上
+    遍历全部边。倒角边 = 顶面(z≈total_h)且在卡槽开口附近的边,
+    与旧版(整件倒角)选择结果一致。失败返回原 shape。"""
+    try:
+        with BuildPart() as bp:
+            add(bd.Part(shape))
+            cands = []
+            for e in bp.edges():
+                c = e.center()
+                if abs(c.Z - total_h) > 0.1:
+                    continue
+                bb = e.bounding_box()
+                if max(abs(bb.min.X), abs(bb.max.X),
+                       abs(bb.min.Y), abs(bb.max.Y)) < pocket_half + 0.5:
+                    cands.append(e)
+            if cands:
+                chamfer(cands, length=0.2)
+                return bp.part.wrapped
+    except Exception:
+        pass
+    return shape
+
+
+def _stagger_pad_geoms(pad_geoms, gap_thr, offset):
+    """密脚错排(参考 Dream_maker):质心间距 < gap_thr 的焊盘连成链,
+    链长 ≥3 判为密脚排(0.5mm 间距 QFP/QFN 等),链内二着色隔位沿局部
+    法向 ±offset 交错偏移 —— 相邻开孔互相错开,阻焊桥变宽,减少连锡。"""
+    n = len(pad_geoms)
+    if n < 3 or offset <= 0 or gap_thr <= 0:
+        return pad_geoms
+    cents = [(g.centroid.x, g.centroid.y) for g, _ in pad_geoms]
+    g2 = gap_thr * gap_thr
+
+    # 邻接(质心距 < 阈值)→ union-find 连通链
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = cents[i][0] - cents[j][0]
+            dy = cents[i][1] - cents[j][1]
+            if dx * dx + dy * dy < g2:
+                parent[find(i)] = find(j)
+
+    chains = {}
+    for i in range(n):
+        chains.setdefault(find(i), []).append(i)
+
+    def canon_normal(nx, ny):
+        """法向方向规范化:统一翻到 +Y 半平面(Y≈0 时取 +X),保证链内相邻焊盘的法向可比"""
+        if ny < -1e-12 or (abs(ny) <= 1e-12 and nx < 0):
+            return -nx, -ny
+        return nx, ny
+
+    out = list(pad_geoms)
+    for idxs in chains.values():
+        if len(idxs) < 3:
+            continue
+        # 链内邻接表
+        adj = {i: [] for i in idxs}
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                i, j = idxs[a], idxs[b]
+                dx = cents[i][0] - cents[j][0]
+                dy = cents[i][1] - cents[j][1]
+                if dx * dx + dy * dy < g2:
+                    adj[i].append(j)
+                    adj[j].append(i)
+        # 二着色(路径/偶环严格隔位;奇环个别相邻对同色,影响可忽略)
+        color = {}
+        for start in idxs:
+            if start in color:
+                continue
+            color[start] = 0
+            queue = [start]
+            while queue:
+                i = queue.pop()
+                for j in adj[i]:
+                    if j not in color:
+                        color[j] = 1 - color[i]
+                        queue.append(j)
+        # 隔位 ±法向偏移:法向 = 两近邻连线(局部切向)的垂线
+        for i in idxs:
+            nbrs = sorted(adj[i],
+                          key=lambda j: (cents[i][0] - cents[j][0]) ** 2
+                          + (cents[i][1] - cents[j][1]) ** 2)
+            if not nbrs:
+                continue
+            if len(nbrs) >= 2:
+                tx = cents[nbrs[0]][0] - cents[nbrs[1]][0]
+                ty = cents[nbrs[0]][1] - cents[nbrs[1]][1]
+            else:
+                tx = cents[nbrs[0]][0] - cents[i][0]
+                ty = cents[nbrs[0]][1] - cents[i][1]
+            tl = math.hypot(tx, ty)
+            if tl < 1e-9:
+                continue
+            nx, ny = canon_normal(-ty / tl, tx / tl)
+            s = offset if color.get(i) else -offset
+            out[i] = (shapely_translate(out[i][0], nx * s, ny * s), out[i][1])
+    return out
+
+
+def _grid_pad_geom(geom, size_thr, bar_w):
+    """大孔开网格(参考 Dream_maker):单边 > size_thr 的开孔加十字网格条,
+    分割成多个小开口 —— 大面积锡膏改为网格状漏下,印刷更均匀、不塌陷。
+    只在子开口仍 ≥ 最小宽度时才加条(防止切出细条)。"""
+    if geom.geom_type == "MultiPolygon":
+        parts = [_grid_pad_geom(g, size_thr, bar_w) for g in geom.geoms
+                 if g.geom_type == "Polygon"]
+        return shapely_union(parts) if parts else geom
+    if geom.geom_type != "Polygon":
+        return geom
+    minx, miny, maxx, maxy = geom.bounds
+    w, h = maxx - minx, maxy - miny
+    if max(w, h) <= size_thr:
+        return geom
+    cx, cy = geom.centroid.x, geom.centroid.y
+    min_cell = max(0.8, bar_w)  # 子开口最小保留宽度
+    bars = []
+    if w >= bar_w + 2 * min_cell:
+        bars.append(shapely_box(cx - bar_w / 2, miny - 0.5,
+                                cx + bar_w / 2, maxy + 0.5))
+    if h >= bar_w + 2 * min_cell:
+        bars.append(shapely_box(minx - 0.5, cy - bar_w / 2,
+                                 maxx + 0.5, cy + bar_w / 2))
+    if not bars:
+        return geom
+    out = geom.difference(shapely_union(bars))
+    if out.is_empty or out.area < 1e-6:
+        return geom
+    return out
+
+
+def build_stencil(p, side="top"):
+    """PCB 钢网:外框 + 顶面 PCB 卡槽 + 槽底薄钢网层(焊盘开孔只穿这一层)
+
+    构建坐标:z=0 = 底面(钢网层/刮刀面,平整),z 向上递增。
+    总厚度 = PCB 厚度 + 钢网层厚度。
+    PCB 从顶面放入卡槽(焊盘朝下),锡膏从底面钢网层刮入,穿过开孔到达焊盘。
+    不依赖夹具,独立使用;无四角定位柱孔(凹槽壁完成 PCB 定位)。
+
+    双面钢网(与 Dream_maker 等实机验证约定一致):
+    - side="top":PCB 翻面(绕 X 轴,顶面朝下)放入卡槽 →
+      板框与焊盘统一 Y 镜像(y→-y),翻面放入后开孔对准 Top 焊盘。
+    - side="bottom":PCB 正放(底面朝下)入槽 → 板框与焊盘用原坐标。
+
+    取放缺口:方向/尺寸与夹具逻辑一致(pry_notch_sides +
+    pry_notch_scale × 自动基准),形状为梯形凹陷 —— 长边在里贴槽缘、
+    短边朝外,两侧斜坡向内张开(手指进入后越往里越宽,托板空间足),
+    底部平直贴齐 PCB 边缘,不倒圆角。
+    """
+    pcb_t = p["pcb_thickness"]
+    stencil_t = float(p.get("stencil_thickness", 0.3))
+    frame_w = float(p.get("stencil_frame_width", 12.0))
+    pocket_clr = float(p.get("pocket_clearance", 0.1))
+    pad_shrink = float(p.get("pad_shrink", 0.0)) / 100.0
+    total_h = pcb_t + stencil_t
+    r_out = p.get("outer_corner_radius", 5.0)
+
+    # 焊盘后处理(参考 Dream_maker,均有开关/参数)
+    # 喇叭孔本版禁用:OCC 对"上下开孔尺寸不同"的几何(台阶分层/领环两种
+    # 构造均试过)在千级焊盘时平面分割病态慢(2448 焊盘 >3min),而直孔
+    # 纯 2D 分层路径 17s。参数保留(协议/工程文件兼容),统一按直孔处理;
+    # 未来找到快速构造后把 taper_s 恢复为 max(1.0, taper_pct/100.0)。
+    taper_pct = float(p.get("stencil_taper", 105.0))  # noqa: F841(保留解析)
+    taper_s = 1.0
+    do_stagger = bool(p.get("stencil_stagger", False))      # 密脚错排
+    stagger_gap = float(p.get("stencil_stagger_gap", 0.55))
+    stagger_off = float(p.get("stencil_stagger_offset", 0.15))
+    # 测试点过滤:小圆形孤立焊盘(测试探针点)不开锡膏孔,匹配嘉立创行为
+    filter_tp = bool(p.get("stencil_filter_test_points", True))
+    tp_max_dia = float(p.get("stencil_test_point_max_dia", 1.2))
+    tp_iso = float(p.get("stencil_test_point_isolation", 1.5))
+    do_grid = bool(p.get("stencil_grid", False))           # 大孔开网格
+    grid_size = float(p.get("stencil_grid_size", 2.0))
+    grid_bar = float(p.get("stencil_grid_bar", 0.5))
+    # 焊盘方形化始终开启:钢网厂激光切割出直角矩形,锡膏释放更好;
+    # PCB 焊盘视觉上是方的,但 EDA 导出 paste 层可能用 O(长圆)光圈
+    # 或带圆角的宏,统一按包围盒转直角矩形。仅对拉长形(长宽比>1.15)
+    # 生效,圆/方焊盘不变。
+    do_square = True
+
+    # 焊盘来源:top 兜底读旧字段 stencil_pads;bottom 只读 stencil_pads_bottom
+    if side == "bottom":
+        pads_list = p.get("stencil_pads_bottom", [])
+    else:
+        pads_list = p.get("stencil_pads_top", p.get("stencil_pads", []))
+
+    # PCB 板框多边形(居中坐标系);top 面翻面入槽 → Y 镜像
+    outline_pts = p.get("pcb_outline_points", [])
+    if len(outline_pts) >= 3:
+        if side == "top":
+            outline_pts = [(x, -y) for x, y in outline_pts]
+        base_poly = shapely_orient(ShapelyPolygon(outline_pts), 1.0)
+        if not base_poly.is_valid:
+            base_poly = base_poly.buffer(0)
+    else:
+        # 矩形兜底:上下对称,Y 镜像后不变
+        w, h = p["pcb_size_x"] / 2, p["pcb_size_y"] / 2
+        base_poly = shapely_box(-w, -h, w, h)
+
+    if base_poly.is_empty:
+        raise ValueError("PCB 板框多边形为空")
+
+    # 卡槽 = 板框 + 间隙
+    pocket_poly = base_poly.buffer(pocket_clr, join_style=1, resolution=RES).simplify(0.02)
+    # 外框 = 板框整体外扩(间隙+边框宽,miter 尖角)→ 外角半径独立可调
+    # (stencil_corner_radius,默认 3mm;先用 miter 拿到直角外框,
+    #  再 buffer(-r).buffer(r) 把四个外凸角圆成半径 r 的圆弧)
+    frame_poly = base_poly.buffer(
+        pocket_clr + frame_w, join_style=2, resolution=RES
+    ).simplify(0.02)
+    # 外框形状:outline=跟随板形(默认);rect=外扩成矩形(板框包围盒+边框)
+    if str(p.get("stencil_frame_shape", "outline")).strip().lower() == "rect":
+        minx, miny, maxx, maxy = frame_poly.bounds
+        frame_poly = shapely_box(minx, miny, maxx, maxy)
+    r_frame = max(0.0, min(float(p.get("stencil_corner_radius", 3.0)), 20.0))
+    if r_frame > 0.05:
+        fr_inner = frame_poly.buffer(-r_frame, join_style=2, resolution=RES)
+        if not fr_inner.is_empty:
+            frame_poly = fr_inner.buffer(
+                r_frame, join_style=1, resolution=RES
+            ).simplify(0.02)
+
+    def _build_full():
+        _eps = 0.05  # 切割余量,避免共面
+        pocket_bottom = max(0.0, stencil_t - _eps)  # 钢网真实顶面(卡槽底)
+
+        # 2. 2D 构图(shapely,全部平面运算,毫秒~秒级):
+        #    取放缺口只切钢网层以上的槽壁(差在 ring 上,底层不挖穿)
+        #    → 槽壁让位可直接在平面完成;卡槽环圈 = 外框 - 卡槽。
+        #    钢网层是纯棱柱体 → 焊盘开孔同样平面完成,3D 只剩分层挤出
+        #    + 一次融合,彻底绕开"几千工具 × 复杂实体"的布尔切割。
+        # 取放缺口:方向/尺寸逻辑与夹具一致(pry_notch_sides +
+        # pry_notch_scale × 自动基准,钳位同式),形状差异化 ——
+        # 从槽缘向外切的浅梯形凹口(长边贴槽缘、短边朝外,两侧
+        # 斜坡向内张开,不倒圆角),不贯穿外框,槽壁局部让位,
+        # 镊子/手指从上方伸入即可抠起 PCB。
+        notch_polys = []
+        sides = [
+            s for s in (str(x).strip().lower() for x in p.get("pry_notch_sides", ["down"]))
+            if s in ("down", "up", "left", "right")
+        ]
+        # top 面板框已 Y 镜像(翻面入槽),缺口方向须反向映射,
+        # 保证顶层/底层缺口在视觉上同侧(用户选"下"就都是"下")
+        if side == "top":
+            sides = [{"down": "up", "up": "down"}.get(s, s) for s in sides]
+        if sides:
+            scale = max(0.5, min(1.5, float(p.get("pry_notch_scale", 1.0))))
+            minx, miny, maxx, maxy = pocket_poly.bounds
+            for nside in sides:
+                if nside in ("down", "up"):
+                    cu = (minx + maxx) / 2
+                    L = maxx - minx
+                    edge = maxy if nside == "up" else miny
+                else:
+                    cu = (miny + maxy) / 2
+                    L = maxy - miny
+                    edge = maxx if nside == "right" else minx
+                sgn = 1 if nside in ("up", "right") else -1
+                # 浅梯形凹口:从槽缘(里)向外切一小段(min(4, 边框宽一半)),
+                # 不贯穿到外缘 —— 槽壁局部让位,镊子/手指从上方伸入抠起
+                # PCB;0.1 切割余量仅保证槽缘切口干净(视觉不可见)
+                v_in = edge - sgn * 0.1
+                depth = min(4.0, frame_w * 0.5)
+                v_out = v_in + sgn * depth
+                run = abs(v_out - v_in)
+                if run < 1.0:
+                    continue
+                # 自动基准与夹具同式:边长 15% 与缺口深度(run×0.9)取大,
+                # 夹 12~24mm;滑动条比例缩放,钳制边界随板边比例化
+                auto_w = max(12.0, min(24.0, max(L * 0.15, run * 0.9)))
+                w_s = max(L * 0.06, min(min(30.0, L * 0.5), auto_w * scale))
+                w_l = w_s + 2.0 * min(4.0, run * 0.35)
+                # 约束收缩:缺口两端距槽角 ≥2mm
+                sc = min(1.0, (L / 2 - 2.0) / (w_l / 2))
+                if sc < 1.0:
+                    w_s, w_l = w_s * sc, w_l * sc
+                if w_s < 6.0:
+                    continue
+                if nside in ("down", "up"):
+                    npts = [(cu - w_s / 2, v_out), (cu + w_s / 2, v_out),
+                            (cu + w_l / 2, v_in), (cu - w_l / 2, v_in)]
+                else:
+                    npts = [(v_out, cu - w_s / 2), (v_out, cu + w_s / 2),
+                            (v_in, cu + w_l / 2), (v_in, cu - w_l / 2)]
+                # 长边(w_l)在里贴槽缘、短边(w_s)朝外:外口收窄,两侧
+                # 斜坡向内张开,手指进入后越往里越宽(托板空间更足)
+                notch_poly = ShapelyPolygon(npts)
+                # 四角圆角过渡:梯形是从外框挖掉的部分,其凸角减到实体
+                # 上对应实体凹角 → 用 buffer(+r).buffer(-r) 让梯形凸角
+                # 外凸,减完实体凹角即为凹圆角(圆弧朝外框方向过渡);
+                # r 随缺口尺寸自适应,上限 1.5mm
+                r_n = min(1.5, w_s / 4, run / 4)
+                if r_n >= 0.5:
+                    rounded = (
+                        notch_poly.buffer(r_n, resolution=8)
+                        .buffer(-r_n, resolution=8)
+                    )
+                    if not rounded.is_empty and rounded.geom_type == "Polygon":
+                        notch_poly = rounded
+                if not notch_poly.is_empty and notch_poly.geom_type == "Polygon":
+                    notch_polys.append(notch_poly)
+        frame_2d = frame_poly  # 钢网层保持完整(底层不被缺口挖穿)
+        ring_2d = frame_poly.difference(pocket_poly)
+        if notch_polys:
+            # 缺口只切钢网层以上的槽壁(让位以便取放 PCB),
+            # 底层钢网面(PCB 支撑/锡膏印刷面)保持完整
+            notch_union = shapely_union(notch_polys) if len(notch_polys) > 1 else notch_polys[0]
+            ring_2d = ring_2d.difference(notch_union)
+            if ring_2d.is_empty:
+                raise RuntimeError("取放缺口把槽壁切空")
+        if ring_2d.is_empty:
+            raise RuntimeError("卡槽把外框切空")
+
+        # 3. 焊盘解析(多部件极性/镜像/收缩/简化)
+        pad_geoms = []  # [(shapely geom, 焊盘极性)]
+        for pad in pads_list:
+            parts, pad_pol = _pad_to_parts(pad)
+            if not parts:
+                continue
+            dark, clear = [], []
+            for part_d in parts:
+                pts = part_d.get("points", [])
+                holes = [h for h in part_d.get("holes", []) if len(h) >= 3]
+                if len(pts) < 3:
+                    continue
+                if side == "top":
+                    pts = [(x, -y) for x, y in pts]
+                    holes = [[(x, -y) for x, y in h] for h in holes]
+                try:
+                    g = ShapelyPolygon(pts, holes) if holes else ShapelyPolygon(pts)
+                except Exception:
+                    continue
+                if not g.is_valid:
+                    g = g.buffer(0)
+                if g.is_empty or g.area < 1e-6:
+                    continue
+                if str(part_d.get("polarity", "D")).upper() == "C":
+                    clear.append(g)
+                else:
+                    dark.append(g)
+            if not dark:
+                continue
+            geom = shapely_union(dark) if len(dark) > 1 else dark[0]
+            if clear:
+                geom = geom.difference(shapely_union(clear))
+            if geom.is_empty or geom.area < 1e-6:
+                continue
+            if pad_shrink > 0:
+                s = max(0.05, 1.0 - pad_shrink)
+                geom = shapely_scale_aff(geom, xfact=s, yfact=s, origin="centroid")
+                if geom.is_empty or geom.area < 1e-6:
+                    continue
+            # 焊盘方形化(在 simplify 之前做):simplify(0.02) 会移除长圆形
+            # 圆弧上的顶点,导致 bounds 收缩、中心偏移。
+            # 用最小旋转外接矩形(MRR)代替轴对齐 bounds:保持焊盘原始旋转
+            # 方向(斜放的电容/电阻不被转正),只补全圆角/缺口。
+            # 触发条件(满足任一):
+            #   1) 拉长形(MRR 长宽比 > 1.15):O 光圈/圆角矩形 → 直角矩形
+            #   2) 有凹陷(面积 < 凸包面积 92%):C 形/开槽焊盘 → 补全矩形
+            #      (部分 EDA 工具在锡膏层生成带缺口的 region,钢网应开全孔)
+            # 圆/方焊盘不变形。
+            if do_square:
+                mrr = geom.minimum_rotated_rectangle
+                mrr_pts = list(mrr.exterior.coords)
+                # MRR 两条相邻边长 → 长宽
+                e1 = math.hypot(mrr_pts[1][0] - mrr_pts[0][0],
+                                mrr_pts[1][1] - mrr_pts[0][1])
+                e2 = math.hypot(mrr_pts[2][0] - mrr_pts[1][0],
+                                mrr_pts[2][1] - mrr_pts[1][1])
+                bw, bh = max(e1, e2), min(e1, e2)
+                if min(bw, bh) > 1e-6:
+                    elongated = bw / bh > 1.15
+                    # 有凹陷的单连通焊盘(C 形/开槽):面积 < 凸包 92% 且无内孔。
+                    # MultiPolygon(如热焊盘被 clear 切成多块)不处理,保持原貌。
+                    concave = False
+                    if geom.geom_type == "Polygon":
+                        has_holes = len(list(geom.interiors)) > 0
+                        if not has_holes:
+                            ch_area = geom.convex_hull.area
+                            if ch_area > 1e-9:
+                                concave = geom.area / ch_area < 0.92
+                    if elongated or concave:
+                        geom = mrr
+            # 简化 0.02mm:圆孔 16~32 顶点 → ~6-8 顶点,孔壁面数减半,
+            # OCC 网格化耗时与面数成正比(0.3ms/面);0.02mm 远低于锡膏
+            # 印刷公差(±0.05mm)和打印机分辨率(FDM 0.4 喷嘴/树脂 0.05)
+            geom = geom.simplify(0.02, preserve_topology=True)
+            if geom.is_empty or geom.area < 1e-6:
+                continue
+            pad_geoms.append((geom, pad_pol))
+
+        # 测试点过滤:小圆形 + 孤立的焊盘 = 测试探针点,不开锡膏孔。
+        # 区分于 BGA 焊盘(也是小圆但成阵列,间距 < tp_iso)。
+        if filter_tp and len(pad_geoms) >= 2:
+            cents = [(g.centroid.x, g.centroid.y) for g, _ in pad_geoms]
+            iso2 = tp_iso * tp_iso
+            kept = []
+            for i, (g, pol) in enumerate(pad_geoms):
+                is_tp = False
+                if pol == "D" and g.geom_type == "Polygon":
+                    bx0, by0, bx1, by1 = g.bounds
+                    bw, bh = bx1 - bx0, by1 - by0
+                    dia = max(bw, bh)
+                    # 圆度:圆面积 / 外接矩形面积 = π/4 ≈ 0.785
+                    if (dia <= tp_max_dia and min(bw, bh) > 1e-6
+                            and bw / bh < 1.1):
+                        circ = g.area / (bw * bh)
+                        if 0.65 < circ < 0.90:
+                            # 孤立检查:tp_iso 内无其他焊盘中心
+                            cx, cy = cents[i]
+                            isolated = True
+                            for j in range(len(pad_geoms)):
+                                if j == i:
+                                    continue
+                                dx = cents[j][0] - cx
+                                dy = cents[j][1] - cy
+                                if dx * dx + dy * dy < iso2:
+                                    isolated = False
+                                    break
+                            is_tp = isolated
+                if not is_tp:
+                    kept.append((g, pol))
+            pad_geoms = kept
+
+        # 密脚错排(隔位 ±法向偏移)
+        if do_stagger and len(pad_geoms) >= 3:
+            pad_geoms = _stagger_pad_geoms(pad_geoms, stagger_gap, stagger_off)
+        # 大孔开网格(只对 D 极性开口;C 极性是恢复材料,不网格化)
+        if do_grid:
+            pad_geoms = [((_grid_pad_geom(g, grid_size, grid_bar) if pol == "D"
+                           else g), pol) for g, pol in pad_geoms]
+
+        # 开孔几何拆分:D 极性 = 开孔(裁剪到卡槽内,超出板框的开孔
+        # 本就无意义);焊盘级 C 极性(%LPC)= 恢复材料。
+        dark_geoms, clear_geoms = [], []
+        for geom, pad_pol in pad_geoms:
+            if geom.is_empty or geom.area < 1e-6:
+                continue
+            if pad_pol == "C":
+                clear_geoms.append(geom)
+                continue
+            g = geom.intersection(pocket_poly)
+            if g.is_empty or g.area < 1e-6:
+                continue
+            dark_geoms.append(g)
+
+        # 4. 分层 2D:钢网层 = 外框(含缺口) - 开孔 + LPC 恢复材料。
+        #    喇叭孔 = 两层(下半区放大/上半区原尺寸);直孔 = 单层。
+        #    %LPC 恢复材料在平面上并回(岛落在实心钢网层上,与旧版
+        #    3D 融合几何等价,且不会凸出底面)。
+        dark_union = shapely_union(dark_geoms) if dark_geoms else None
+        clear_union = shapely_union(clear_geoms) if clear_geoms else None
+
+        def _layer_2d(mask):
+            g = frame_2d
+            if mask is not None and not mask.is_empty:
+                g = g.difference(mask)
+                if g.is_empty:
+                    return g
+            if clear_union is not None and not clear_union.is_empty:
+                g = g.union(clear_union)
+            return g
+
+        # 5. 3D 组装:分层挤出 + 环圈顶缘倒角(小实体)+ Compound 组合。
+        pieces = []
+        fast_layers = []   # 纯棱柱层 [(shapely geom, z0, z1)]:快速 STL 路径
+        fast_solids = []   # 小实体(倒角环圈):OCC 网格化,百面级瞬时
+        ring_h = total_h - pocket_bottom
+        if ring_h > 0.001:
+            pocket_half = max(abs(pocket_poly.bounds[2]), abs(pocket_poly.bounds[3]),
+                              abs(pocket_poly.bounds[0]), abs(pocket_poly.bounds[1]))
+            for s in _ocp_prisms([ring_2d], pocket_bottom, ring_h):
+                cs = _chamfer_ring_arc(s, total_h, pocket_half)
+                pieces.append(cs)
+                fast_solids.append(cs)
+        if pocket_bottom > 0.001:
+            # 直孔:单层 2D(外框 - 开孔 + LPC 恢复)一次挤出。
+            # (喇叭孔见上方禁用说明)
+            up_2d = _layer_2d(dark_union)
+            if not up_2d.is_empty:
+                pieces += _ocp_prisms([up_2d], 0.0, pocket_bottom)
+                fast_layers.append((up_2d, 0.0, pocket_bottom))
+        # 不做布尔融合:分层 prism 只在平面接触、接触面完全重合,直接
+        # Compound 组合即可。Glue BOP 对"几千孔 × 两万面"实体融合要 15s+
+        # (接触面边配对/平面分割),Compound 几何等价且瞬完成;STL 网格化
+        # 按面独立进行、切片器对共面重合边完全兼容,3D 打印结果一致。
+        if not pieces:
+            raise RuntimeError("钢网分层组装失败")
+        bld = BRep_Builder()
+        comp = TopoDS_Compound()
+        bld.MakeCompound(comp)
+        for s in pieces:
+            bld.Add(comp, s)
+        part = bd.Part(comp)
+        # 快速 STL 元数据:generate_to_file 用(体积校验失败自动回退 OCC);
+        # STEP 导出与 OCC 兜底路径不受影响
+        part._fast_stl = (fast_layers, fast_solids)
+
+        return part
+
+    try:
+        return _build_full()
+    except Exception as e:
+        # 降级:只生成外框 + 卡槽(无焊盘/缺口/倒角),保证不崩溃
+        if os.environ.get("JIG_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        part = poly_solid(frame_poly.exterior.coords, total_h)
+        if part is None:
+            raise
+        pocket_solid = poly_solid(pocket_poly.exterior.coords, pcb_t + 0.1)
+        if pocket_solid is not None:
+            part = part - pocket_solid.moved(bd.Location((0, 0, stencil_t)))
+        return part
+
+
+# ---------------------------------------------------------------------------
 # 导出与协议(不变)
 # ---------------------------------------------------------------------------
 
 def build_part(p, part_name):
-    builders = {"base": build_base, "insert": build_insert, "cover": build_cover}
+    builders = {
+        "base": build_base, "insert": build_insert, "cover": build_cover,
+        # 双面钢网("stencil" 兼容旧调用 = 顶层)
+        "stencil": build_stencil,
+        "stencil_top": lambda p: build_stencil(p, "top"),
+        "stencil_bottom": lambda p: build_stencil(p, "bottom"),
+    }
     if part_name not in builders:
         raise ValueError(f"Unknown part: {part_name}. Use one of {list(builders)}")
     return builders[part_name](p)
 
 
+# ---------------------------------------------------------------------------
+# 快速 STL 导出(钢网纯棱柱层专用)
+# ---------------------------------------------------------------------------
+
+def _cap_tris_2d(g):
+    """多边形(带内孔)平面三角化:(nodes(N,2), faces(M,3))。
+    用 OCC 网格化单个平面 face(C++ Delaunay,几千内环亚秒级);
+    face 为 FORWARD(+Z 法向)→ 三角形从 +Z 看是 CCW。"""
+    from OCP.BRep import BRep_Tool
+    face = _shapely_face(g, 0.0)
+    if face is None:
+        raise RuntimeError("cap face 构建失败")
+    BRepMesh_IncrementalMesh(face, 0.1, False, 0.7, True)
+    loc = TopLoc_Location()
+    tri = BRep_Tool.Triangulation_s(face, loc)
+    if tri is None:
+        raise RuntimeError("cap face 网格化失败")
+    import numpy as np
+    n = tri.NbNodes()
+    nodes = np.empty((n, 2), dtype=np.float64)
+    for i in range(1, n + 1):
+        p = tri.Node(i)
+        nodes[i - 1] = (p.X(), p.Y())
+    m = tri.NbTriangles()
+    faces = np.empty((m, 3), dtype=np.int64)
+    for i in range(1, m + 1):
+        a, b, c = tri.Triangle(i).Get()
+        faces[i - 1] = (a - 1, b - 1, c - 1)
+    return nodes, faces
+
+
+def _prism_tris(g, z0, z1):
+    """棱柱(多边形挤出 z0→z1)→ 三角形 (N,3,3)(build 坐标,外向绕序)。
+    顶/底面用 OCC 三角化(2 个面);孔壁在 numpy 里直接生成 —— 这是
+    OCC 网格化整块的瓶颈(17k 孔壁面 × 0.2ms/面 ≈ 4s)。"""
+    import numpy as np
+    nodes, faces = _cap_tris_2d(g)
+    m = len(faces)
+    # 顶面(z1):CCW 原序(法向 +Z = 外向)
+    top = np.empty((m, 3, 3), dtype=np.float64)
+    for k in range(3):
+        xy = nodes[faces[:, k]]
+        top[:, k, 0] = xy[:, 0]
+        top[:, k, 1] = xy[:, 1]
+        top[:, k, 2] = z1
+    # 底面(z0):绕序反转
+    bot = top[:, ::-1, :].copy()
+    bot[:, :, 2] = z0
+    # 孔壁:外环 CCW / 内环 CW(orient 保证)→ 同一公式均为外法向
+    walls = []
+    for ring in [g.exterior, *g.interiors]:
+        pts = np.asarray(_ring_coords(ring), dtype=np.float64)
+        if len(pts) < 2:
+            continue
+        nxt = np.roll(pts, -1, axis=0)
+        cnt = len(pts)
+        a0 = np.column_stack([pts, np.full(cnt, z0)])
+        b0 = np.column_stack([nxt, np.full(cnt, z0)])
+        a1 = np.column_stack([pts, np.full(cnt, z1)])
+        b1 = np.column_stack([nxt, np.full(cnt, z1)])
+        walls.append(np.stack([a0, b0, b1], axis=1))
+        walls.append(np.stack([a0, b1, a1], axis=1))
+    return np.concatenate([top, bot] + walls)
+
+
+def _occ_solid_tris(shape):
+    """OCC 实体网格化 → 三角形 (N,3,3)(build 坐标)。小实体专用
+    (环圈 ~百面);大实体会慢,走棱柱快速路径。"""
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_Orientation
+    import numpy as np
+    BRepMesh_IncrementalMesh(shape, 0.1, False, 0.7, True)
+    out = []
+    exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while exp.More():
+        face = TopoDS.Face_s(exp.Current())
+        loc = TopLoc_Location()
+        tri = BRep_Tool.Triangulation_s(face, loc)
+        if tri is not None:
+            tf = loc.Transformation()
+            rev = face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED
+            for i in range(1, tri.NbTriangles() + 1):
+                a, b, c = tri.Triangle(i).Get()
+                if rev:
+                    b, c = c, b
+                out.append((tri.Node(a).Transformed(tf).Coord(),
+                            tri.Node(b).Transformed(tf).Coord(),
+                            tri.Node(c).Transformed(tf).Coord()))
+        exp.Next()
+    return np.asarray(out, dtype=np.float64)
+
+
+def _write_stl_fast(output, layers, occ_solids):
+    """快速 STL:棱柱层直接生成三角形 + 小实体 OCC 网格化,一次写出。
+    layers: [(shapely geom, z0, z1)];occ_solids: [OCC shape]。
+    校验失败抛异常,调用方回退 OCC 全量路径。"""
+    import struct
+    import numpy as np
+    chunks = []
+    layer_vol = 0.0
+    for geom, z0, z1 in layers:
+        h = float(z1) - float(z0)
+        polys = (list(geom.geoms) if geom.geom_type == "MultiPolygon"
+                 else [geom])
+        for g in polys:
+            if g.geom_type == "Polygon" and g.area > 1e-9:
+                chunks.append(_prism_tris(g, float(z0), float(z1)))
+                layer_vol += g.area * h
+    for s in occ_solids:
+        chunks.append(_occ_solid_tris(s))
+    if not chunks:
+        raise RuntimeError("快速 STL 无三角形")
+    tris = np.concatenate(chunks)
+    # 绕序校验:外向绕序的封闭网格体积必为正;且不应小于棱柱层体积
+    # (环圈等实体只会增加体积;缺口/开孔只减棱柱层自身)
+    v0, v1, v2 = tris[:, 0], tris[:, 1], tris[:, 2]
+    vol = np.einsum("ij,ij->i", v0, np.cross(v1, v2)).sum() / 6.0
+    if vol <= 0 or vol < 0.5 * layer_vol:
+        raise RuntimeError(f"快速 STL 体积校验失败: {vol:.1f} vs {layer_vol:.1f}")
+    # build Z-up → STL/three.js Y-up:(x,y,z)→(x,z,-y)
+    t = tris[:, :, [0, 2, 1]].copy()
+    t[:, :, 2] *= -1.0
+    n = len(t)
+    rec = np.zeros(n, dtype=np.dtype(
+        [("normal", "<f4", (3,)), ("verts", "<f4", (3, 3)), ("attr", "<u2")]))
+    rec["normal"] = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
+    rec["verts"] = t
+    with open(output, "wb") as f:
+        f.write(b"mason fast-stl".ljust(80, b"\0"))
+        f.write(struct.pack("<I", n))
+        f.write(rec.tobytes())
+
+
 def generate_to_file(params, part_name, output_path, fmt="stl"):
     """生成单个部件并导出到 output_path(CLI 与 server 模式共用)"""
     part = build_part(params, part_name)
-    # 旋转:让 build123d 的 Z-up 变 three.js 的 Y-up 躺平
-    part = part.rotate(bd.Axis.X, -90)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "stl":
-        export_stl(part, str(output))
+        # 快速路径:钢网纯棱柱层(顶底面 OCC 三角化 + 孔壁 numpy 生成),
+        # 千孔钢网比 OCC 全量网格化快 ~3x;校验失败回退 OCC 路径
+        fast = getattr(part, "_fast_stl", None)
+        if fast is not None:
+            try:
+                _write_stl_fast(output, *fast)
+                return output
+            except Exception:
+                if os.environ.get("JIG_DEBUG"):
+                    import traceback
+                    traceback.print_exc()
+        # OCC 原生路径(兜底 + 非钢网部件):
+        # 旋转 Z-up → Y-up 用 O(1) 的 TopLoc_Location(bd.rotate 遍历
+        # 变换全部几何,万级面要 1.3s;实测两者 STL 输出完全一致)
+        trsf = gp_Trsf()
+        trsf.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0)), -math.pi / 2)
+        shape = part.wrapped
+        shape.Move(TopLoc_Location(trsf))
+        BRepMesh_IncrementalMesh(shape, 0.1, False, 0.7, True)
+        writer = StlAPI_Writer()
+        writer.ASCIIMode = False
+        writer.Write(shape, str(output))
     else:
+        # STEP:走 build123d(需 bd 对象,显式旋转)
+        part = part.rotate(bd.Axis.X, -90)
         export_step(part, str(output))
     return output
 
@@ -611,7 +1509,8 @@ def main():
     parser.add_argument("--output", help="输出 STL/STEP 路径")
     parser.add_argument(
         "--part",
-        choices=["base", "insert", "cover"],
+        choices=["base", "insert", "cover", "stencil",
+                 "stencil_top", "stencil_bottom"],
         help="生成哪个部件",
     )
     parser.add_argument(
@@ -632,14 +1531,25 @@ def main():
     with open(args.input, "r", encoding="utf-8") as f:
         params = json.load(f)
 
-    print(
-        f"[info] part={args.part} format={args.format} "
-        f"pcb={params['pcb_size_x']:.1f}x{params['pcb_size_y']:.1f} "
-        f"jig={params['jig_size']:.0f} "
-        f"outline_pts={len(params.get('pcb_outline_points', []))} "
-        f"holes={len(params.get('pcb_outline_holes', []))}",
-        file=sys.stderr,
-    )
+    if args.part in ("stencil", "stencil_top", "stencil_bottom"):
+        n_top = len(params.get("stencil_pads_top", params.get("stencil_pads", [])))
+        n_bot = len(params.get("stencil_pads_bottom", []))
+        print(
+            f"[info] part={args.part} format={args.format} "
+            f"pcb={params['pcb_size_x']:.1f}x{params['pcb_size_y']:.1f} "
+            f"stencil_t={params.get('stencil_thickness', 0)} "
+            f"pads_top={n_top} pads_bottom={n_bot}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"[info] part={args.part} format={args.format} "
+            f"pcb={params['pcb_size_x']:.1f}x{params['pcb_size_y']:.1f} "
+            f"jig={params['jig_size']:.0f} "
+            f"outline_pts={len(params.get('pcb_outline_points', []))} "
+            f"holes={len(params.get('pcb_outline_holes', []))}",
+            file=sys.stderr,
+        )
 
     output = generate_to_file(params, args.part, args.output, args.format)
     print(f"[ok] {output}", file=sys.stderr)

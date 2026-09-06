@@ -14,8 +14,10 @@ TESTS_DIR = Path(__file__).resolve().parent
 ALL_TESTS = [
     "test_screw_layout.py",   # 快:纯算法,无几何生成
     "test_stencil.py",
+    "test_stencil_pads.py",   # PCB 钢网(一体式)几何
     "test_notch_depth.py",
     "test_notch_stencil.py",
+    "test_notch_side.py",     # top/bottom 钢网缺口落在 PCB 同一物理边缘
     "test_v2.py",
     "test_holes.py",
     "test_irregular.py",

@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <!-- PCB 钢网夹具生成器:板框四孔(板框 + 四角螺丝孔 + 钢网窗口) -->
-  <rect x="5" y="5" width="54" height="54" rx="11" fill="none" stroke="#3E7D62" stroke-width="6"/>
-  <rect x="23" y="23" width="18" height="18" rx="4" fill="#5A9B7F"/>
-  <circle cx="14.5" cy="14.5" r="3.5" fill="#262626"/>
-  <circle cx="49.5" cy="14.5" r="3.5" fill="#262626"/>
-  <circle cx="14.5" cy="49.5" r="3.5" fill="#262626"/>
-  <circle cx="49.5" cy="49.5" r="3.5" fill="#262626"/>
+  <!-- Mason · B1 竖向蛇形砖墙 · PCB走线 = 砖墙灰缝 -->
+  <!-- 一笔直角蛇形走线：从左上出发，中段向右凸出再回来，到左下 -->
+  <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="#3E7D62" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 起点焊盘（青瓷绿） -->
+  <circle cx="14" cy="14" r="5" fill="#3E7D62"/>
+  <!-- 终点焊盘（阻焊橙） -->
+  <circle cx="14" cy="50" r="5" fill="#E07A3C"/>
 </svg>

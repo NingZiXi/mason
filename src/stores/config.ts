@@ -7,15 +7,59 @@
 import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import type { PadPolygon } from "../lib/gerber/pads";
+
+export type AppMode = "jig" | "stencil";
 
 export interface AppConfig {
+  // 工作模式
+  appMode: AppMode;
+
   // PCB 参数
   pcbSizeX: number;
   pcbSizeY: number;
   pcbThickness: number;
 
-  // 钢网参数(展示用;窗口由凸台推导)
+  // 钢网参数(夹具模式用:展示用;窗口由凸台推导)
   stencilSize: number;
+
+  // PCB 钢网(一体式)参数
+  /** 槽底钢网层厚度(mm,默认 0.3 / FDM) */
+  stencilThickness: number;
+  /** 焊盘开孔缩小百分比(0~50,默认 10) */
+  padShrink: number;
+  /** 钢网边框宽(PCB 到外框边缘,mm,默认 8) */
+  stencilFrameWidth: number;
+  /** 钢网外框圆角半径(mm,默认 3) */
+  stencilCornerRadius: number;
+  /** 钢网外框形状:outline=跟随板形 / rect=矩形 */
+  stencilFrameShape: "outline" | "rect";
+  /** PCB 卡槽间隙(PCB 到卡槽壁单边,mm,默认 0.2) */
+  pocketClearance: number;
+  /** 喇叭孔:刮刀面开孔放大百分比(100~115,100 = 关闭,默认 105) */
+  stencilTaper: number;
+  /** 密脚错排开关(相邻密脚焊盘隔位错开,减少连锡) */
+  stencilStagger: boolean;
+  /** 密脚判定阈值:焊盘中心间距小于该值(mm)视为密脚链 */
+  stencilStaggerGap: number;
+  /** 密脚错排偏移量(mm) */
+  stencilStaggerOffset: number;
+  /** 测试点过滤开关:小圆形孤立焊盘(测试探针点)不开锡膏孔 */
+  stencilFilterTestPoints: boolean;
+  /** 测试点最大直径(mm):超过该值的圆焊盘不视为测试点 */
+  stencilTestPointMaxDia: number;
+  /** 测试点孤立距离(mm):该范围内有其他焊盘则不视为测试点 */
+  stencilTestPointIsolation: number;
+  /** 大孔开网格开关(大开口加十字网格条) */
+  stencilGrid: boolean;
+  /** 网格阈值:单边大于该值(mm)的开孔加网格 */
+  stencilGridSize: number;
+  /** 网格条宽(mm) */
+  stencilGridBar: number;
+  /** 顶层(Top Paste)焊盘多边形列表(锡膏层解析结果) */
+  stencilPadsTop: PadPolygon[];
+  /** 底层(Bottom Paste)焊盘多边形列表(锡膏层解析结果) */
+  stencilPadsBottom: PadPolygon[];
 
   // 螺丝布局
   /** 周圈螺丝间距(B 面配置;0 = 关闭周圈孔) */
@@ -58,10 +102,29 @@ export interface AppConfig {
 }
 
 const DEFAULT: AppConfig = {
+  appMode: "jig",
   pcbSizeX: 50,
   pcbSizeY: 50,
   pcbThickness: 1.6,
   stencilSize: 100,
+  stencilThickness: 0.3,
+  padShrink: 0,
+  stencilFrameWidth: 12,
+  stencilCornerRadius: 3,
+  stencilFrameShape: "outline",
+  pocketClearance: 0.1,
+  stencilTaper: 105,
+  stencilStagger: false,
+  stencilStaggerGap: 0.55,
+  stencilStaggerOffset: 0.15,
+  stencilFilterTestPoints: true,
+  stencilTestPointMaxDia: 1.2,
+  stencilTestPointIsolation: 1.5,
+  stencilGrid: false,
+  stencilGridSize: 2.0,
+  stencilGridBar: 0.5,
+  stencilPadsTop: [],
+  stencilPadsBottom: [],
   screwSpacing: 40,
   baseHeight: 4,
   topCoverHeight: 4,
@@ -280,6 +343,25 @@ export const useConfigStore = defineStore("config", () => {
     config.value.pcbOutlineHoles = holes;
   }
 
+  /** 钢网模式:导入板框 + 双面锡膏层结果 */
+  function applyStencilGerber(
+    width: number,
+    height: number,
+    outlinePoints: Array<[number, number]>,
+    topPads: PadPolygon[],
+    bottomPads: PadPolygon[]
+  ) {
+    config.value.pcbSizeX = width;
+    config.value.pcbSizeY = height;
+    config.value.pcbOutlinePoints = outlinePoints;
+    config.value.stencilPadsTop = topPads;
+    config.value.stencilPadsBottom = bottomPads;
+  }
+
+  function setMode(mode: AppMode) {
+    config.value.appMode = mode;
+  }
+
   /** 重置高级参数为默认值;基础区(PCB 尺寸/厚度/钢网/缺口位置/
    *  Gerber 轮廓)保留 —— 重置按钮在高级区内,只管高级参数。
    *  注意必须 Object.assign 原地改:整体替换 config.value 会触发
@@ -349,6 +431,8 @@ export const useConfigStore = defineStore("config", () => {
     engineLoading,
     bundledEngine,
     applyGerberSize,
+    applyStencilGerber,
+    setMode,
     reset,
     detectPython,
   };

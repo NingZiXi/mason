@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
+import type { PadPolygon } from "../lib/gerber/pads";
 import { ElMessage } from "element-plus";
 
 const { t } = useI18n();
@@ -32,6 +33,24 @@ function buildScadParams() {
     corner_screw_d: c.cornerScrewD,
     peri_screw_d: c.periScrewD,
     outer_corner_radius: c.outerCornerRadius,
+    stencil_thickness: c.stencilThickness,
+    pad_shrink: c.padShrink,
+    stencil_frame_width: c.stencilFrameWidth,
+    stencil_corner_radius: c.stencilCornerRadius,
+    stencil_frame_shape: c.stencilFrameShape,
+    pocket_clearance: c.pocketClearance,
+    stencil_taper: c.stencilTaper,
+    stencil_stagger: c.stencilStagger,
+    stencil_stagger_gap: c.stencilStaggerGap,
+    stencil_stagger_offset: c.stencilStaggerOffset,
+    stencil_filter_test_points: c.stencilFilterTestPoints,
+    stencil_test_point_max_dia: c.stencilTestPointMaxDia,
+    stencil_test_point_isolation: c.stencilTestPointIsolation,
+    stencil_grid: c.stencilGrid,
+    stencil_grid_size: c.stencilGridSize,
+    stencil_grid_bar: c.stencilGridBar,
+    stencil_pads_top: c.stencilPadsTop.map((p) => p.parts),
+    stencil_pads_bottom: c.stencilPadsBottom.map((p) => p.parts),
   };
 }
 
@@ -79,7 +98,7 @@ async function loadProject() {
     store.config.pcbSizeX = cfg.pcb_size_x;
     store.config.pcbSizeY = cfg.pcb_size_y;
     store.config.pcbThickness = cfg.pcb_thickness;
-    store.config.pcbPocketClearance = cfg.pcb_pocket_clearance;
+    store.config.pcbPocketClearance = cfg.pcb_pocket_clearance ?? 0.15;
     store.config.stencilSize = cfg.stencil_size;
     store.config.screwSpacing = cfg.screw_spacing;
     store.config.baseHeight = cfg.base_height;
@@ -104,6 +123,33 @@ async function loadProject() {
     store.config.outerCornerRadius = cfg.outer_corner_radius ?? 5;
     store.config.pcbOutlinePoints = cfg.pcb_outline_points ?? [];
     store.config.pcbOutlineHoles = cfg.pcb_outline_holes ?? [];
+    // 双面焊盘;旧项目文件的 stencil_pads 归入 Top 面。
+    // 每项兼容两种格式:新 = parts 数组(元素为对象),旧 = 顶点数组
+    const toPad = (entry: unknown): PadPolygon => {
+      if (Array.isArray(entry) && entry.length > 0 && typeof entry[0] === "object") {
+        return { type: "macro", cx: 0, cy: 0, polarity: "D", parts: entry as PadPolygon["parts"] };
+      }
+      const pts = entry as Array<[number, number]>;
+      return { type: "rect", cx: 0, cy: 0, polarity: "D", parts: [{ polarity: "D", points: pts }] };
+    };
+    store.config.stencilPadsTop = (cfg.stencil_pads_top ?? cfg.stencil_pads ?? []).map(toPad);
+    store.config.stencilPadsBottom = (cfg.stencil_pads_bottom ?? []).map(toPad);
+    store.config.stencilThickness = cfg.stencil_thickness ?? 0.3;
+    store.config.padShrink = cfg.pad_shrink ?? 0;
+    store.config.stencilFrameWidth = cfg.stencil_frame_width ?? 12;
+    store.config.stencilCornerRadius = cfg.stencil_corner_radius ?? 3;
+    store.config.stencilFrameShape = cfg.stencil_frame_shape === "rect" ? "rect" : "outline";
+    store.config.pocketClearance = cfg.pocket_clearance ?? 0.1;
+    store.config.stencilTaper = cfg.stencil_taper ?? 105;
+    store.config.stencilStagger = cfg.stencil_stagger ?? false;
+    store.config.stencilStaggerGap = cfg.stencil_stagger_gap ?? 0.55;
+    store.config.stencilStaggerOffset = cfg.stencil_stagger_offset ?? 0.15;
+    store.config.stencilFilterTestPoints = cfg.stencil_filter_test_points ?? true;
+    store.config.stencilTestPointMaxDia = cfg.stencil_test_point_max_dia ?? 1.2;
+    store.config.stencilTestPointIsolation = cfg.stencil_test_point_isolation ?? 1.5;
+    store.config.stencilGrid = cfg.stencil_grid ?? false;
+    store.config.stencilGridSize = cfg.stencil_grid_size ?? 2.0;
+    store.config.stencilGridBar = cfg.stencil_grid_bar ?? 0.5;
     store.config.gerberFilename = project.gerber_filename;
 
     ElMessage.success(t("project.loaded"));

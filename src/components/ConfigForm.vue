@@ -241,6 +241,10 @@ function resetAll() {
           <el-input-number v-model="c.platterCornerRadius" :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%" />
         </div>
       </div>
+      <div class="field">
+        <label class="field-label">{{ t('config.pocketClearance') }}</label>
+        <el-input-number v-model="c.pcbPocketClearance" :min="0" :max="2" :step="0.05" :precision="2" size="small" style="width: 100%" />
+      </div>
       <div v-if="effectiveMargin > c.platterMargin + 0.01" class="auto-hint">
         <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
@@ -479,7 +483,7 @@ function resetAll() {
 }
 
 .advanced-toggle .chevron {
-  transition: transform 0.15s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .advanced-toggle .chevron.is-open {

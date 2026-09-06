@@ -58,6 +58,64 @@ pub struct ScadParams {
     /// 外缘圆角半径
     #[serde(default = "default_outer_corner_radius")]
     pub outer_corner_radius: f64,
+    // --- PCB 钢网(一体式)参数 ---
+    /// 槽底钢网层厚度(mm,默认 0.3 / FDM)
+    #[serde(default = "default_stencil_thickness")]
+    pub stencil_thickness: f64,
+    /// 焊盘开孔缩小百分比(0~50,默认 10)
+    #[serde(default = "default_pad_shrink")]
+    pub pad_shrink: f64,
+    /// 钢网边框宽(PCB 到外框边缘,mm,默认 8)
+    #[serde(default = "default_stencil_frame_width")]
+    pub stencil_frame_width: f64,
+    /// 钢网外框圆角半径(mm,默认 3)
+    #[serde(default = "default_stencil_corner_radius")]
+    pub stencil_corner_radius: f64,
+    /// 钢网外框形状:outline=跟随板形(默认)/ rect=矩形
+    #[serde(default = "default_stencil_frame_shape")]
+    pub stencil_frame_shape: String,
+    /// PCB 卡槽间隙(PCB 到卡槽壁单边,mm,默认 0.2)
+    #[serde(default = "default_pocket_clearance")]
+    pub pocket_clearance: f64,
+    /// 喇叭孔:刮刀面开孔放大百分比(100=关闭,默认 105)
+    #[serde(default = "default_stencil_taper")]
+    pub stencil_taper: f64,
+    /// 密脚错排开关(默认开)
+    #[serde(default = "default_stencil_stagger")]
+    pub stencil_stagger: bool,
+    /// 密脚判定阈值:焊盘中心间距小于该值(mm)
+    #[serde(default = "default_stencil_stagger_gap")]
+    pub stencil_stagger_gap: f64,
+    /// 密脚错排偏移量(mm)
+    #[serde(default = "default_stencil_stagger_offset")]
+    pub stencil_stagger_offset: f64,
+    /// 测试点过滤开关(默认开)
+    #[serde(default = "default_stencil_filter_test_points")]
+    pub stencil_filter_test_points: bool,
+    /// 测试点最大直径(mm)
+    #[serde(default = "default_stencil_test_point_max_dia")]
+    pub stencil_test_point_max_dia: f64,
+    /// 测试点孤立距离(mm)
+    #[serde(default = "default_stencil_test_point_isolation")]
+    pub stencil_test_point_isolation: f64,
+    /// 大孔开网格开关(默认关)
+    #[serde(default = "default_stencil_grid")]
+    pub stencil_grid: bool,
+    /// 网格阈值:单边大于该值(mm)的开孔加网格
+    #[serde(default = "default_stencil_grid_size")]
+    pub stencil_grid_size: f64,
+    /// 网格条宽(mm)
+    #[serde(default = "default_stencil_grid_bar")]
+    pub stencil_grid_bar: f64,
+    /// 焊盘列表(旧格式:顶点数组;新格式:多部件 {parts:[{polarity,points,holes}],polarity})
+    #[serde(default)]
+    pub stencil_pads: serde_json::Value,
+    /// 顶层(Top Paste)焊盘列表(与板框同居中坐标系)
+    #[serde(default)]
+    pub stencil_pads_top: serde_json::Value,
+    /// 底层(Bottom Paste)焊盘列表(Python 侧生成时做 Y 镜像)
+    #[serde(default)]
+    pub stencil_pads_bottom: serde_json::Value,
 }
 
 fn default_insert_height() -> f64 { 8.0 }
@@ -70,6 +128,22 @@ fn default_pry_notch_scale() -> f64 { 1.0 }
 fn default_corner_screw_d() -> f64 { 5.0 }
 fn default_peri_screw_d() -> f64 { 3.5 }
 fn default_outer_corner_radius() -> f64 { 5.0 }
+fn default_stencil_thickness() -> f64 { 0.3 }
+fn default_pad_shrink() -> f64 { 0.0 }
+fn default_stencil_frame_width() -> f64 { 12.0 }
+fn default_stencil_corner_radius() -> f64 { 3.0 }
+fn default_stencil_frame_shape() -> String { "outline".to_string() }
+fn default_pocket_clearance() -> f64 { 0.1 }
+fn default_stencil_taper() -> f64 { 105.0 }
+fn default_stencil_stagger() -> bool { false }
+fn default_stencil_stagger_gap() -> f64 { 0.55 }
+fn default_stencil_stagger_offset() -> f64 { 0.15 }
+fn default_stencil_filter_test_points() -> bool { true }
+fn default_stencil_test_point_max_dia() -> f64 { 1.2 }
+fn default_stencil_test_point_isolation() -> f64 { 1.5 }
+fn default_stencil_grid() -> bool { false }
+fn default_stencil_grid_size() -> f64 { 2.0 }
+fn default_stencil_grid_bar() -> f64 { 0.5 }
 
 /// 部件标识
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +152,8 @@ pub enum Part {
     Base,
     PcbInsert,
     TopCover,
+    StencilTop,
+    StencilBottom,
 }
 
 impl Part {
@@ -86,6 +162,8 @@ impl Part {
             Part::Base => "base",
             Part::PcbInsert => "insert",
             Part::TopCover => "cover",
+            Part::StencilTop => "stencil_top",
+            Part::StencilBottom => "stencil_bottom",
         }
     }
 }
@@ -326,7 +404,7 @@ pub async fn generate_stl(
     app: AppHandle,
     params: ScadParams,
     part: Part,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<tauri::ipc::Response, AppError> {
     let configured = app
         .store(STORE_FILE)
         .ok()
@@ -334,7 +412,10 @@ pub async fn generate_stl(
         .and_then(|v| v.as_str().map(String::from))
         .filter(|s| !s.is_empty());
 
-    scad::render_to_stl(&app, configured.as_deref(), &params, part).await
+    // 返回原始字节(Response 走二进制通道):Vec<u8> 走 JSON 数字数组会把
+    // 数 MB 的 STL 膨胀成几十 MB 文本,序列化/传输/解析全部变慢
+    let bytes = scad::render_to_stl(&app, configured.as_deref(), &params, part).await?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// 把单个部件渲染到指定路径(供前端导出 STL 文件)
@@ -362,6 +443,20 @@ pub async fn export_stl(
 pub async fn write_file_bytes(path: String, bytes: Vec<u8>) -> Result<(), AppError> {
     std::fs::write(&path, bytes)
         .map_err(|e| AppError::Io(format!("写入文件失败 {}: {}", path, e)))
+}
+
+/// 确保目录存在,若不存在则递归创建(供前端导出 STL/STEP 时自动建 Mason_<时间戳>/)
+#[tauri::command]
+pub async fn ensure_dir(path: String) -> Result<(), AppError> {
+    let p = PathBuf::from(&path);
+    if p.exists() {
+        if !p.is_dir() {
+            return Err(AppError::Io(format!("路径已存在但不是目录: {}", path)));
+        }
+        return Ok(());
+    }
+    std::fs::create_dir_all(&p)
+        .map_err(|e| AppError::Io(format!("创建目录失败 {}: {}", path, e)))
 }
 
 /// 项目文件 schema

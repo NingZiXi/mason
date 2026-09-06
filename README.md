@@ -1,6 +1,6 @@
-# PCB 钢网夹具生成器
+# Mason
 
-> 从 JLCPCB / 嘉立创EDA 导出的 Gerber ZIP 文件,一键生成可 3D 打印的锡膏刷钢网定位夹具。
+> 从 JLCPCB / 嘉立创EDA 导出的 Gerber ZIP 文件,一键生成可 3D 打印的锡膏印刷钢网定位夹具。
 
 ## 功能
 
@@ -121,7 +121,7 @@ offset = 8                                         # 角螺丝内缩
 ## 目录结构
 
 ```
-pcb-stencil-jig/
+mason/
 ├── src/                              # Vue 3 前端
 │   ├── components/
 │   │   ├── GerberImport.vue          # 拖拽 ZIP + 板框识别 + SVG 预览
@@ -161,7 +161,7 @@ cd src-tauri && cargo check    # Rust 类型检查
 
 ### Q: 应用启动后显示"未检测到 Python"?
 
-A: 应用启动时探测 PATH 和标准安装位置。如果 Python 装在自定义位置,在「Python + build123d 环境」卡片手动指定 `python.exe`,路径持久化到 `%APPDATA%\cn.local.pcb-stencil-jig\settings.json`。注意需要已安装 `build123d`、`shapely`、`numpy`。
+A: 应用启动时探测 PATH 和标准安装位置。如果 Python 装在自定义位置,在「Python + build123d 环境」卡片手动指定 `python.exe`,路径持久化到 `%APPDATA%\cn.local.mason\settings.json`。注意需要已安装 `build123d`、`shapely`、`numpy`。
 
 ### Q: Gerber ZIP 解析失败?
 
@@ -184,8 +184,6 @@ A: 「周长间距」滑块调到 25-30mm,4 角 + 中间螺丝更多,压力更�
 MIT
 
 ## 致谢
-
-- 参考项目: [lamikr/pcb\_stencil\_jigboard](https://github.com/lamikr/pcb_stencil_jigboard) — 设计灵感来源
 
 - [build123d](https://github.com/gumyr/build123d) — Python 参数化 CAD 内核
 

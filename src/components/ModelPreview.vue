@@ -10,7 +10,7 @@ import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-type PartName = "base" | "insert" | "cover";
+type PartName = "base" | "insert" | "cover" | "stencil_top" | "stencil_bottom";
 
 const store = useConfigStore();
 const ui = useUiStore();
@@ -24,7 +24,11 @@ const PART_TO_RUST: Record<PartName, string> = {
   base: "base",
   insert: "pcb_insert",
   cover: "top_cover",
+  stencil_top: "stencil_top",
+  stencil_bottom: "stencil_bottom",
 };
+
+const appMode = computed(() => store.config.appMode);
 
 // three.js 引用(shallowRef 避免响应式包装影响性能)
 const scene = shallowRef<THREE.Scene | null>(null);
@@ -36,7 +40,8 @@ const animationId = ref<number | null>(null);
 
 // STL 字节缓存:key 是 part 名称(insert/cover/base),value 是 {bytes, paramsHash}
 // 切换 tab 时如果参数没变,直接用缓存的 bytes 跳过 Python 调用
-const stlCache = ref<Record<string, { bytes: number[]; paramsHash: string }>>({});
+// bytes 是 ArrayBuffer(Rust 端 tauri::ipc::Response 二进制通道,避免 JSON 数字数组膨胀)
+const stlCache = ref<Record<string, { bytes: ArrayBuffer; paramsHash: string }>>({});
 
 // 计算当前参数的 hash(用于判断是否需要重新生成)
 function paramsHash() {
@@ -48,6 +53,10 @@ function paramsHash() {
     screw: [c.screwSpacing],
     dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterMargin, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD, c.outerCornerRadius],
     notch: [c.pryNotchSides, c.pryNotchScale],
+    stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
+      c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
+      c.stencilGrid, c.stencilGridSize, c.stencilGridBar,
+      c.stencilPadsTop.map((p) => p.parts), c.stencilPadsBottom.map((p) => p.parts)],
   });
 }
 
@@ -75,6 +84,25 @@ function buildScadParams() {
     corner_screw_d: c.cornerScrewD,
     peri_screw_d: c.periScrewD,
     outer_corner_radius: c.outerCornerRadius,
+    // PCB 钢网(一体式)参数
+    stencil_thickness: c.stencilThickness,
+    pad_shrink: c.padShrink,
+    stencil_frame_width: c.stencilFrameWidth,
+    stencil_corner_radius: c.stencilCornerRadius,
+    stencil_frame_shape: c.stencilFrameShape,
+    pocket_clearance: c.pocketClearance,
+    stencil_taper: c.stencilTaper,
+    stencil_stagger: c.stencilStagger,
+    stencil_stagger_gap: c.stencilStaggerGap,
+    stencil_stagger_offset: c.stencilStaggerOffset,
+    stencil_filter_test_points: c.stencilFilterTestPoints,
+    stencil_test_point_max_dia: c.stencilTestPointMaxDia,
+    stencil_test_point_isolation: c.stencilTestPointIsolation,
+    stencil_grid: c.stencilGrid,
+    stencil_grid_size: c.stencilGridSize,
+    stencil_grid_bar: c.stencilGridBar,
+    stencil_pads_top: c.stencilPadsTop.map((p) => p.parts),
+    stencil_pads_bottom: c.stencilPadsBottom.map((p) => p.parts),
   };
 }
 
@@ -199,7 +227,7 @@ async function renderCurrent() {
   try {
     const params = buildScadParams();
     const part = PART_TO_RUST[partName];
-    const bytes = await invoke<number[]>("generate_stl", { params, part });
+    const bytes = await invoke<ArrayBuffer>("generate_stl", { params, part });
 
     // 缓存 bytes:key 用捕获的 partName(结果属于发起请求的部件)
     stlCache.value = {
@@ -223,16 +251,17 @@ async function renderCurrent() {
 }
 
 // 把 STL bytes 应用到 mesh(独立函数,缓存命中时直接用)
-function applyStlToMesh(bytes: number[]) {
+function applyStlToMesh(bytes: ArrayBuffer) {
   disposeMesh();
   const loader = new STLLoader();
-  const geometry = loader.parse(new Uint8Array(bytes).buffer);
+  const geometry = loader.parse(bytes);
   geometry.center();
   geometry.computeVertexNormals();
 
-  // 部件配色:insert=青瓷绿(品牌主部件)、base=石板蓝、cover=琥珀
+  // 部件配色:insert=青瓷绿(品牌主部件)、base=石板蓝、cover=琥珀、
+  // 钢网顶层=琥珀、底层=石板蓝(与 tab 色标一致)
   const color =
-    activePart.value === "base"
+    activePart.value === "base" || activePart.value === "stencil_bottom"
       ? 0x4C6F94
       : activePart.value === "insert"
       ? 0x5A9B7F
@@ -313,15 +342,19 @@ watch(
   }
 );
 
-// 预生成所有 3 个部件(后台),填满缓存
+// 预生成当前模式的所有部件(后台),填满缓存
 const preloading = ref<Set<string>>(new Set());
-const allParts: PartName[] = ["base", "insert", "cover"];
+const allParts = computed<PartName[]>(() =>
+  appMode.value === "stencil"
+    ? partTabs.value.map((tab) => tab.name)
+    : ["base", "insert", "cover"]
+);
 
 async function preloadAllParts() {
   const hash = paramsHash();
-  // 并行生成 3 个部件(spawn + build123d 导入开销重叠,总耗时约等于单件)
+  // 并行生成各部件(spawn + build123d 导入开销重叠,总耗时约等于单件)
   await Promise.all(
-    allParts.map(async (part) => {
+    allParts.value.map(async (part) => {
       // 已缓存或正在加载的跳过
       if (stlCache.value[part]?.paramsHash === hash) return;
       if (preloading.value.has(part)) return;
@@ -330,12 +363,12 @@ async function preloadAllParts() {
       try {
         const rustPart = PART_TO_RUST[part];
         const params = buildScadParams();
-        const bytes = await invoke<number[]>("generate_stl", { params, part: rustPart });
+        const bytes = await invoke<ArrayBuffer>("generate_stl", { params, part: rustPart });
         stlCache.value = {
           ...stlCache.value,
           [part]: { bytes, paramsHash: hash },
         };
-        console.log(`[preload] ${part} ready (${(bytes.length / 1024).toFixed(0)} KB)`);
+        console.log(`[preload] ${part} ready (${(bytes.byteLength / 1024).toFixed(0)} KB)`);
       } catch (e) {
         console.warn(`[preload] ${part} failed:`, e);
       } finally {
@@ -386,18 +419,19 @@ onBeforeUnmount(() => {
   controls.value = null;
 });
 
-// 导出所有 3 个部件(STL / STEP,选目录 → Rust export_stl 按扩展名分流直接写盘)
+// 导出 STL / STEP:选父目录 → 自动创建 Mason_<时间戳>/ 子文件夹 → 把所有部件写进子文件夹
 async function exportAll(fmt: "stl" | "step") {
   if (!store.pythonDetected) {
     errorMsg.value = t("preview.noPythonExport");
     return;
   }
 
-  const targetDir = await open({
+  const parentDir = await open({
     directory: true,
     multiple: false,
+    title: fmt === "stl" ? t("preview.exportStl") : t("preview.exportStep"),
   });
-  if (!targetDir || Array.isArray(targetDir)) return;
+  if (!parentDir || Array.isArray(parentDir)) return;
 
   loading.value = true;
   errorMsg.value = null;
@@ -405,16 +439,36 @@ async function exportAll(fmt: "stl" | "step") {
   try {
     const params = buildScadParams();
     const hash = paramsHash();
-    const dir = targetDir.replace(/[\\/]+$/, "");
-    const sep = dir.includes("\\") ? "\\" : "/";
-    const parts: Array<{ name: PartName; rust: string; filename: string }> = [
-      { name: "base", rust: "base", filename: `jig_base.${fmt}` },
-      { name: "insert", rust: "pcb_insert", filename: `jig_pcb_insert.${fmt}` },
-      { name: "cover", rust: "top_cover", filename: `jig_top_cover.${fmt}` },
-    ];
+    const sep = parentDir.includes("\\") ? "\\" : "/";
+    // 自动生成子文件夹名:Mason_YYYYMMDD-HHmmss(同名不会撞,且一眼看出是 Mason 导出)
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp =
+      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const exportDir = `${parentDir}${sep}Mason_${stamp}`;
+    await invoke("ensure_dir", { path: exportDir });
+
+    // 钢网模式:只导出导入了焊盘的面(都没导入时导出顶层占位)
+    const stencilParts: Array<{ name: PartName; rust: string; filename: string }> = [];
+    const c = store.config;
+    if (c.stencilPadsTop.length > 0 || c.stencilPadsBottom.length === 0) {
+      stencilParts.push({ name: "stencil_top", rust: "stencil_top", filename: `stencil_top.${fmt}` });
+    }
+    if (c.stencilPadsBottom.length > 0) {
+      stencilParts.push({ name: "stencil_bottom", rust: "stencil_bottom", filename: `stencil_bottom.${fmt}` });
+    }
+    const parts: Array<{ name: PartName; rust: string; filename: string }> =
+      appMode.value === "stencil"
+        ? stencilParts
+        : [
+            { name: "base", rust: "base", filename: `jig_base.${fmt}` },
+            { name: "insert", rust: "pcb_insert", filename: `jig_pcb_insert.${fmt}` },
+            { name: "cover", rust: "top_cover", filename: `jig_top_cover.${fmt}` },
+          ];
 
     for (const p of parts) {
-      const fullPath = `${dir}${sep}${p.filename}`;
+      const fullPath = `${exportDir}${sep}${p.filename}`;
       // STL 缓存命中(当前参数):bytes 直接落盘,跳过 Python 重新生成;STEP 无缓存
       const cached = fmt === "stl" ? stlCache.value[p.name] : undefined;
       if (cached && cached.paramsHash === hash) {
@@ -424,10 +478,11 @@ async function exportAll(fmt: "stl" | "step") {
       }
     }
 
+    const n = parts.length;
     ElMessage.success(
       fmt === "stl"
-        ? t("preview.exported", { dir })
-        : t("preview.exportedStep", { dir })
+        ? t("preview.exported", { n, dir: exportDir })
+        : t("preview.exportedStep", { n, dir: exportDir })
     );
   } catch (e) {
     errorMsg.value = t("preview.exportFailed", { msg: e instanceof Error ? e.message : String(e) });
@@ -436,11 +491,37 @@ async function exportAll(fmt: "stl" | "step") {
   }
 }
 
-const partTabs = computed(() => [
-  { name: "insert" as PartName, label: t("preview.insert"), color: "#5A9B7F" },
-  { name: "base" as PartName, label: t("preview.base"), color: "#4C6F94" },
-  { name: "cover" as PartName, label: t("preview.cover"), color: "#D9913D" },
-]);
+const partTabs = computed(() => {
+  if (appMode.value === "stencil") {
+    const c = store.config;
+    const tabs: Array<{ name: PartName; label: string; color: string }> = [];
+    // 有焊盘的面才显示 tab(都没导入时显示顶层占位)
+    if (c.stencilPadsTop.length > 0 || c.stencilPadsBottom.length === 0) {
+      tabs.push({ name: "stencil_top", label: t("preview.stencilTop"), color: "#D9913D" });
+    }
+    if (c.stencilPadsBottom.length > 0) {
+      tabs.push({ name: "stencil_bottom", label: t("preview.stencilBottom"), color: "#4C6F94" });
+    }
+    return tabs;
+  }
+  return [
+    { name: "insert" as PartName, label: t("preview.insert"), color: "#5A9B7F" },
+    { name: "base" as PartName, label: t("preview.base"), color: "#4C6F94" },
+    { name: "cover" as PartName, label: t("preview.cover"), color: "#D9913D" },
+  ];
+});
+
+// 切换模式时重置 activePart 到该模式的第一个 tab
+watch(appMode, (m) => {
+  activePart.value = m === "stencil" ? "stencil_top" : "insert";
+});
+
+// tab 列表变化(如重新导入 Gerber)后 activePart 不在列表时回退到第一个
+watch(partTabs, (tabs) => {
+  if (!tabs.some((tab) => tab.name === activePart.value)) {
+    activePart.value = tabs[0]?.name ?? "stencil_top";
+  }
+});
 </script>
 
 <template>
@@ -460,7 +541,7 @@ const partTabs = computed(() => [
       </div>
       <div class="header-actions">
         <span v-if="preloading.size > 0" class="preload-badge">
-          {{ t('preview.preloading', { n: 3 - preloading.size }) }}
+          {{ t('preview.preloading', { n: allParts.length - preloading.size }) }}
         </span>
         <button class="action-btn" @click="refreshAll" :disabled="refreshing">
           <svg viewBox="0 0 16 16" width="14" height="14" :class="{ spinning: refreshing }">

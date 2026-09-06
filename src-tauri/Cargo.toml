@@ -1,12 +1,12 @@
 [package]
-name = "pcb-stencil-jig"
+name = "mason"
 version = "0.1.0"
-description = "PCB 钢网夹具生成器 - 自动生成 PCB 锡膏刷钢网定位夹具"
+description = "Mason - Generate 3D-printable solder-paste stencil jigs from Gerber"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "pcb_stencil_jig_lib"
+name = "mason_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -274,7 +274,7 @@ svg {
 }
 
 .advanced-toggle .chevron {
-  transition: transform 0.2s ease;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .advanced-toggle .chevron.is-open {
