@@ -22,6 +22,7 @@ function buildScadParams() {
     pcb_outline_holes: c.pcbOutlineHoles,
     stencil_size: c.stencilSize,
     screw_spacing: c.screwSpacing,
+    screw_spec: c.screwSpec,
     base_height: c.baseHeight,
     top_cover_height: c.topCoverHeight,
     jig_size: c.jigSize,
@@ -33,6 +34,9 @@ function buildScadParams() {
     corner_screw_d: c.cornerScrewD,
     peri_screw_d: c.periScrewD,
     outer_corner_radius: c.outerCornerRadius,
+    use_hex_nut: c.useHexNut,
+    nut_across_flats: c.nutAcrossFlats,
+    nut_height: c.nutHeight,
     stencil_thickness: c.stencilThickness,
     pad_shrink: c.padShrink,
     stencil_frame_width: c.stencilFrameWidth,
@@ -101,6 +105,7 @@ async function loadProject() {
     store.config.pcbPocketClearance = cfg.pcb_pocket_clearance ?? 0.15;
     store.config.stencilSize = cfg.stencil_size;
     store.config.screwSpacing = cfg.screw_spacing;
+    store.config.screwSpec = cfg.screw_spec ?? "M3";
     store.config.baseHeight = cfg.base_height;
     store.config.topCoverHeight = cfg.top_cover_height;
     store.config.jigSize = cfg.jig_size;
@@ -121,6 +126,9 @@ async function loadProject() {
     store.config.cornerScrewD = cfg.corner_screw_d ?? 5;
     store.config.periScrewD = cfg.peri_screw_d ?? 3.5;
     store.config.outerCornerRadius = cfg.outer_corner_radius ?? 5;
+    store.config.useHexNut = cfg.use_hex_nut ?? true;
+    store.config.nutAcrossFlats = cfg.nut_across_flats ?? 5.5;
+    store.config.nutHeight = cfg.nut_height ?? 2.7;
     store.config.pcbOutlinePoints = cfg.pcb_outline_points ?? [];
     store.config.pcbOutlineHoles = cfg.pcb_outline_holes ?? [];
     // 双面焊盘;旧项目文件的 stencil_pads 归入 Top 面。

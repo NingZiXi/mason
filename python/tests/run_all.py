@@ -13,6 +13,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 ALL_TESTS = [
     "test_screw_layout.py",   # 快:纯算法,无几何生成
+    "test_screw_spec.py",     # 周圈螺丝规格联动(孔径随规格切换)
     "test_stencil.py",
     "test_stencil_pads.py",   # PCB 钢网(一体式)几何
     "test_notch_depth.py",
@@ -21,6 +22,7 @@ ALL_TESTS = [
     "test_v2.py",
     "test_holes.py",
     "test_irregular.py",
+    "test_hex_nut.py",        # B 面底座 M3 六角螺母沉孔
 ]
 
 

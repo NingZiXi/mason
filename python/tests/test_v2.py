@@ -89,8 +89,8 @@ ck.check("厚 4,无凸点(Y max=4)", abs(max(ys) - 4) < 0.06 and abs(min(ys)) < 
 # 拔模:斜面顶边 Y=4 @|x|≈56.55
 bevel = [p for p in v if abs(p[1] - 4) < 0.08 and 56.0 < abs(p[0]) < 57.1 and 51 < abs(p[2]) < 56]
 ck.check(f"窗口拔模斜面顶边({len(bevel)} 顶点)", len(bevel) > 5)
-found = sum(1 for (x, z) in peri if ring(v, x, z, 1.5, 0.15))
-ck.check(f"周圈底孔 {found}/{len(peri)}(与 cover 同心)", found == len(peri))
+found = sum(1 for (x, z) in peri if ring(v, x, z, 1.75, 0.15))
+ck.check(f"周圈底孔 {found}/{len(peri)}(与 cover 同心, Ø3.5 clearance)", found == len(peri))
 # 4 角定位柱孔 r=4.7 全厚贯穿(与 cover 同尺寸,一一对应)
 for cx, cz in CORNERS:
     hole = ring(v, cx, cz, 4.7, 0.15)

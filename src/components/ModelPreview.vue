@@ -50,7 +50,7 @@ function paramsHash() {
   // pcbOutlinePoints 用完整点列表:同点数的异形板框也要正确失效
   return JSON.stringify({
     pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles],
-    screw: [c.screwSpacing],
+    screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight],
     dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterMargin, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD, c.outerCornerRadius],
     notch: [c.pryNotchSides, c.pryNotchScale],
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
@@ -71,6 +71,7 @@ function buildScadParams() {
     pcb_outline_holes: c.pcbOutlineHoles,
     stencil_size: c.stencilSize,
     screw_spacing: c.screwSpacing,
+    screw_spec: c.screwSpec,
     base_height: c.baseHeight,
     top_cover_height: c.topCoverHeight,
     jig_size: c.jigSize,
@@ -84,6 +85,9 @@ function buildScadParams() {
     corner_screw_d: c.cornerScrewD,
     peri_screw_d: c.periScrewD,
     outer_corner_radius: c.outerCornerRadius,
+    use_hex_nut: c.useHexNut,
+    nut_across_flats: c.nutAcrossFlats,
+    nut_height: c.nutHeight,
     // PCB 钢网(一体式)参数
     stencil_thickness: c.stencilThickness,
     pad_shrink: c.padShrink,

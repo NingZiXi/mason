@@ -284,6 +284,38 @@ function resetAll() {
         <span>{{ t('config.jigHint', { w: windowSize, j: c.jigSize }) }}</span>
       </div>
 
+      <!-- 螺母槽(B 面底座) -->
+      <div class="field checkbox-field">
+        <el-checkbox v-model="c.useHexNut" size="default">
+          <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
+        </el-checkbox>
+      </div>
+      <div v-if="c.useHexNut" class="field-row">
+        <div class="field">
+          <label class="field-label">{{ t('config.nutAcrossFlats') }}</label>
+          <el-input-number
+            v-model="c.nutAcrossFlats"
+            :min="3" :max="15" :step="0.1" :precision="2"
+            size="small" style="width: 100%"
+          />
+        </div>
+        <div class="field">
+          <label class="field-label">{{ t('config.nutHeight') }}</label>
+          <el-input-number
+            v-model="c.nutHeight"
+            :min="1.5" :max="6" :step="0.1" :precision="2"
+            size="small" style="width: 100%"
+          />
+        </div>
+      </div>
+      <div v-if="c.useHexNut" class="auto-hint">
+        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span>{{ t('config.useHexNutHint') }}</span>
+      </div>
+
       <!-- 重置(只重置高级参数,基础区保留) -->
       <button class="reset-btn" @click="resetAll">{{ t('config.reset') }}</button>
     </div>
@@ -370,6 +402,21 @@ function resetAll() {
 
 .field {
   margin-bottom: 12px;
+}
+
+.checkbox-field {
+  margin-bottom: 8px;
+}
+
+.checkbox-field :deep(.el-checkbox__label) {
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.checkbox-label {
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
 }
 
 .field-label {

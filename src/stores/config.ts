@@ -64,6 +64,9 @@ export interface AppConfig {
   // 螺丝布局
   /** 周圈螺丝间距(B 面配置;0 = 关闭周圈孔) */
   screwSpacing: number;
+  /** 周圈螺丝规格(机丝 GB/T 5277,GB/T 6170 六角螺母);切换后
+   *  自动套用标准孔径/螺母对边/螺母厚度;4 角固定 M5 不联动 */
+  screwSpec: "M2.5" | "M3" | "M3.5" | "M4" | "M5";
 
   // 几何细节 (高级用户可调)
   baseHeight: number;
@@ -89,6 +92,12 @@ export interface AppConfig {
   periScrewD: number;
   /** 外缘圆角半径 */
   outerCornerRadius: number;
+  /** B 面底座开六角螺母沉孔(机丝+螺母锁紧);关闭则只用自攻底孔 */
+  useHexNut: boolean;
+  /** M3 螺母对边距 (mm,GB/T 6170 默认 5.5) */
+  nutAcrossFlats: number;
+  /** M3 螺母厚度 (mm,默认 2.7) */
+  nutHeight: number;
 
   // 夹具整体尺寸 (正方形,按 20mm 步进,自动从窗口推导)
   jigSize: number;
@@ -126,6 +135,7 @@ const DEFAULT: AppConfig = {
   stencilPadsTop: [],
   stencilPadsBottom: [],
   screwSpacing: 40,
+  screwSpec: "M3",
   baseHeight: 4,
   topCoverHeight: 4,
   pcbPocketClearance: 0.15,
@@ -137,13 +147,32 @@ const DEFAULT: AppConfig = {
   pryNotchSides: ['down'],
   pryNotchScale: 1.0,
   cornerScrewD: 5,
-  periScrewD: 3.5,
+  periScrewD: 3.2,
   outerCornerRadius: 5,
+  useHexNut: true,
+  nutAcrossFlats: 5.5,
+  nutHeight: 2.4,
   jigSize: 140,
   gerberFilename: null,
   pcbOutlinePoints: [],
   pcbOutlineHoles: [],
 };
+
+/**
+ * 螺丝规格 → 标准孔径 / 螺母对边 / 螺母厚度
+ * 数据源:GB/T 5277-1985(机丝过孔)、GB/T 6170-2000(1 型六角螺母)
+ * 周圈孔用 clearance 孔(Ø = 螺距 + 0.2~0.3),方便机丝穿过,
+ * 机丝锁紧后底面用六角螺母反沉孔固定(不直接拧入塑料)。
+ */
+export const SCREW_SPECS = {
+  "M2.5": { holeD: 2.7, nutAcross: 4.5, nutHeight: 2.0 },
+  "M3":   { holeD: 3.2, nutAcross: 5.5, nutHeight: 2.4 },
+  "M3.5": { holeD: 3.7, nutAcross: 6.0, nutHeight: 2.8 },
+  "M4":   { holeD: 4.3, nutAcross: 7.0, nutHeight: 3.2 },
+  "M5":   { holeD: 5.3, nutAcross: 8.0, nutHeight: 4.7 },
+} as const;
+
+export type ScrewSpec = keyof typeof SCREW_SPECS;
 
 /** 派生窗口 x/y 半宽(与 Python get_polys 一致,bbox 近似异形板)
  * 凸台/窗口恒为正方形:边长 = 槽包围盒长边 + 2*margin(钢网是正方形,
@@ -262,6 +291,20 @@ export const useConfigStore = defineStore("config", () => {
     { immediate: true }
   );
 
+  // 螺丝规格 → 周圈孔径 / 螺母尺寸(单向联动:换规格时覆写三个高级参数,
+  // 用户后续改回规格或手动改高级参数都不会被反向覆盖)
+  watch(
+    () => config.value.screwSpec,
+    (spec) => {
+      const s = SCREW_SPECS[spec as ScrewSpec];
+      if (!s) return;
+      config.value.periScrewD = s.holeD;
+      config.value.nutAcrossFlats = s.nutAcross;
+      config.value.nutHeight = s.nutHeight;
+    },
+    { immediate: true }
+  );
+
   // 参数校验:非阻塞警告(key 为 i18n 键,组件层负责展示)
   const warnings = computed(() => {
     const c = config.value;
@@ -370,6 +413,7 @@ export const useConfigStore = defineStore("config", () => {
   function reset() {
     Object.assign(config.value, {
       screwSpacing: DEFAULT.screwSpacing,
+      screwSpec: DEFAULT.screwSpec,
       baseHeight: DEFAULT.baseHeight,
       topCoverHeight: DEFAULT.topCoverHeight,
       pcbPocketClearance: DEFAULT.pcbPocketClearance,
@@ -380,6 +424,9 @@ export const useConfigStore = defineStore("config", () => {
       cornerScrewD: DEFAULT.cornerScrewD,
       periScrewD: DEFAULT.periScrewD,
       outerCornerRadius: DEFAULT.outerCornerRadius,
+      useHexNut: DEFAULT.useHexNut,
+      nutAcrossFlats: DEFAULT.nutAcrossFlats,
+      nutHeight: DEFAULT.nutHeight,
     });
     // 派生参数重算(margin 影响窗口→jig 尺寸;platterHeight 随 baseHeight)
     config.value.platterMargin = autoPlatterMargin(config.value);

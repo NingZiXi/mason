@@ -64,6 +64,31 @@ from shapely.affinity import translate as shapely_translate
 # 公共几何工具
 # ---------------------------------------------------------------------------
 
+# 周圈螺丝规格表(机丝 GB/T 5277 + 六角螺母 GB/T 6170)
+# 孔径 = clearance(机丝顺利穿过);螺母对边/厚度用于底面六角反沉孔
+SCREW_SPECS = {
+    "M2.5": {"hole_d": 2.7, "nut_across": 4.5, "nut_height": 2.0},
+    "M3":   {"hole_d": 3.2, "nut_across": 5.5, "nut_height": 2.4},
+    "M3.5": {"hole_d": 3.7, "nut_across": 6.0, "nut_height": 2.8},
+    "M4":   {"hole_d": 4.3, "nut_across": 7.0, "nut_height": 3.2},
+    "M5":   {"hole_d": 5.3, "nut_across": 8.0, "nut_height": 4.7},
+}
+
+
+def peri_screw_params(p):
+    """根据 screw_spec 返回 (孔径, 螺母对边, 螺母厚度)。
+    若用户在高级区手动覆盖了 peri_screw_d / nut_* 数值,以用户值为准
+    (前端 watcher 会在 screw_spec 变化时同步覆写这三个高级值,
+    所以这里默认行为等价于查表;只在调用方不传 screw_spec 的旧调用里兜底)。"""
+    spec = str(p.get("screw_spec", "M3")).strip().upper()
+    s = SCREW_SPECS.get(spec, SCREW_SPECS["M3"])
+    return (
+        float(p.get("peri_screw_d", s["hole_d"])),
+        float(p.get("nut_across_flats", s["nut_across"])),
+        float(p.get("nut_height", s["nut_height"])),
+    )
+
+
 def poly_solid(coords, height):
     """2D 点列 → extruded solid(z: 0..height)。失败返回 None。"""
     pts = list(coords)
@@ -487,7 +512,7 @@ def build_cover(p):
     cover_h = p["top_cover_height"]
     r_out = p.get("outer_corner_radius", 5.0)
     corner_d = p.get("corner_screw_d", 5.0)
-    peri_d = p.get("peri_screw_d", 3.5)
+    peri_d, _nut_across, _nut_h = peri_screw_params(p)
     spacing = p["screw_spacing"]
 
     slot_poly, _platter, window_poly, _shaped = get_polys(p)
@@ -529,11 +554,21 @@ def build_cover(p):
 
 
 def build_base(p):
-    """B 面底座:反向拔模窗口 + 周圈自攻底孔 + 4 角自攻底孔"""
+    """B 面底座:反向拔模窗口 + 周圈通孔 + 4 角定位柱孔 + (可选) 周圈螺母反沉孔
+
+    周圈通孔贯穿整个 base (z=-0.1..4.1),配合 cover/insert 周圈孔位:
+    - 默认 use_hex_nut=True 时,底面开口对应六角螺母沉孔
+      (z=0..nut_h+gap),适配机丝螺丝 + 螺母锁紧,装好后底面平整
+    - use_hex_nut=False 时,只保留通孔,用户自攻螺丝拧入塑料
+
+    周圈孔径 / 螺母对边 / 螺母厚度 由 screw_spec 自动套用
+    (GB/T 5277 + GB/T 6170);用户在高级区手动覆盖 peri_screw_d /
+    nut_across_flats / nut_height 时以覆盖值为准。
+    """
     jig = p["jig_size"]
     base_h = p["base_height"]
     r_out = p.get("outer_corner_radius", 5.0)
-    peri_d = p.get("peri_screw_d", 3.5)
+    peri_d, nut_across, nut_h = peri_screw_params(p)
     spacing = p["screw_spacing"]
 
     _slot, _platter, window_poly, _shaped = get_polys(p)
@@ -548,9 +583,9 @@ def build_base(p):
     win_half = max(window_poly.bounds[2], window_poly.bounds[3]) + 1.0
     base = chamfer_edges_at(base, base_h, 1.0, win_half)
 
-    # 3. 周圈自攻底孔(与 cover/insert 过孔同心,孔径小 0.5)
+    # 3. 周圈通孔(贯穿,与 cover/insert 过孔同心)
     for (x, y) in compute_perimeter_screw_positions(jig, window_poly, spacing):
-        hole = Cylinder((peri_d - 0.5) / 2, base_h + 0.2)
+        hole = Cylinder(peri_d / 2, base_h + 0.2)
         base = base - hole.moved(bd.Location((x, y, base_h / 2)))
 
     # 4. 4 角定位柱孔(与 cover 角孔同尺寸 Ø9.4,一一对应):
@@ -559,6 +594,27 @@ def build_base(p):
     for (x, y) in corner_screw_positions(window_poly, jig):
         hole = Cylinder(corner_d / 2 + 2.2, base_h + 0.2)
         base = base - hole.moved(bd.Location((x, y, base_h / 2)))
+
+    # 5. 周圈螺母反沉孔(可选):从底面开口,深 = nut_h + 0.2,
+    #    配合机丝螺丝 + 螺母锁紧(替代自攻);六边形适配螺母外形,防转
+    if p.get("use_hex_nut", True):
+        nut_gap = 0.2                                      # 装配间隙 0.2mm
+        # 六边形顶点在外接圆上,半径 = 对边距 / 2;对边 = 2r_hex = nut_across
+        r_hex = nut_across / 2.0
+        hex_pts = [
+            (r_hex * math.cos(i * math.pi / 3.0),
+             r_hex * math.sin(i * math.pi / 3.0))
+            for i in range(6)
+        ]
+        for (x, y) in compute_perimeter_screw_positions(jig, window_poly, spacing):
+            with BuildPart() as bp:
+                with BuildSketch(Plane.XY) as bs:
+                    with BuildLine() as bl:
+                        Polyline(*[bd.Vector(px, py, 0) for px, py in hex_pts], close=True)
+                    make_face()
+                extrude(amount=nut_h + nut_gap)
+            nut_solid = bp.part.moved(bd.Location((x, y, 0)))   # Z=0..nut_h+gap(底面开口)
+            base = base - nut_solid
 
     return base
 
