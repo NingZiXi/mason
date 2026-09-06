@@ -74,7 +74,7 @@ jobs:
           # .app 是目录 bundle,打包成 zip 以便上传
           cd src-tauri/target/release/bundle/macos
           for app in *.app; do
-            [ -d "$app" ] && zip -r "../../../../artifacts/${app%.app}.zip" "$app"
+            [ -d "$app" ] && zip -r "../../../../../artifacts/${app%.app}.zip" "$app"
           done
 
       - name: Collect artifacts (Linux)
