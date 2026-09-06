@@ -1,8 +1,8 @@
 <div align="center">
 
-![Mason Banner](./docs/banner.jpg)
+![Mason Banner](./docs/banner.png)
 
-# <img src="./public/logo.svg" height="48" style="vertical-align:bottom;margin-bottom:-4px;" /> Mason
+# <img src="./public/logo.svg" height="48" style="vertical-align:bottom;margin-bottom:-10px;" /> Mason
 
 **从 Gerber 到 3D 打印钢网 — 一键生成 PCB 锡膏印刷工具**
 *Gerber 解析 · 参数化 CAD · 实时 3D 预览 · 零云依赖*

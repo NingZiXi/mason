@@ -1,8 +1,8 @@
 <div align="center">
 
-![Mason Banner](./docs/banner.jpg)
+![Mason Banner](./docs/banner.png)
 
-# <img src="./public/logo.svg" height="48" style="vertical-align:bottom;margin-bottom:-4px;" /> Mason
+# <img src="./public/logo.svg" height="48" style="vertical-align:bottom;margin-bottom:-10px;" /> Mason
 
 **From Gerber to 3D-printable stencil — generate PCB solder paste printing tools in one click**
 *Gerber parsing · Parametric CAD · Real-time 3D preview · Zero cloud dependency*
