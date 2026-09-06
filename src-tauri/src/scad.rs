@@ -170,6 +170,14 @@ impl Server {
 // 公共 API
 // ---------------------------------------------------------------------------
 
+/// 内置 Python 引擎可执行文件名
+/// Windows: python.exe (嵌入式发行版)
+/// Unix: bin/python3 (python-build-standalone)
+#[cfg(target_os = "windows")]
+const BUNDLED_PYTHON_EXE: &str = "python.exe";
+#[cfg(not(target_os = "windows"))]
+const BUNDLED_PYTHON_EXE: &str = "bin/python3";
+
 /// 内置 Python 引擎(随安装包分发,用户零配置)
 /// 查找顺序:开发源目录(完整,dev 权威)→ resource 目录(打包;数组语法保留目录树,
 /// 落在 resource_dir/resources/python-env)→ exe 旁(便携部署)
@@ -178,14 +186,14 @@ pub fn bundled_python(app: Option<&AppHandle>) -> Option<String> {
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("python-env")
-        .join("python.exe");
+        .join(BUNDLED_PYTHON_EXE);
     if dev.exists() {
         return Some(dev.to_string_lossy().into_owned());
     }
     if let Some(app) = app {
         if let Ok(dir) = app.path().resource_dir() {
             for rel in ["resources/python-env", "python-env"] {
-                let p = dir.join(rel).join("python.exe");
+                let p = dir.join(rel).join(BUNDLED_PYTHON_EXE);
                 if p.exists() {
                     return Some(p.to_string_lossy().into_owned());
                 }
@@ -195,7 +203,7 @@ pub fn bundled_python(app: Option<&AppHandle>) -> Option<String> {
     // 兜底:exe 同级(便携部署)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let p = dir.join("python-env").join("python.exe");
+            let p = dir.join("python-env").join(BUNDLED_PYTHON_EXE);
             if p.exists() {
                 return Some(p.to_string_lossy().into_owned());
             }
