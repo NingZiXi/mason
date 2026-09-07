@@ -1,6 +1,6 @@
 <div align="center">
 
-![Mason Banner](./docs/banner.png)
+![Mason Banner](./docs/banner_optimized.jpg)
 
 # <img src="./public/logo.svg" height="48" style="vertical-align:bottom;margin-bottom:-10px;" /> Mason
 
