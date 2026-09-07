@@ -23,6 +23,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
 
+    env:
+      # AppImage 在无 FUSE 的 CI 环境下需要解包运行
+      APPIMAGE_EXTRACT_AND_RUN: 1
+
     steps:
       - uses: actions/checkout@v4
 
