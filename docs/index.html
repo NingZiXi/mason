@@ -541,8 +541,18 @@
     transition:opacity .55s ease,transform .55s ease;
     pointer-events:none;
   }
-  .shot-img.shot-img-contain{object-fit:contain;padding:18px}
+  .shot-img.shot-img-contain{
+    object-fit:contain;padding:26px;
+    filter:drop-shadow(0 12px 32px rgba(34,48,43,.20));
+  }
   .shot-img.is-active{opacity:1;transform:scale(1);pointer-events:auto}
+  /* 竖图同图模糊背景填充：铺满舞台消除两侧留白 */
+  .shot-img.shot-blur{
+    object-fit:cover;transform:scale(1.25);
+    filter:blur(30px) brightness(1.04) saturate(1.05);
+    padding:0;
+  }
+  .shot-img.shot-blur.is-active{opacity:.5;transform:scale(1.25)}
   .shot-list{display:flex;flex-direction:column;gap:12px}
   .shot-item{
     display:flex;align-items:center;gap:14px;text-align:left;
@@ -982,7 +992,9 @@
           <div class="shot-viewport">
             <img src="assets/shot-jig.png" alt="Mason 夹具模式界面" class="shot-img is-active" data-shot="0" />
             <img src="assets/shot-stencil.png" alt="Mason 钢网模式界面" class="shot-img" data-shot="1" loading="lazy" />
+            <img src="assets/shot-import.png" alt="" aria-hidden="true" class="shot-img shot-blur" data-shot="2" loading="lazy" />
             <img src="assets/shot-import.png" alt="Gerber 导入识别" class="shot-img shot-img-contain" data-shot="2" loading="lazy" />
+            <img src="assets/shot-screws.png" alt="" aria-hidden="true" class="shot-img shot-blur" data-shot="3" loading="lazy" />
             <img src="assets/shot-screws.png" alt="螺丝布局自动计算" class="shot-img shot-img-contain" data-shot="3" loading="lazy" />
           </div>
         </div>
