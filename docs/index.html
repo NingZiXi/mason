@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网</title>
 <meta name="description" content="Mason 是一款开源桌面工具：拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。Windows / macOS / Linux 全平台，内置引擎零配置。" />
+<!-- Open Graph / Twitter 分享卡片 -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Mason 泥瓦匠" />
+<meta property="og:title" content="Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网" />
+<meta property="og:description" content="拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。开源 · 免费 · 跨平台 · 零云依赖。" />
+<meta property="og:url" content="https://ningzixi.github.io/mason/" />
+<meta property="og:image" content="https://ningzixi.github.io/mason/assets/og.png" />
+<meta property="og:image:width" content="1024" />
+<meta property="og:image:height" content="640" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网" />
+<meta name="twitter:description" content="拖入 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。开源 · 跨平台。" />
+<meta name="twitter:image" content="https://ningzixi.github.io/mason/assets/og.png" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50' fill='none' stroke='%233E7D62' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='14' r='5' fill='%233E7D62'/%3E%3Ccircle cx='14' cy='50' r='5' fill='%23E07A3C'/%3E%3C/svg%3E" />
 <style>
   :root{
@@ -454,6 +467,13 @@
     section{padding:64px 0}
     .hero-bg::before{width:240px;height:240px;top:-80px;right:-40px}
     .hero-bg::after{width:200px;height:200px;bottom:-60px;left:-40px}
+    /* showcase / workflow / bento 响应式 */
+    .showcase{grid-template-columns:1fr}
+    .shot-list{flex-direction:row;overflow-x:auto;padding-bottom:4px}
+    .shot-item{min-width:220px}
+    .workflow-grid{grid-template-columns:1fr}
+    .feats-bento{grid-template-columns:1fr}
+    .feat-a,.feat-b,.feat-e,.feat-f{grid-column:span 1;grid-row:auto}
   }
 
   @media (prefers-reduced-motion:reduce){
@@ -463,6 +483,284 @@
       transition-duration:.01ms !important;
     }
   }
+
+  /* ============================================================
+     语言切换 + Star 徽章
+  ============================================================ */
+  .lang-toggle{
+    display:flex;align-items:center;gap:2px;
+    border:1px solid var(--line);background:#fff;border-radius:99px;
+    padding:5px 10px;cursor:pointer;font-size:12.5px;font-weight:600;
+    color:var(--ink-2);font-family:inherit;
+    transition:border-color .2s,color .2s;
+  }
+  .lang-toggle:hover{border-color:var(--green-accent);color:var(--green)}
+  .lang-toggle .lang-opt{transition:color .2s}
+  .lang-toggle .lang-opt.is-on{color:var(--green);font-weight:800}
+  .lang-toggle .lang-div{opacity:.4;margin:0 1px}
+  .star-pill{
+    display:inline-flex;align-items:center;gap:2px;
+    background:var(--green-light);color:var(--green);border-radius:99px;
+    padding:1px 7px;margin-left:6px;font-size:11.5px;font-weight:800;
+    letter-spacing:.2px;
+  }
+
+  /* ============================================================
+     Showcase 截图展示区
+  ============================================================ */
+  .showcase-sec{padding-top:40px}
+  .showcase{
+    display:grid;grid-template-columns:1fr 264px;gap:22px;align-items:stretch;
+  }
+  .shot-frame{
+    background:#fff;border:1px solid var(--line);border-radius:16px;
+    overflow:hidden;height:100%;display:flex;flex-direction:column;
+    box-shadow:0 18px 48px rgba(34,48,43,.10);
+  }
+  .shot-chrome{
+    display:flex;align-items:center;gap:6px;
+    padding:10px 14px;background:var(--green-soft);border-bottom:1px solid var(--line);
+    flex:none;
+  }
+  .shot-chrome .dot{width:10px;height:10px;border-radius:50%;flex:none}
+  .dot-r{background:#E07A3C}
+  .dot-y{background:#D9913D}
+  .dot-g{background:#5A9B7F}
+  .shot-title{
+    margin-left:10px;font-size:12.5px;color:var(--ink-2);font-weight:600;
+    letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .shot-viewport{
+    position:relative;flex:1;min-height:420px;background:
+      radial-gradient(ellipse at 30% 20%, #F4F9F6 0%, #EDF3EF 60%, #E7EFEA 100%);
+  }
+  .shot-img{
+    position:absolute;inset:0;width:100%;height:100%;
+    object-fit:cover;object-position:top center;
+    opacity:0;transform:scale(1.015);
+    transition:opacity .55s ease,transform .55s ease;
+    pointer-events:none;
+  }
+  .shot-img.shot-img-contain{object-fit:contain;padding:18px}
+  .shot-img.is-active{opacity:1;transform:scale(1);pointer-events:auto}
+  .shot-list{display:flex;flex-direction:column;gap:12px}
+  .shot-item{
+    display:flex;align-items:center;gap:14px;text-align:left;
+    background:#fff;border:1px solid var(--line);border-radius:14px;
+    padding:14px 16px;cursor:pointer;font-family:inherit;
+    transition:border-color .25s,box-shadow .25s,transform .25s;
+    flex:1;
+  }
+  .shot-item:hover{border-color:var(--green-accent);transform:translateX(3px)}
+  .shot-item.is-active{
+    border-color:var(--green);
+    box-shadow:0 6px 20px rgba(62,125,98,.14), inset 3px 0 0 var(--green);
+  }
+  .shot-item-num{
+    font-size:13px;font-weight:800;color:var(--green-accent);letter-spacing:.5px;
+    flex:none;font-variant-numeric:tabular-nums;
+  }
+  .shot-item.is-active .shot-item-num{color:var(--green)}
+  .shot-item-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .shot-item-text b{font-size:14px;color:var(--ink);font-weight:700}
+  .shot-item-text i{font-style:normal;font-size:12px;color:var(--ink-2)}
+
+  /* ============================================================
+     Workflow 交互演示
+  ============================================================ */
+  .workflow-grid{
+    display:grid;grid-template-columns:1.05fr .95fr;gap:36px;align-items:center;
+  }
+  .wf-stage{
+    background:linear-gradient(160deg,#F4F9F6 0%,#EDF3EF 100%);
+    border:1px solid var(--line);border-radius:18px;
+    padding:26px;display:flex;align-items:center;justify-content:center;
+    box-shadow:inset 0 2px 12px rgba(62,125,98,.05);
+  }
+  .wf-svg{width:100%;max-width:460px;height:auto}
+  /* 竖排步骤 */
+  .steps-v{display:flex;flex-direction:column;gap:18px}
+  .steps-v::before{display:none}
+  .steps-v .step{display:flex;gap:16px;align-items:flex-start;margin-bottom:0}
+  .steps-v .step-num{margin-bottom:0;flex:none}
+
+  /* --- 演示动画元素 --- */
+  .wf-drop{
+    fill:#fff;stroke:var(--green-accent);stroke-width:1.6;stroke-dasharray:7 6;
+    opacity:.9;
+    animation:wf-drop-pulse 10s ease-in-out infinite;
+  }
+  .wf-drop-text{
+    font-size:13px;fill:var(--ink-2);font-weight:600;letter-spacing:1px;
+    animation:wf-droptext 10s ease-in-out infinite;
+  }
+  .wf-file{
+    transform:translate(-90px,100px);
+    animation:wf-file-fly 10s cubic-bezier(.3,.7,.3,1) infinite;
+  }
+  .wf-file-body{fill:#fff;stroke:var(--green);stroke-width:2}
+  .wf-file-tab{fill:var(--green-light);stroke:var(--green);stroke-width:2}
+  .wf-file-label{font-size:15px;font-weight:800;fill:var(--green)}
+  .wf-file-sub{font-size:7.5px;font-weight:700;fill:var(--ink-2);letter-spacing:1px}
+  .wf-board{
+    fill:rgba(90,155,127,.10);stroke:var(--green);stroke-width:2;
+    stroke-dasharray:420;stroke-dashoffset:420;opacity:0;
+    animation:wf-board-draw 10s ease-in-out infinite;
+  }
+  .wf-scan{
+    stroke:var(--green-accent);stroke-width:2;opacity:0;
+    animation:wf-scan-move 10s ease-in-out infinite;
+  }
+  .wf-ring{
+    fill:none;stroke:var(--green);stroke-width:3;stroke-linecap:round;
+    stroke-dasharray:276;stroke-dashoffset:276;opacity:0;
+    transform:rotate(-90deg);transform-origin:230px 120px;
+    animation:wf-ring-spin 10s ease-in-out infinite;
+  }
+  .wf-layer{
+    stroke:#fff;stroke-width:1.5;opacity:0;
+  }
+  .wf-l1{fill:#E3A052;animation:wf-layer-pop 10s ease-in-out infinite}
+  .wf-l2{fill:#69AB8C;animation:wf-layer-pop 10s ease-in-out infinite}
+  .wf-l3{fill:#5D7FA3;animation:wf-layer-pop 10s ease-in-out infinite}
+  .wf-chip{opacity:0}
+  .wf-chip rect{fill:var(--green);stroke:none}
+  .wf-chip text{font-size:11px;font-weight:800;fill:#fff;letter-spacing:.5px}
+  .wf-c1{animation:wf-chip-pop 10s ease-in-out infinite}
+  .wf-c2{animation:wf-chip-pop 10s ease-in-out infinite}
+  .wf-c3{animation:wf-chip-pop 10s ease-in-out infinite}
+
+  @keyframes wf-file-fly{
+    0%{transform:translate(-90px,100px);opacity:0}
+    6%{opacity:1}
+    18%,26%{transform:translate(198px,80px);opacity:1}
+    32%,100%{transform:translate(198px,80px);opacity:0}
+  }
+  @keyframes wf-drop-pulse{
+    0%,16%{stroke:var(--green-accent);stroke-width:1.6}
+    20%,30%{stroke:var(--green);stroke-width:3}
+    36%,100%{stroke:var(--green-accent);stroke-width:1.6}
+  }
+  @keyframes wf-droptext{
+    0%,30%{opacity:.9}
+    36%,92%{opacity:0}
+    98%,100%{opacity:.9}
+  }
+  @keyframes wf-board-draw{
+    0%,30%{stroke-dashoffset:420;opacity:0}
+    34%{opacity:1}
+    46%,72%{stroke-dashoffset:0;opacity:1}
+    82%,100%{stroke-dashoffset:0;opacity:0}
+  }
+  @keyframes wf-scan-move{
+    0%,32%{transform:translateY(0);opacity:0}
+    36%{opacity:.8}
+    46%{transform:translateY(56px);opacity:.8}
+    50%,100%{transform:translateY(56px);opacity:0}
+  }
+  @keyframes wf-ring-spin{
+    0%,46%{stroke-dashoffset:276;opacity:0}
+    50%{opacity:.9}
+    62%{stroke-dashoffset:0;opacity:.9}
+    70%,100%{stroke-dashoffset:0;opacity:0}
+  }
+  @keyframes wf-layer-pop{
+    0%,60%{opacity:0;transform:translateY(14px)}
+    68%,82%{opacity:1;transform:translateY(0)}
+    92%,100%{opacity:0;transform:translateY(0)}
+  }
+  @keyframes wf-chip-pop{
+    0%,72%{opacity:0;transform:translateX(14px)}
+    78%,88%{opacity:1;transform:translateX(0)}
+    96%,100%{opacity:0;transform:translateX(0)}
+  }
+
+  /* ============================================================
+     Features Bento
+  ============================================================ */
+  .feats-bento{
+    display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:minmax(150px,auto);
+  }
+  .feat-a{grid-column:span 2;grid-row:span 2}
+  .feat-b{grid-column:span 2}
+  .feat-e,.feat-f{grid-column:span 2}
+  .feat{position:relative;overflow:hidden}
+  /* 解析动画（大卡） */
+  .feat-demo{
+    margin-top:18px;display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;
+    background:var(--green-soft);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;
+  }
+  .parse-lines{display:flex;flex-direction:column;gap:5px;font-family:ui-monospace,"Cascadia Code",Consolas,monospace;font-size:11px}
+  .parse-lines span{
+    color:var(--ink-2);opacity:.35;
+    animation:parse-line-glow 4.8s linear infinite;
+    animation-delay:calc(var(--i) * .6s);
+  }
+  @keyframes parse-line-glow{
+    0%,8%{opacity:1;color:var(--green);font-weight:700}
+    16%,100%{opacity:.35;color:var(--ink-2);font-weight:400}
+  }
+  .parse-board{width:130px;flex:none}
+  .parse-outline{
+    fill:rgba(90,155,127,.08);stroke:var(--green);stroke-width:2;
+    stroke-dasharray:300;stroke-dashoffset:300;
+    animation:parse-outline-draw 4.8s ease-in-out infinite;
+  }
+  @keyframes parse-outline-draw{
+    0%{stroke-dashoffset:300}
+    45%,100%{stroke-dashoffset:0}
+  }
+  .parse-pad{
+    fill:var(--green-accent);opacity:0;
+    animation:parse-pad-in 4.8s ease-in-out infinite;
+  }
+  .parse-pad:nth-of-type(2){animation-delay:.35s}
+  .parse-pad:nth-of-type(3){animation-delay:.6s}
+  @keyframes parse-pad-in{
+    0%,40%{opacity:0;transform:scale(.4)}
+    55%,100%{opacity:.85;transform:scale(1)}
+  }
+  /* 旋转立方体（中卡） */
+  .cube-wrap{
+    position:absolute;right:22px;top:50%;transform:translateY(-50%);
+    width:84px;height:84px;perspective:400px;pointer-events:none;
+  }
+  .cube{
+    width:100%;height:100%;position:relative;transform-style:preserve-3d;
+    animation:cube-spin 9s linear infinite;
+  }
+  .cube-face{
+    position:absolute;inset:0;border:2px solid var(--green);
+    background:rgba(90,155,127,.14);border-radius:6px;
+  }
+  .cube-f{transform:translateZ(42px)}
+  .cube-b{transform:rotateY(180deg) translateZ(42px)}
+  .cube-l{transform:rotateY(-90deg) translateZ(42px)}
+  .cube-r{transform:rotateY(90deg) translateZ(42px)}
+  .cube-t{transform:rotateX(90deg) translateZ(42px);background:rgba(227,160,82,.18);border-color:var(--cover-amber)}
+  .cube-d{transform:rotateX(-90deg) translateZ(42px)}
+  @keyframes cube-spin{
+    0%{transform:rotateX(-18deg) rotateY(0)}
+    100%{transform:rotateX(-18deg) rotateY(360deg)}
+  }
+  .feat-b h3,.feat-b p{max-width:calc(100% - 120px)}
+
+  /* ============================================================
+     下载区 OS 推荐
+  ============================================================ */
+  .dl-card{position:relative;transition:transform .3s,box-shadow .3s,border-color .3s}
+  .os-reco{
+    position:absolute;top:-9px;right:14px;
+    background:var(--green);color:#fff;font-size:11px;font-weight:800;
+    padding:2px 10px;border-radius:99px;letter-spacing:1px;
+    box-shadow:0 3px 10px rgba(62,125,98,.35);
+  }
+  .dl-card.is-reco{
+    border-color:var(--green);transform:translateY(-4px);
+    box-shadow:0 14px 36px rgba(62,125,98,.18);
+  }
+  .dl-card.is-reco .os-btn{box-shadow:0 4px 14px rgba(62,125,98,.35)}
 </style>
 </head>
 <body>
@@ -485,14 +783,19 @@
       Mason<span class="cn">泥瓦匠</span>
     </a>
     <div class="nav-links">
-      <a href="#workflow" class="hide-m">工作流程</a>
-      <a href="#modes" class="hide-m">两种模式</a>
-      <a href="#features" class="hide-m">特性</a>
-      <a href="#download" class="hide-m">下载</a>
+      <a href="#showcase" class="hide-m" data-i18n="nav.showcase">界面</a>
+      <a href="#workflow" class="hide-m" data-i18n="nav.workflow">工作流程</a>
+      <a href="#modes" class="hide-m" data-i18n="nav.modes">两种模式</a>
+      <a href="#features" class="hide-m" data-i18n="nav.features">特性</a>
+      <a href="#download" class="hide-m" data-i18n="nav.download">下载</a>
       <a class="btn btn-github" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         GitHub
+        <span class="star-pill" id="star-pill" hidden>★ <span id="star-count">–</span></span>
       </a>
+      <button class="lang-toggle" id="lang-toggle" aria-label="Switch language / 切换语言">
+        <span class="lang-opt is-on" data-lang="zh">中</span><span class="lang-div">/</span><span class="lang-opt" data-lang="en">EN</span>
+      </button>
     </div>
   </div>
 </nav>
@@ -505,9 +808,9 @@
   <div class="hero-grid-overlay" data-depth="0.03"></div>
   <div class="wrap hero-inner">
     <div class="hero-text" data-depth="-0.60">
-      <span class="eyebrow"><i></i>开源 · 免费 · 跨平台</span>
-      <h1>Gerber 到 3D 打印 —<br /><span class="hl">两种模式全搞定</span></h1>
-      <p class="hero-sub">
+      <span class="eyebrow"><i></i><span data-i18n="hero.eyebrow">开源 · 免费 · 跨平台</span></span>
+      <h1><span data-i18n="hero.h1a">Gerber 到 3D 打印 —</span><br /><span class="hl" data-i18n="hero.h1b">两种模式全搞定</span></h1>
+      <p class="hero-sub" data-i18n="hero.sub">
         从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具三件套</b>（底座 / 托盘 / 顶盖），
         也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。
       </p>
@@ -516,7 +819,7 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span id="hero-primary-label">免费下载</span>
         </a>
-        <a class="btn btn-ghost" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener">查看源码</a>
+        <a class="btn btn-ghost" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener" data-i18n="hero.source">查看源码</a>
       </div>
       <div class="os-row" id="os-row">
         <a class="os-chip" data-os="windows" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">
@@ -532,7 +835,7 @@
           Linux
         </a>
       </div>
-      <p class="hero-ver" id="hero-ver">最新版本：<a href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">前往 Releases 查看</a></p>
+      <p class="hero-ver" id="hero-ver"><span data-i18n="hero.verPrefix">最新版本：</span><a href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener" data-i18n="hero.verLink">前往 Releases 查看</a></p>
     </div>
 
     <!-- 两种模式核心产物（部件色与 App 内一致） -->
@@ -562,7 +865,7 @@
         <!-- 模式标签 -->
         <g class="part part-tag" data-depth="-0.28" font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
           <rect x="18" y="18" width="110" height="20" rx="10" fill="#EDF2F7"/>
-          <text x="24" y="32" fill="#4C6F94">JIG · 钢网夹具</text>
+          <text x="24" y="32" fill="#4C6F94" data-i18n="hero.svgTagJig">JIG · 钢网夹具</text>
         </g>
         <!-- 虚线对齐（先隐藏后划线） -->
         <g class="part part-line" data-depth="-0.25" stroke="#5A9B7F" stroke-width="1.2" stroke-dasharray="4 5" opacity=".5">
@@ -599,15 +902,15 @@
         </g>
         <!-- 部件标注 -->
         <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
-          <text x="268" y="110">cover 顶盖</text>
-          <text x="268" y="210">insert 托盘</text>
-          <text x="268" y="316">base 底座</text>
+          <text x="268" y="110" data-i18n="hero.svgCover">cover 顶盖</text>
+          <text x="268" y="210" data-i18n="hero.svgInsert">insert 托盘</text>
+          <text x="268" y="316" data-i18n="hero.svgBase">base 底座</text>
         </g>
 
         <!-- ========== 右侧:钢网模式一体式钢网 ========== -->
         <g class="part part-tag">
           <rect x="300" y="18" width="110" height="20" rx="10" fill="#FDF1E4"/>
-          <text x="306" y="32" fill="#B87530" font-family="inherit" font-size="10" font-weight="700" letter-spacing="1">STENCIL · PCB 钢网</text>
+          <text x="306" y="32" fill="#B87530" font-family="inherit" font-size="10" font-weight="700" letter-spacing="1" data-i18n="hero.svgTagStencil">STENCIL · PCB 钢网</text>
         </g>
         <!-- 一体式钢网等距视图 -->
         <g class="part part-mid float-mid stencil-part" data-depth="-0.38" style="transform-origin:400px 232px">
@@ -643,7 +946,7 @@
         </g>
         <!-- 一体式钢网标注 -->
         <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
-          <text x="530" y="226">一体式 PCB 钢网</text>
+          <text x="530" y="226" data-i18n="hero.svgStencilLabel">一体式 PCB 钢网</text>
         </g>
         <g class="part part-line" stroke="#E07A3C" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".6">
           <path class="dash-line" d="M506 230 L530 226"/>
@@ -660,29 +963,130 @@
   </div>
 </header>
 
+<!-- ============ Showcase 真实界面 ============ -->
+<section id="showcase" class="showcase-sec">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="sec-tag">SCREENSHOTS</div>
+      <h2 data-i18n="showcase.h2">真实界面，开箱即用</h2>
+      <p data-i18n="showcase.sub">不是示意图 —— 这就是你每天工作的界面。拖入 Gerber，剩下的交给 Mason。</p>
+    </div>
+    <div class="showcase reveal" id="showcase">
+      <!-- 主舞台：浏览器窗口框架 -->
+      <div class="shot-stage">
+        <div class="shot-frame">
+          <div class="shot-chrome">
+            <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
+            <span class="shot-title" id="shot-title">夹具模式 · 三件套 3D 预览</span>
+          </div>
+          <div class="shot-viewport">
+            <img src="assets/shot-jig.png" alt="Mason 夹具模式界面" class="shot-img is-active" data-shot="0" />
+            <img src="assets/shot-stencil.png" alt="Mason 钢网模式界面" class="shot-img" data-shot="1" loading="lazy" />
+            <img src="assets/shot-import.png" alt="Gerber 导入识别" class="shot-img shot-img-contain" data-shot="2" loading="lazy" />
+            <img src="assets/shot-screws.png" alt="螺丝布局自动计算" class="shot-img shot-img-contain" data-shot="3" loading="lazy" />
+          </div>
+        </div>
+      </div>
+      <!-- 侧栏镜头列表 -->
+      <div class="shot-list" role="tablist">
+        <button class="shot-item is-active" data-shot="0" role="tab">
+          <span class="shot-item-num">01</span>
+          <span class="shot-item-text">
+            <b data-i18n="showcase.s1t">夹具模式 · 3D 预览</b>
+            <i data-i18n="showcase.s1d">托盘 / 底座 / 顶盖实时渲染</i>
+          </span>
+        </button>
+        <button class="shot-item" data-shot="1" role="tab">
+          <span class="shot-item-num">02</span>
+          <span class="shot-item-text">
+            <b data-i18n="showcase.s2t">钢网模式 · 焊盘开孔</b>
+            <i data-i18n="showcase.s2d">450+ 焊盘一体式钢网</i>
+          </span>
+        </button>
+        <button class="shot-item" data-shot="2" role="tab">
+          <span class="shot-item-num">03</span>
+          <span class="shot-item-text">
+            <b data-i18n="showcase.s3t">Gerber 导入识别</b>
+            <i data-i18n="showcase.s3d">板框 / 尺寸 / 顶点自动解析</i>
+          </span>
+        </button>
+        <button class="shot-item" data-shot="3" role="tab">
+          <span class="shot-item-num">04</span>
+          <span class="shot-item-text">
+            <b data-i18n="showcase.s4t">螺丝布局自动计算</b>
+            <i data-i18n="showcase.s4d">角部 M5 + 周圈 M3 联动</i>
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ============ Workflow ============ -->
 <section id="workflow">
   <div class="wrap">
     <div class="sec-head reveal">
       <div class="sec-tag">WORKFLOW</div>
-      <h2>拖入 → 预览 → 导出</h2>
-      <p>核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。</p>
+      <h2 data-i18n="workflow.h2">拖入 → 预览 → 导出</h2>
+      <p data-i18n="workflow.sub">核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。</p>
     </div>
-    <div class="steps">
-      <div class="step reveal">
-        <div class="step-num">1</div>
-        <h3>拖入 Gerber ZIP</h3>
-        <p>自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。</p>
+    <div class="workflow-grid">
+      <!-- 交互演示舞台 -->
+      <div class="wf-stage reveal" aria-hidden="true">
+        <svg class="wf-svg" viewBox="0 0 460 300">
+          <!-- 虚线投放区 -->
+          <rect class="wf-drop" x="150" y="60" width="160" height="120" rx="14" />
+          <text class="wf-drop-text" x="230" y="125" text-anchor="middle" data-i18n="workflow.drop">拖入此处</text>
+          <!-- Gerber ZIP 文件 -->
+          <g class="wf-file">
+            <rect x="0" y="0" width="64" height="80" rx="8" class="wf-file-body" />
+            <path d="M0 8 a8 8 0 0 1 8-8 h48 a8 8 0 0 1 8 8 v10 H0 Z" class="wf-file-tab" />
+            <text x="32" y="52" text-anchor="middle" class="wf-file-label">.ZIP</text>
+            <text x="32" y="66" text-anchor="middle" class="wf-file-sub">GERBER</text>
+          </g>
+          <!-- 板框描绘 -->
+          <path class="wf-board" d="M170 84 H264 L290 110 V156 H170 Z" />
+          <!-- 扫描线 -->
+          <line class="wf-scan" x1="160" y1="90" x2="300" y2="90" />
+          <!-- 三层爆炸 -->
+          <g class="wf-layers">
+            <polygon class="wf-layer wf-l1" points="170,130 230,100 290,130 230,160" />
+            <polygon class="wf-layer wf-l2" points="170,150 230,120 290,150 230,180" />
+            <polygon class="wf-layer wf-l3" points="170,170 230,140 290,170 230,200" />
+          </g>
+          <!-- STL 导出 chip -->
+          <g class="wf-chips">
+            <g class="wf-chip wf-c1"><rect x="316" y="86" width="58" height="24" rx="12"/><text x="345" y="102" text-anchor="middle">.STL</text></g>
+            <g class="wf-chip wf-c2"><rect x="326" y="122" width="58" height="24" rx="12"/><text x="355" y="138" text-anchor="middle">.STL</text></g>
+            <g class="wf-chip wf-c3"><rect x="316" y="158" width="58" height="24" rx="12"/><text x="345" y="174" text-anchor="middle">.STEP</text></g>
+          </g>
+          <!-- 进度环 -->
+          <circle class="wf-ring" cx="230" cy="120" r="44" />
+        </svg>
       </div>
-      <div class="step reveal">
-        <div class="step-num">2</div>
-        <h3>实时 3D 预览</h3>
-        <p>参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。</p>
-      </div>
-      <div class="step reveal">
-        <div class="step-num">3</div>
-        <h3>导出 STL / STEP</h3>
-        <p>一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。</p>
+      <!-- 步骤说明（保留原内容，改竖排） -->
+      <div class="steps steps-v">
+        <div class="step reveal">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h3 data-i18n="workflow.s1t">拖入 Gerber ZIP</h3>
+            <p data-i18n="workflow.s1d">自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。</p>
+          </div>
+        </div>
+        <div class="step reveal">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h3 data-i18n="workflow.s2t">实时 3D 预览</h3>
+            <p data-i18n="workflow.s2d">参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。</p>
+          </div>
+        </div>
+        <div class="step reveal">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h3 data-i18n="workflow.s3t">导出 STL / STEP</h3>
+            <p data-i18n="workflow.s3d">一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。</p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -706,28 +1110,28 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <div class="sec-tag">TWO MODES</div>
-      <h2>两种模式，覆盖原型到量产</h2>
-      <p>从快速原型验证到小批量生产，选择最适合你场景的工作方式。</p>
+      <h2 data-i18n="modes.h2">两种模式，覆盖原型到量产</h2>
+      <p data-i18n="modes.sub">从快速原型验证到小批量生产，选择最适合你场景的工作方式。</p>
     </div>
     <div class="modes">
       <div class="mode mode-jig reveal">
         <span class="mode-badge">JIG MODE</span>
-        <h3>钢网夹具模式</h3>
-        <p>生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。</p>
+        <h3 data-i18n="modes.jigT">钢网夹具模式</h3>
+        <p data-i18n="modes.jigD">生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。</p>
         <ul>
-          <li>三件套参数化生成，免螺丝一体定位柱</li>
-          <li>螺丝布局自动补位，M2 / M2.5 / M3 规格联动</li>
-          <li>夹具尺寸按钢网自动计算，同尺寸 PCB 复用</li>
+          <li data-i18n="modes.jigL1">三件套参数化生成，免螺丝一体定位柱</li>
+          <li data-i18n="modes.jigL2">螺丝布局自动补位，M2 / M2.5 / M3 规格联动</li>
+          <li data-i18n="modes.jigL3">夹具尺寸按钢网自动计算，同尺寸 PCB 复用</li>
         </ul>
       </div>
       <div class="mode mode-stencil reveal">
         <span class="mode-badge">STENCIL MODE</span>
-        <h3>PCB 钢网模式</h3>
-        <p>根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。</p>
+        <h3 data-i18n="modes.stencilT">PCB 钢网模式</h3>
+        <p data-i18n="modes.stencilD">根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。</p>
         <ul>
-          <li>焊盘开孔与板框坐标精确对齐</li>
-          <li>焊盘方形化、测试点过滤，匹配钢网厂工艺</li>
-          <li>密脚错排、大孔开网格等后处理选项</li>
+          <li data-i18n="modes.stencilL1">焊盘开孔与板框坐标精确对齐</li>
+          <li data-i18n="modes.stencilL2">焊盘方形化、测试点过滤，匹配钢网厂工艺</li>
+          <li data-i18n="modes.stencilL3">密脚错排、大孔开网格等后处理选项</li>
         </ul>
       </div>
     </div>
@@ -739,39 +1143,73 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <div class="sec-tag">FEATURES</div>
-      <h2>为锡膏印刷而生的细节</h2>
-      <p>自研 RS-274X 解析器 + build123d 参数化 CAD 内核，把每个环节做到开箱即用。</p>
+      <h2 data-i18n="features.h2">为锡膏印刷而生的细节</h2>
+      <p data-i18n="features.sub">自研 RS-274X 解析器 + build123d 参数化 CAD 内核，把每个环节做到开箱即用。</p>
     </div>
-    <div class="feats">
-      <div class="feat reveal">
+    <div class="feats feats-bento">
+      <!-- 大卡：Gerber 解析器（含解析动画） -->
+      <div class="feat feat-a reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h5"/></svg></div>
-        <h3>自研 Gerber 解析器</h3>
-        <p>支持 %LM 镜像 / %LR 旋转 / %LS 缩放图层变换，G02/G03 弧线，区域填充与宏光圈。</p>
+        <h3 data-i18n="features.f1t">自研 Gerber 解析器</h3>
+        <p data-i18n="features.f1d">支持 %LM 镜像 / %LR 旋转 / %LS 缩放图层变换，G02/G03 弧线，区域填充与宏光圈。</p>
+        <div class="feat-demo" aria-hidden="true">
+          <div class="parse-lines">
+            <span style="--i:0">%FSLAX46Y46*%</span>
+            <span style="--i:1">%MOIN*%</span>
+            <span style="--i:2">%ADD10C,0.0100*%</span>
+            <span style="--i:3">%LPD*%</span>
+            <span style="--i:4">G01 X1200 Y800 D02*</span>
+            <span style="--i:5">G03 X2400 Y1600 I600 J0 D01*</span>
+            <span style="--i:6">G36*</span>
+            <span style="--i:7">%LMN*%</span>
+          </div>
+          <svg class="parse-board" viewBox="0 0 120 70">
+            <path class="parse-outline" d="M10 12 H80 L110 35 V58 H10 Z" />
+            <circle cx="30" cy="35" r="5" class="parse-pad" />
+            <rect x="52" y="28" width="14" height="14" rx="2" class="parse-pad" />
+            <rect x="82" y="30" width="12" height="9" rx="1.5" class="parse-pad" />
+          </svg>
+        </div>
       </div>
-      <div class="feat reveal">
-        <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>
-        <h3>参数化 CAD 内核</h3>
-        <p>基于 build123d + Shapely，异形板框、沉孔、定位柱、梯形取放缺口全部参数可控。</p>
-      </div>
-      <div class="feat reveal">
+      <!-- 中卡：实时 3D 预览（旋转立方体） -->
+      <div class="feat feat-b reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></div>
-        <h3>实时 3D 预览</h3>
-        <p>three.js 按需渲染 + 参数哈希缓存，多部件后台预热，2400+ 焊盘约 3 秒完成。</p>
+        <h3 data-i18n="features.f3t">实时 3D 预览</h3>
+        <p data-i18n="features.f3d">three.js 按需渲染 + 参数哈希缓存，多部件后台预热，2400+ 焊盘约 3 秒完成。</p>
+        <div class="cube-wrap" aria-hidden="true">
+          <div class="cube">
+            <div class="cube-face cube-f"></div>
+            <div class="cube-face cube-b"></div>
+            <div class="cube-face cube-l"></div>
+            <div class="cube-face cube-r"></div>
+            <div class="cube-face cube-t"></div>
+            <div class="cube-face cube-d"></div>
+          </div>
+        </div>
       </div>
-      <div class="feat reveal">
+      <!-- 小卡：CAD 内核 -->
+      <div class="feat feat-c reveal">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>
+        <h3 data-i18n="features.f2t">参数化 CAD 内核</h3>
+        <p data-i18n="features.f2d">基于 build123d + Shapely，异形板框、沉孔、定位柱、梯形取放缺口全部参数可控。</p>
+      </div>
+      <!-- 小卡：内置引擎 -->
+      <div class="feat feat-d reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
-        <h3>内置引擎零配置</h3>
-        <p>发布包内嵌完整 Python 运行时，最终用户无需安装任何环境，双击即用。</p>
+        <h3 data-i18n="features.f4t">内置引擎零配置</h3>
+        <p data-i18n="features.f4d">发布包内嵌完整 Python 运行时，最终用户无需安装任何环境，双击即用。</p>
       </div>
-      <div class="feat reveal">
+      <!-- 宽卡：零云依赖 -->
+      <div class="feat feat-e reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
-        <h3>零云依赖</h3>
-        <p>Gerber 解析与 CAD 生成全部在本地完成，设计文件不出你的电脑，离线可用。</p>
+        <h3 data-i18n="features.f5t">零云依赖</h3>
+        <p data-i18n="features.f5d">Gerber 解析与 CAD 生成全部在本地完成，设计文件不出你的电脑，离线可用。</p>
       </div>
-      <div class="feat reveal">
+      <!-- 宽卡：双语开源 -->
+      <div class="feat feat-f reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
-        <h3>中英双语 · 开源</h3>
-        <p>MIT 协议完全开源，Tauri 2 + Vue 3 + Rust 技术栈，欢迎 Issue 与 PR。</p>
+        <h3 data-i18n="features.f6t">中英双语 · 开源</h3>
+        <p data-i18n="features.f6d">MIT 协议完全开源，Tauri 2 + Vue 3 + Rust 技术栈，欢迎 Issue 与 PR。</p>
       </div>
     </div>
   </div>
@@ -782,30 +1220,33 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <div class="sec-tag">DOWNLOAD</div>
-      <h2>下载 Mason</h2>
-      <p id="dl-ver-text">三个平台均提供预编译安装包，开箱即用。</p>
+      <h2 data-i18n="download.h2">下载 Mason</h2>
+      <p id="dl-ver-text" data-i18n="download.sub">三个平台均提供预编译安装包，开箱即用。</p>
     </div>
     <div class="dl-cards">
       <div class="dl-card reveal" data-os="windows">
+        <span class="os-reco" data-i18n="download.reco" hidden>推荐</span>
         <svg viewBox="0 0 24 24"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
         <div class="os-name">Windows</div>
-        <div class="os-file">.msi 安装包 · Win 10/11</div>
-        <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
+        <div class="os-file" data-i18n="download.winFile">.msi 安装包 · Win 10/11</div>
+        <a class="os-btn" data-os-link="windows" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener" data-i18n="download.btn">下载</a>
       </div>
       <div class="dl-card reveal" data-os="mac">
+        <span class="os-reco" data-i18n="download.reco" hidden>推荐</span>
         <svg viewBox="0 0 24 24"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.56-1.702"/></svg>
         <div class="os-name">macOS</div>
-        <div class="os-file">.dmg · Apple Silicon</div>
-        <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
+        <div class="os-file" data-i18n="download.macFile">.dmg · Apple Silicon</div>
+        <a class="os-btn" data-os-link="mac" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener" data-i18n="download.btn">下载</a>
       </div>
       <div class="dl-card reveal" data-os="linux">
+        <span class="os-reco" data-i18n="download.reco" hidden>推荐</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         <div class="os-name">Linux</div>
-        <div class="os-file">.deb / .rpm · Debian/RHEL 系</div>
-        <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
+        <div class="os-file" data-i18n="download.linuxFile">.deb / .rpm · Debian/RHEL 系</div>
+        <a class="os-btn" data-os-link="linux" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener" data-i18n="download.btn">下载</a>
       </div>
     </div>
-    <p class="dl-note">全部版本与更新日志请访问 <a href="https://github.com/NingZiXi/mason/releases" target="_blank" rel="noopener">GitHub Releases</a> · 遇到问题？<a href="https://github.com/NingZiXi/mason/issues" target="_blank" rel="noopener">提交 Issue</a></p>
+    <p class="dl-note" data-i18n="download.note">全部版本与更新日志请访问 <a href="https://github.com/NingZiXi/mason/releases" target="_blank" rel="noopener">GitHub Releases</a> · 遇到问题？<a href="https://github.com/NingZiXi/mason/issues" target="_blank" rel="noopener">提交 Issue</a></p>
   </div>
 </section>
 
@@ -814,31 +1255,31 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <div class="sec-tag">FAQ</div>
-      <h2>常见问题</h2>
+      <h2 data-i18n="faq.h2">常见问题</h2>
     </div>
     <div class="faq">
       <details class="reveal">
-        <summary>需要什么运行环境？</summary>
+        <summary data-i18n="faq.q1">需要什么运行环境？</summary>
       <div class="faq-content">
-        <p>发布版自带内置 Python 引擎，无需安装任何环境，下载安装即可使用。仅开发者从源码运行时才需要 Node.js 20+ / Rust 1.77+ / Python 3.11+。</p>      </div>
+        <p data-i18n="faq.a1">发布版自带内置 Python 引擎，无需安装任何环境，下载安装即可使用。仅开发者从源码运行时才需要 Node.js 20+ / Rust 1.77+ / Python 3.11+。</p>      </div>
     
       </details>
       <details class="reveal">
-        <summary>支持哪些 Gerber 文件？</summary>
+        <summary data-i18n="faq.q2">支持哪些 Gerber 文件？</summary>
       <div class="faq-content">
-        <p>支持嘉立创 / JLCPCB 导出的 Gerber ZIP。板框识别依赖 <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code> 文件；钢网模式还需要 <code>.GTP</code> / <code>.GBP</code> 锡膏层。文件命名特殊时可在导入界面手动选择。</p>      </div>
+        <p data-i18n="faq.a2">支持嘉立创 / JLCPCB 导出的 Gerber ZIP。板框识别依赖 <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code> 文件；钢网模式还需要 <code>.GTP</code> / <code>.GBP</code> 锡膏层。文件命名特殊时可在导入界面手动选择。</p>      </div>
     
       </details>
       <details class="reveal">
-        <summary>钢网焊盘和 PCB 焊盘对不上怎么办？</summary>
+        <summary data-i18n="faq.q3">钢网焊盘和 PCB 焊盘对不上怎么办？</summary>
       <div class="faq-content">
-        <p>Mason 默认对长圆形焊盘做方形化处理（匹配钢网厂工艺），并按 PCB 板框居中对齐。若仍有偏差，请检查 Gerber 坐标系是否与板框层一致。</p>      </div>
+        <p data-i18n="faq.a3">Mason 默认对长圆形焊盘做方形化处理（匹配钢网厂工艺），并按 PCB 板框居中对齐。若仍有偏差，请检查 Gerber 坐标系是否与板框层一致。</p>      </div>
     
       </details>
       <details class="reveal">
-        <summary>导出的文件在哪里？</summary>
+        <summary data-i18n="faq.q4">导出的文件在哪里？</summary>
       <div class="faq-content">
-        <p>导出时会在所选目录创建 <code>mason_export_&lt;时间戳&gt;/</code> 子文件夹，所有 STL / STEP 文件放入其中，避免与现有文件混淆。</p>      </div>
+        <p data-i18n="faq.a4">导出时会在所选目录创建 <code>mason_export_&lt;时间戳&gt;/</code> 子文件夹，所有 STL / STEP 文件放入其中，避免与现有文件混淆。</p>      </div>
     
       </details>
     </div>
@@ -858,11 +1299,11 @@
     </div>
     <div class="foot-links">
       <a href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/NingZiXi/mason/releases" target="_blank" rel="noopener">更新日志</a>
-      <a href="https://github.com/NingZiXi/mason/issues" target="_blank" rel="noopener">反馈问题</a>
-      <a href="https://github.com/NingZiXi" target="_blank" rel="noopener">作者主页</a>
+      <a href="https://github.com/NingZiXi/mason/releases" target="_blank" rel="noopener" data-i18n="footer.changelog">更新日志</a>
+      <a href="https://github.com/NingZiXi/mason/issues" target="_blank" rel="noopener" data-i18n="footer.issues">反馈问题</a>
+      <a href="https://github.com/NingZiXi" target="_blank" rel="noopener" data-i18n="footer.author">作者主页</a>
     </div>
-    <p class="foot-copy">© <span id="year">2026</span> Mason · MIT License · 从 Gerber 到 3D 打印钢网</p>
+    <p class="foot-copy">© <span id="year">2026</span> Mason · MIT License · <span data-i18n="footer.tagline">从 Gerber 到 3D 打印钢网</span></p>
   </div>
 </footer>
 
@@ -870,6 +1311,258 @@
 (function () {
   var RELEASES = "https://github.com/NingZiXi/mason/releases/latest";
   var API = "https://api.github.com/repos/NingZiXi/mason/releases/latest";
+  var REPO_API = "https://api.github.com/repos/NingZiXi/mason";
+
+  /* ==========================================================
+     中英文切换（i18n）
+  ========================================================== */
+  var I18N = {
+    zh: {
+      "meta.title": "Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网",
+      "meta.desc": "Mason 是一款开源桌面工具：拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。Windows / macOS / Linux 全平台，内置引擎零配置。",
+      "nav.showcase": "界面",
+      "nav.workflow": "工作流程",
+      "nav.modes": "两种模式",
+      "nav.features": "特性",
+      "nav.download": "下载",
+      "hero.eyebrow": "开源 · 免费 · 跨平台",
+      "hero.h1a": "Gerber 到 3D 打印 —",
+      "hero.h1b": "两种模式全搞定",
+      "hero.sub": "从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具三件套</b>（底座 / 托盘 / 顶盖），也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。",
+      "hero.source": "查看源码",
+      "hero.cta": "免费下载 · ",
+      "hero.verPrefix": "最新版本：",
+      "hero.verLink": "前往 Releases 查看",
+      "hero.verCurrent": "当前版本 ",
+      "hero.verSuffix": " · 三个平台均提供预编译安装包，开箱即用。",
+      "hero.svgTagJig": "JIG · 钢网夹具",
+      "hero.svgTagStencil": "STENCIL · PCB 钢网",
+      "hero.svgCover": "cover 顶盖",
+      "hero.svgInsert": "insert 托盘",
+      "hero.svgBase": "base 底座",
+      "hero.svgStencilLabel": "一体式 PCB 钢网",
+      "showcase.h2": "真实界面，开箱即用",
+      "showcase.sub": "不是示意图 —— 这就是你每天工作的界面。拖入 Gerber，剩下的交给 Mason。",
+      "showcase.s1t": "夹具模式 · 3D 预览",
+      "showcase.s1d": "托盘 / 底座 / 顶盖实时渲染",
+      "showcase.s2t": "钢网模式 · 焊盘开孔",
+      "showcase.s2d": "450+ 焊盘一体式钢网",
+      "showcase.s3t": "Gerber 导入识别",
+      "showcase.s3d": "板框 / 尺寸 / 顶点自动解析",
+      "showcase.s4t": "螺丝布局自动计算",
+      "showcase.s4d": "角部 M5 + 周圈 M3 联动",
+      "showcase.cap1": "夹具模式 · 三件套 3D 预览",
+      "showcase.cap2": "钢网模式 · 450+ 焊盘开孔",
+      "showcase.cap3": "Gerber 导入 · 板框自动识别",
+      "showcase.cap4": "螺丝布局 · 自动计算联动",
+      "workflow.h2": "拖入 → 预览 → 导出",
+      "workflow.sub": "核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。",
+      "workflow.drop": "拖入此处",
+      "workflow.s1t": "拖入 Gerber ZIP",
+      "workflow.s1d": "自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。",
+      "workflow.s2t": "实时 3D 预览",
+      "workflow.s2d": "参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。",
+      "workflow.s3t": "导出 STL / STEP",
+      "workflow.s3d": "一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。",
+      "modes.h2": "两种模式，覆盖原型到量产",
+      "modes.sub": "从快速原型验证到小批量生产，选择最适合你场景的工作方式。",
+      "modes.jigT": "钢网夹具模式",
+      "modes.jigD": "生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。",
+      "modes.jigL1": "三件套参数化生成，免螺丝一体定位柱",
+      "modes.jigL2": "螺丝布局自动补位，M2 / M2.5 / M3 规格联动",
+      "modes.jigL3": "夹具尺寸按钢网自动计算，同尺寸 PCB 复用",
+      "modes.stencilT": "PCB 钢网模式",
+      "modes.stencilD": "根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。",
+      "modes.stencilL1": "焊盘开孔与板框坐标精确对齐",
+      "modes.stencilL2": "焊盘方形化、测试点过滤，匹配钢网厂工艺",
+      "modes.stencilL3": "密脚错排、大孔开网格等后处理选项",
+      "features.h2": "为锡膏印刷而生的细节",
+      "features.sub": "自研 RS-274X 解析器 + build123d 参数化 CAD 内核，把每个环节做到开箱即用。",
+      "features.f1t": "自研 Gerber 解析器",
+      "features.f1d": "支持 %LM 镜像 / %LR 旋转 / %LS 缩放图层变换，G02/G03 弧线，区域填充与宏光圈。",
+      "features.f2t": "参数化 CAD 内核",
+      "features.f2d": "基于 build123d + Shapely，异形板框、沉孔、定位柱、梯形取放缺口全部参数可控。",
+      "features.f3t": "实时 3D 预览",
+      "features.f3d": "three.js 按需渲染 + 参数哈希缓存，多部件后台预热，2400+ 焊盘约 3 秒完成。",
+      "features.f4t": "内置引擎零配置",
+      "features.f4d": "发布包内嵌完整 Python 运行时，最终用户无需安装任何环境，双击即用。",
+      "features.f5t": "零云依赖",
+      "features.f5d": "Gerber 解析与 CAD 生成全部在本地完成，设计文件不出你的电脑，离线可用。",
+      "features.f6t": "中英双语 · 开源",
+      "features.f6d": "MIT 协议完全开源，Tauri 2 + Vue 3 + Rust 技术栈，欢迎 Issue 与 PR。",
+      "download.h2": "下载 Mason",
+      "download.sub": "三个平台均提供预编译安装包，开箱即用。",
+      "download.reco": "推荐",
+      "download.winFile": ".msi 安装包 · Win 10/11",
+      "download.macFile": ".dmg · Apple Silicon",
+      "download.linuxFile": ".deb / .rpm · Debian/RHEL 系",
+      "download.btn": "下载",
+      "download.note": "全部版本与更新日志请访问 <a href=\"https://github.com/NingZiXi/mason/releases\" target=\"_blank\" rel=\"noopener\">GitHub Releases</a> · 遇到问题？<a href=\"https://github.com/NingZiXi/mason/issues\" target=\"_blank\" rel=\"noopener\">提交 Issue</a>",
+      "faq.h2": "常见问题",
+      "faq.q1": "需要什么运行环境？",
+      "faq.a1": "发布版自带内置 Python 引擎，无需安装任何环境，下载安装即可使用。仅开发者从源码运行时才需要 Node.js 20+ / Rust 1.77+ / Python 3.11+。",
+      "faq.q2": "支持哪些 Gerber 文件？",
+      "faq.a2": "支持嘉立创 / JLCPCB 导出的 Gerber ZIP。板框识别依赖 <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code> 文件；钢网模式还需要 <code>.GTP</code> / <code>.GBP</code> 锡膏层。文件命名特殊时可在导入界面手动选择。",
+      "faq.q3": "钢网焊盘和 PCB 焊盘对不上怎么办？",
+      "faq.a3": "Mason 默认对长圆形焊盘做方形化处理（匹配钢网厂工艺），并按 PCB 板框居中对齐。若仍有偏差，请检查 Gerber 坐标系是否与板框层一致。",
+      "faq.q4": "导出的文件在哪里？",
+      "faq.a4": "导出时会在所选目录创建 <code>mason_export_&lt;时间戳&gt;/</code> 子文件夹，所有 STL / STEP 文件放入其中，避免与现有文件混淆。",
+      "footer.changelog": "更新日志",
+      "footer.issues": "反馈问题",
+      "footer.author": "作者主页",
+      "footer.tagline": "从 Gerber 到 3D 打印钢网"
+    },
+    en: {
+      "meta.title": "Mason — Gerber to 3D-Printed Stencils",
+      "meta.desc": "Mason is an open-source desktop tool: drop in a JLCPCB Gerber ZIP and generate 3D-printable PCB solder-paste stencils and jigs in one click. Windows / macOS / Linux, zero setup.",
+      "nav.showcase": "Screens",
+      "nav.workflow": "Workflow",
+      "nav.modes": "Two Modes",
+      "nav.features": "Features",
+      "nav.download": "Download",
+      "hero.eyebrow": "Open Source · Free · Cross-platform",
+      "hero.h1a": "Gerber to 3D Print —",
+      "hero.h1b": "Two Modes, One Tool",
+      "hero.sub": "Start from a JLCPCB Gerber ZIP and generate either a <b>3-piece stencil jig</b> (base / insert / cover) or a <b>one-piece PCB stencil</b>. Custom parser · Parametric CAD · Real-time preview · Zero cloud.",
+      "hero.source": "View Source",
+      "hero.cta": "Free Download · ",
+      "hero.verPrefix": "Latest: ",
+      "hero.verLink": "See Releases",
+      "hero.verCurrent": "Version ",
+      "hero.verSuffix": " · Prebuilt installers for all three platforms, ready out of the box.",
+      "hero.svgTagJig": "JIG · Stencil Jig",
+      "hero.svgTagStencil": "STENCIL · PCB Stencil",
+      "hero.svgCover": "cover",
+      "hero.svgInsert": "insert",
+      "hero.svgBase": "base",
+      "hero.svgStencilLabel": "One-piece PCB stencil",
+      "showcase.h2": "The Real Interface, Ready to Use",
+      "showcase.sub": "Not mockups — this is the interface you work in every day. Drop in a Gerber, Mason does the rest.",
+      "showcase.s1t": "Jig Mode · 3D Preview",
+      "showcase.s1d": "Insert / base / cover live render",
+      "showcase.s2t": "Stencil Mode · Pad Apertures",
+      "showcase.s2d": "450+ pads on a one-piece stencil",
+      "showcase.s3t": "Gerber Import",
+      "showcase.s3d": "Outline / size / vertices auto-parsed",
+      "showcase.s4t": "Auto Screw Layout",
+      "showcase.s4d": "Corner M5 + perimeter M3",
+      "showcase.cap1": "Jig Mode · 3-piece 3D Preview",
+      "showcase.cap2": "Stencil Mode · 450+ Apertures",
+      "showcase.cap3": "Gerber Import · Auto Outline",
+      "showcase.cap4": "Screw Layout · Auto Layout",
+      "workflow.h2": "Drop → Preview → Export",
+      "workflow.sub": "The core design goal is a minimal workflow: drop in a Gerber, export an STL. Sensible defaults produce usable results.",
+      "workflow.drop": "DROP HERE",
+      "workflow.s1t": "Drop in a Gerber ZIP",
+      "workflow.s1d": "Board outline and paste layers are auto-detected; irregular outlines are fully preserved. Pads cover circle / rect / obround / polygon apertures.",
+      "workflow.s2t": "Real-time 3D Preview",
+      "workflow.s2d": "The parametric CAD engine regenerates in seconds — a 2000+ pad stencil renders in about 3 seconds, with instant part switching.",
+      "workflow.s3t": "Export STL / STEP",
+      "workflow.s3d": "One click to export, ready for slicing or a stencil fab. A timestamped folder is created automatically; project configs can be saved and reused.",
+      "modes.h2": "Two Modes, Prototype to Production",
+      "modes.sub": "From rapid prototyping to small-batch production — pick the workflow that fits your scenario.",
+      "modes.jigT": "Stencil Jig Mode",
+      "modes.jigD": "Generates a base / insert / cover set that clamps a pre-made metal stencil for printing. Ideal for irregular PCBs and even-pressure scenarios.",
+      "modes.jigL1": "Parametric 3-piece set with screwless alignment posts",
+      "modes.jigL2": "Auto screw layout with M2 / M2.5 / M3 size linking",
+      "modes.jigL3": "Jig size auto-computed from stencil; reusable for same-size PCBs",
+      "modes.stencilT": "PCB Stencil Mode",
+      "modes.stencilD": "Generates a one-piece stencil with a built-in PCB pocket directly from the paste layer — no jig needed, perfect for quick prototypes.",
+      "modes.stencilL1": "Apertures precisely aligned to board coordinates",
+      "modes.stencilL2": "Pad squaring & test-point filtering, matching fab processes",
+      "modes.stencilL3": "Post-processing: stagger offset, grid bars for large pads",
+      "features.h2": "Details Built for Solder Paste",
+      "features.sub": "A custom RS-274X parser plus a build123d parametric CAD core makes every step work out of the box.",
+      "features.f1t": "Custom Gerber Parser",
+      "features.f1d": "Supports %LM mirror / %LR rotation / %LS scale transforms, G02/G03 arcs, region fills and aperture macros.",
+      "features.f2t": "Parametric CAD Core",
+      "features.f2d": "Built on build123d + Shapely: irregular outlines, countersinks, alignment posts and trapezoid pry notches are all parametric.",
+      "features.f3t": "Real-time 3D Preview",
+      "features.f3d": "three.js on-demand rendering with param-hash caching and background pre-warming — 2400+ pads in ~3 seconds.",
+      "features.f4t": "Bundled Engine, Zero Setup",
+      "features.f4d": "The release bundles a complete Python runtime — end users install nothing, just double-click and go.",
+      "features.f5t": "Zero Cloud Dependency",
+      "features.f5d": "Gerber parsing and CAD generation run entirely locally. Your design files never leave your machine; works offline.",
+      "features.f6t": "Bilingual · Open Source",
+      "features.f6d": "Fully open source under MIT. Built with Tauri 2 + Vue 3 + Rust. Issues and PRs welcome.",
+      "download.h2": "Download Mason",
+      "download.sub": "Prebuilt installers for all three platforms, ready out of the box.",
+      "download.reco": "For You",
+      "download.winFile": ".msi installer · Win 10/11",
+      "download.macFile": ".dmg · Apple Silicon",
+      "download.linuxFile": ".deb / .rpm · Debian/RHEL",
+      "download.btn": "Download",
+      "download.note": "All versions and changelogs on <a href=\"https://github.com/NingZiXi/mason/releases\" target=\"_blank\" rel=\"noopener\">GitHub Releases</a> · Found a problem? <a href=\"https://github.com/NingZiXi/mason/issues\" target=\"_blank\" rel=\"noopener\">Open an issue</a>",
+      "faq.h2": "FAQ",
+      "faq.q1": "What runtime do I need?",
+      "faq.a1": "The release ships with a bundled Python engine — nothing to install, just download and run. Only developers building from source need Node.js 20+ / Rust 1.77+ / Python 3.11+.",
+      "faq.q2": "Which Gerber files are supported?",
+      "faq.a2": "Gerber ZIPs exported from JLCPCB / 嘉立创. Outline detection relies on <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code>; stencil mode also needs the <code>.GTP</code> / <code>.GBP</code> paste layers. Unusual file names can be picked manually in the import panel.",
+      "faq.q3": "Stencil pads don't line up with PCB pads?",
+      "faq.a3": "Mason squares obround pads by default (matching stencil-fab processes) and centers everything on the board outline. If offsets remain, check that your Gerber coordinate system matches the outline layer.",
+      "faq.q4": "Where are the exported files?",
+      "faq.a4": "Exports create a <code>mason_export_&lt;timestamp&gt;/</code> subfolder in the directory you choose, keeping all STL / STEP files together without mixing into existing files.",
+      "footer.changelog": "Changelog",
+      "footer.issues": "Report Issue",
+      "footer.author": "Author",
+      "footer.tagline": "From Gerber to 3D-Printed Stencils"
+    }
+  };
+
+  var lang = (function () {
+    try {
+      var saved = localStorage.getItem("mason_lang");
+      if (saved === "zh" || saved === "en") return saved;
+    } catch (e) {}
+    return /^zh/i.test(navigator.language || "") ? "zh" : "en";
+  })();
+
+  function t(key) {
+    var dict = I18N[lang] || I18N.zh;
+    return dict[key] != null ? dict[key] : (I18N.zh[key] || key);
+  }
+
+  var latestRelease = null; // release API 数据缓存（语言切换时重渲染）
+
+  function renderHeroLabel() {
+    var el = document.getElementById("hero-primary-label");
+    if (el) el.textContent = t("hero.cta") + osName[os];
+  }
+
+  function renderReleaseInfo() {
+    if (!latestRelease) return;
+    var ver = latestRelease.tag_name || "";
+    if (!ver) return;
+    document.getElementById("hero-ver").innerHTML =
+      t("hero.verPrefix") + '<a href="' + RELEASES + '" target="_blank" rel="noopener">' + ver + "</a>";
+    document.getElementById("dl-ver-text").textContent =
+      t("hero.verCurrent") + ver + t("hero.verSuffix");
+  }
+
+  var SHOT_CAPTIONS = ["showcase.cap1", "showcase.cap2", "showcase.cap3", "showcase.cap4"];
+  function renderShotTitle(idx) {
+    var el = document.getElementById("shot-title");
+    if (el) el.textContent = t(SHOT_CAPTIONS[idx] || SHOT_CAPTIONS[0]);
+  }
+
+  function applyLang(l) {
+    lang = l;
+    try { localStorage.setItem("mason_lang", l); } catch (e) {}
+    document.documentElement.setAttribute("lang", l === "zh" ? "zh-CN" : "en");
+    document.title = t("meta.title");
+    var metaDesc = document.querySelector('meta[name="description"]');
+    if (metaDesc) metaDesc.setAttribute("content", t("meta.desc"));
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      var key = el.getAttribute("data-i18n");
+      if (I18N[l][key] != null) el.innerHTML = I18N[l][key];
+    });
+    document.querySelectorAll(".lang-toggle .lang-opt").forEach(function (el) {
+      el.classList.toggle("is-on", el.getAttribute("data-lang") === l);
+    });
+    renderHeroLabel();
+    renderReleaseInfo();
+    renderShotTitle(currentShot);
+  }
 
   /* 当前年份 */
   document.getElementById("year").textContent = new Date().getFullYear();
@@ -890,8 +1583,14 @@
     if (c.dataset.os === os) c.classList.add("active");
   });
   var osName = { windows: "Windows", mac: "macOS", linux: "Linux" };
-  document.getElementById("hero-primary-label").textContent =
-    "免费下载 · " + osName[os];
+
+  /* 下载卡片推荐高亮 */
+  var recoCard = document.querySelector('.dl-card[data-os="' + os + '"]');
+  if (recoCard) {
+    recoCard.classList.add("is-reco");
+    var badge = recoCard.querySelector(".os-reco");
+    if (badge) badge.hidden = false;
+  }
 
   /* ---------- 滚动入场动画 ---------- */
   var reveals = document.querySelectorAll(".reveal");
@@ -951,13 +1650,24 @@
         document.getElementById("hero-primary").href = map[os].browser_download_url;
       }
       if (ver) {
-        document.getElementById("hero-ver").innerHTML =
-          '最新版本：<a href="' + RELEASES + '" target="_blank" rel="noopener">' + ver + "</a></p>";
-        document.getElementById("dl-ver-text").textContent =
-          "当前版本 " + ver + " · 三个平台均提供预编译安装包，开箱即用。";
+        latestRelease = data;
+        renderReleaseInfo();
       }
     })
     .catch(function () { /* 离线或限流时保持 Releases 页链接 */ });
+
+  /* ---------- GitHub Star 徽章 ---------- */
+  fetch(REPO_API)
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (!data || typeof data.stargazers_count !== "number") return;
+      var n = data.stargazers_count;
+      var text = n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(n);
+      var pill = document.getElementById("star-pill");
+      document.getElementById("star-count").textContent = text;
+      if (pill) pill.hidden = false;
+    })
+    .catch(function () { /* 失败保持隐藏 */ });
 
   /* ---------- Hero SVG 鼠标视差 ---------- */
   var heroVisual = document.querySelector(".hero-visual");
@@ -1298,6 +2008,57 @@
       el.textContent += text.charAt(i++);
     }, speed || 50);
   }
+
+  /* ==========================================================
+     Showcase 截图轮播
+  ========================================================== */
+  var currentShot = 0;
+  var shotImgs = document.querySelectorAll(".shot-img");
+  var shotItems = document.querySelectorAll(".shot-item");
+  var shotTimer = null;
+
+  function goShot(idx) {
+    currentShot = idx;
+    shotImgs.forEach(function (img) {
+      img.classList.toggle("is-active", Number(img.getAttribute("data-shot")) === idx);
+    });
+    shotItems.forEach(function (item) {
+      item.classList.toggle("is-active", Number(item.getAttribute("data-shot")) === idx);
+    });
+    renderShotTitle(idx);
+  }
+  function nextShot() { goShot((currentShot + 1) % shotImgs.length); }
+  function startShotTimer() {
+    if (prefersReduceMotion || !shotImgs.length) return;
+    stopShotTimer();
+    shotTimer = setInterval(nextShot, 4500);
+  }
+  function stopShotTimer() {
+    if (shotTimer) { clearInterval(shotTimer); shotTimer = null; }
+  }
+  shotItems.forEach(function (item) {
+    item.addEventListener("click", function () {
+      goShot(Number(item.getAttribute("data-shot")));
+      startShotTimer(); // 重置自动播放节拍
+    });
+  });
+  var showcaseEl = document.getElementById("showcase");
+  if (showcaseEl) {
+    showcaseEl.addEventListener("mouseenter", stopShotTimer);
+    showcaseEl.addEventListener("mouseleave", startShotTimer);
+  }
+  startShotTimer();
+
+  /* ==========================================================
+     语言切换绑定 + 初始化
+  ========================================================== */
+  var langToggle = document.getElementById("lang-toggle");
+  if (langToggle) {
+    langToggle.addEventListener("click", function () {
+      applyLang(lang === "zh" ? "en" : "zh");
+    });
+  }
+  applyLang(lang);
 })();
 </script>
 </body>
