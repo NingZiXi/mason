@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
@@ -13,6 +13,7 @@
     --green-active:#32684F;
     --green-accent:#5A9B7F;
     --green-light:#E8F1EC;
+    --green-soft:#F1F7F4;
     --orange:#E07A3C;
     --ink:#22302B;
     --ink-2:#5A6B63;
@@ -31,49 +32,182 @@
     background:var(--paper);
     line-height:1.7;
     -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
   }
   a{color:inherit;text-decoration:none}
   .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
 
+  /* ---------- Keyframes ---------- */
+  @keyframes float-slow{
+    0%,100%{transform:translateY(var(--parallax-y,0px))}
+    50%{transform:translateY(calc(var(--parallax-y,0px) - 4px))}
+  }
+  @keyframes float-mid{
+    0%,100%{transform:translateY(var(--parallax-y,0px))}
+    50%{transform:translateY(calc(var(--parallax-y,0px) - 6px))}
+  }
+  @keyframes float-fast{
+    0%,100%{transform:translateY(var(--parallax-y,0px))}
+    50%{transform:translateY(calc(var(--parallax-y,0px) - 3px))}
+  }
+  @keyframes enter-y{
+    from{opacity:0;transform:translateY(calc(36px + var(--parallax-y,0px)))}
+    to{opacity:1;transform:translateY(var(--parallax-y,0px))}
+  }
+  @keyframes dash-draw{
+    from{stroke-dashoffset:400}
+    to{stroke-dashoffset:0}
+  }
+  @keyframes pulse-glow{
+    0%,100%{box-shadow:0 4px 14px rgba(62,125,98,.25),0 0 0 0 rgba(62,125,98,.35)}
+    50%{box-shadow:0 4px 14px rgba(62,125,98,.25),0 0 0 8px rgba(62,125,98,0)}
+  }
+  @keyframes drift-1{
+    0%,100%{transform:translate(0,0) scale(1)}
+    50%{transform:translate(40px,-28px) scale(1.08)}
+  }
+  @keyframes drift-2{
+    0%,100%{transform:translate(0,0) scale(1)}
+    50%{transform:translate(-30px,22px) scale(0.92)}
+  }
+  @keyframes bg-fade{
+    from{opacity:0}
+    to{opacity:1}
+  }
+  @keyframes shimmer{
+    0%{background-position:-200% 0}
+    100%{background-position:200% 0}
+  }
+  @keyframes hl-flow{
+    0%{background-position:-120% 0}
+    100%{background-position:220% 0}
+  }
+  @keyframes node-blink{
+    0%,70%,100%{opacity:.25;transform:scale(1)}
+    80%{opacity:1;transform:scale(1.4)}
+  }
+  @keyframes trace-flow{
+    0%{stroke-dashoffset:200}
+    100%{stroke-dashoffset:-200}
+  }
+  @keyframes part-glow{
+    0%,100%{filter:drop-shadow(0 6px 12px rgba(62,125,98,.18))}
+    50%{filter:drop-shadow(0 10px 22px rgba(62,125,98,.32))}
+  }
+  @keyframes step-connector{
+    0%{background-position:-200% 0}
+    100%{background-position:200% 0}
+  }
+
   /* ---------- Nav ---------- */
   nav{
     position:sticky;top:0;z-index:50;
-    background:rgba(253,254,253,.88);
-    backdrop-filter:blur(10px);
+    background:rgba(253,254,253,.72);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
     border-bottom:1px solid var(--line);
+    transition:box-shadow .3s ease,background .3s ease;
+  }
+  nav.is-scrolled{
+    background:rgba(253,254,253,.94);
+    box-shadow:0 6px 24px rgba(34,48,43,.08);
   }
   .nav-inner{display:flex;align-items:center;gap:12px;height:64px}
   .nav-logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;letter-spacing:.5px}
   .nav-logo svg{width:30px;height:30px;display:block}
   .nav-logo .cn{font-size:12px;font-weight:500;color:var(--ink-2);letter-spacing:3px;margin-left:2px}
   .nav-links{margin-left:auto;display:flex;align-items:center;gap:26px;font-size:14.5px;color:var(--ink-2)}
+  .nav-links a{position:relative}
+  .nav-links a::after{
+    content:"";position:absolute;left:0;bottom:-4px;height:2px;width:0;
+    background:var(--green);transition:width .25s ease;
+  }
   .nav-links a:hover{color:var(--green)}
+  .nav-links a:hover::after{width:100%}
   .btn{
     display:inline-flex;align-items:center;gap:8px;
     border-radius:10px;font-weight:600;cursor:pointer;
-    transition:background .15s ease,transform .15s ease,box-shadow .15s ease;
+    transition:background .15s ease,transform .15s ease,box-shadow .2s ease,color .15s;
     border:1px solid transparent;
   }
   .btn-github{
     padding:8px 16px;font-size:14px;color:var(--ink);
     border-color:var(--line);background:#fff;
   }
-  .btn-github:hover{border-color:var(--green-accent);color:var(--green)}
+  .btn-github:hover{border-color:var(--green-accent);color:var(--green);transform:translateY(-1px)}
   .btn-primary{
     padding:14px 28px;font-size:16px;color:#fff;background:var(--green);
     box-shadow:0 4px 14px rgba(62,125,98,.25);
   }
-  .btn-primary:hover{background:var(--green-hover);transform:translateY(-1px)}
-  .btn-primary:active{background:var(--green-active)}
+  .btn-primary:hover{
+    background:var(--green-hover);
+    transform:translateY(-2px);
+    animation:pulse-glow 2.2s ease-out infinite;
+  }
+  .btn-primary:active{background:var(--green-active);transform:translateY(0)}
   .btn-ghost{
     padding:13px 22px;font-size:15px;color:var(--green);
     border-color:var(--green-accent);background:#fff;
   }
-  .btn-ghost:hover{background:var(--green-light)}
+  .btn-ghost:hover{background:var(--green-light);transform:translateY(-1px)}
 
   /* ---------- Hero ---------- */
   .hero{position:relative;overflow:hidden;border-bottom:1px solid var(--line)}
-  .hero-bg{position:absolute;inset:0;pointer-events:none;opacity:.5}
+  /* 背景漂浮光斑 */
+  .hero-bg{position:absolute;inset:0;pointer-events:none;overflow:hidden}
+  /* Canvas 粒子 */
+  .hero-canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.55}
+  .hero-bg::before,
+  .hero-bg::after{
+    content:"";position:absolute;border-radius:50%;
+    filter:blur(60px);opacity:.55;
+  }
+  .hero-bg::before{
+    width:380px;height:380px;background:radial-gradient(circle,#3E7D62 0%,transparent 70%);
+    top:-120px;right:10%;animation:drift-1 12s ease-in-out infinite;
+  }
+  .hero-bg::after{
+    width:320px;height:320px;background:radial-gradient(circle,#5A9B7F 0%,transparent 70%);
+    bottom:-100px;left:-60px;animation:drift-2 10s ease-in-out infinite;
+  }
+  .hero-grid-overlay{
+    position:absolute;inset:0;pointer-events:none;opacity:.25;
+    background-image:
+      linear-gradient(#3E7D62 1px,transparent 1px),
+      linear-gradient(90deg,#3E7D62 1px,transparent 1px);
+    background-size:40px 40px;
+    mask-image:radial-gradient(ellipse at 70% 50%,black 20%,transparent 70%);
+    -webkit-mask-image:radial-gradient(ellipse at 70% 50%,black 20%,transparent 70%);
+    will-change:transform;
+  }
+  /* Hero 鼠标视差 */
+  .hero{perspective:1200px}
+  .hero-visual{transform-style:preserve-3d;will-change:transform}
+  .hero-visual [data-depth]{will-change:transform}
+
+  /* feat 卡片 3D tilt */
+  .feat{transform-style:preserve-3d;will-change:transform}
+  .feat .feat-icon,.feat h3,.feat p{transform:translateZ(0);transform-style:preserve-3d}
+
+  /* PCB 走线装饰 */
+  .pcb-trace{
+    position:absolute;pointer-events:none;
+    stroke:#3E7D62;stroke-width:1.5;fill:none;opacity:.22;
+    top:180px;left:0;right:0;bottom:0;
+    -webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 20px,black 60px);
+    mask-image:linear-gradient(to bottom,transparent 0,transparent 20px,black 60px);
+  }
+  .pcb-trace .trace-path{
+    stroke-dasharray:6 8;
+    animation:trace-flow 3.2s linear infinite;
+  }
+  .pcb-node{
+    fill:#3E7D62;opacity:.3;transform-origin:center;transform-box:fill-box;
+  }
+  .pcb-node.node-1{animation:node-blink 3.8s ease-in-out infinite}
+  .pcb-node.node-2{animation:node-blink 3.8s ease-in-out infinite 1.1s}
+  .pcb-node.node-3{animation:node-blink 3.8s ease-in-out infinite 2.2s}
+  .pcb-node.node-4{animation:node-blink 3.8s ease-in-out infinite 0.5s}
   .hero-inner{
     position:relative;display:flex;align-items:center;gap:56px;
     padding:84px 0 92px;
@@ -84,29 +218,55 @@
     font-size:13px;letter-spacing:2px;color:var(--green);
     background:var(--green-light);border:1px solid var(--line);
     padding:5px 14px;border-radius:999px;font-weight:600;
+    animation:enter-y .6s ease-out both;
   }
-  .eyebrow i{width:6px;height:6px;border-radius:50%;background:var(--green)}
+  .eyebrow i{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse-glow 2.4s ease-out infinite}
   h1{
     font-size:46px;line-height:1.25;font-weight:800;letter-spacing:1px;
     margin:22px 0 16px;
+    animation:enter-y .7s .08s ease-out both;
   }
-  h1 .hl{color:var(--green)}
-  .hero-sub{font-size:17px;color:var(--ink-2);max-width:480px}
+  h1 .hl{
+    color:var(--green);
+    background:linear-gradient(100deg,#32684F 0%,#3E7D62 25%,#69AB8C 50%,#3E7D62 75%,#32684F 100%);
+    background-size:220% 100%;
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+    animation:hl-flow 6s linear infinite;
+  }
+  .hero-sub{font-size:17px;color:var(--ink-2);max-width:480px;animation:enter-y .7s .16s ease-out both}
   .hero-sub b{color:var(--ink);font-weight:600}
-  .hero-cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:34px;align-items:center}
-  .os-row{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:34px;align-items:center;animation:enter-y .7s .24s ease-out both}
+  .os-row{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;animation:enter-y .7s .32s ease-out both}
   .os-chip{
     display:inline-flex;align-items:center;gap:7px;
     font-size:13.5px;color:var(--ink-2);
     border:1px solid var(--line);border-radius:8px;padding:7px 13px;background:#fff;
-    transition:border-color .15s,color .15s;
+    transition:border-color .15s,color .15s,transform .2s,background .2s;
   }
-  .os-chip:hover{border-color:var(--green-accent);color:var(--green)}
+  .os-chip:hover{border-color:var(--green-accent);color:var(--green);transform:translateY(-1px)}
   .os-chip.active{border-color:var(--green);color:var(--green);background:var(--green-light);font-weight:600}
-  .hero-ver{font-size:13px;color:var(--ink-2);margin-top:16px}
+  .hero-ver{font-size:13px;color:var(--ink-2);margin-top:16px;animation:enter-y .7s .4s ease-out both}
   .hero-ver a{color:var(--green);border-bottom:1px dashed var(--green-accent)}
   .hero-visual{flex:.9;display:flex;justify-content:center;min-width:0}
   .hero-visual svg{max-width:100%;height:auto}
+
+  /* SVG 部件动画 */
+  .hero-svg .part{opacity:0;animation:enter-y .9s cubic-bezier(.22,1,.36,1) forwards}
+  .hero-svg .part-top{animation-delay:.1s}
+  .hero-svg .part-mid{animation-delay:.25s}
+  .hero-svg .part-bot{animation-delay:.4s}
+  .hero-svg .part-line{animation-delay:.55s}
+  .hero-svg .part-label{animation-delay:.7s}
+  .hero-svg .part-tag{animation-delay:.05s}
+  /* 浮动呼吸 */
+  .hero-svg .float-y{animation:enter-y .9s cubic-bezier(.22,1,.36,1) forwards, float-slow 5s ease-in-out .9s infinite}
+  .hero-svg .float-mid{animation:enter-y .9s cubic-bezier(.22,1,.36,1) forwards, float-mid 4.2s ease-in-out .9s infinite}
+  .hero-svg .float-fast{animation:enter-y .9s cubic-bezier(.22,1,.36,1) forwards, float-fast 3.6s ease-in-out .9s infinite}
+  /* 虚线划线 */
+  .hero-svg .dash-line{
+    stroke-dasharray:400;stroke-dashoffset:400;
+    animation:dash-draw 1.4s .55s cubic-bezier(.22,1,.36,1) forwards;
+  }
 
   /* ---------- Sections ---------- */
   section{padding:88px 0}
@@ -115,29 +275,74 @@
   .sec-head h2{font-size:32px;font-weight:800;margin:12px 0 12px;letter-spacing:1px}
   .sec-head p{color:var(--ink-2);font-size:16px}
 
+  /* reveal 滚动入场 */
+  .reveal{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.22,1,.36,1),transform .7s cubic-bezier(.22,1,.36,1)}
+  .reveal.in{opacity:1;transform:translateY(0)}
+
   /* steps */
   .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
   .step{
     background:#fff;border:1px solid var(--line);border-radius:var(--radius);
-    padding:30px 26px;position:relative;
-    transition:transform .2s,box-shadow .2s,border-color .2s;
+    padding:30px 26px;position:relative;overflow:hidden;
+    transition:transform .25s,box-shadow .25s,border-color .25s;
   }
-  .step:hover{transform:translateY(-4px);box-shadow:0 10px 30px rgba(62,125,98,.10);border-color:var(--green-accent)}
+  .step::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,var(--green),var(--green-accent));
+    transform:scaleX(0);transform-origin:left;transition:transform .4s ease;
+  }
+  .step:hover{transform:translateY(-6px);box-shadow:0 14px 40px rgba(62,125,98,.12);border-color:var(--green-accent)}
+  .step:hover::before{transform:scaleX(1)}
   .step-num{
     width:38px;height:38px;border-radius:10px;background:var(--green-light);
     color:var(--green);font-weight:800;font-size:17px;
     display:flex;align-items:center;justify-content:center;margin-bottom:18px;
+    position:relative;z-index:1;
   }
+  /* steps 之间的连接线 */
+  .steps{position:relative}
+  .steps::before{
+    content:"";position:absolute;top:37px;left:calc(16.67% + 12px);right:calc(16.67% + 12px);
+    height:2px;
+    background-image:linear-gradient(90deg,
+      var(--line) 0%,var(--line) 45%,
+      var(--green-accent) 50%,var(--line) 55%,var(--line) 100%);
+    background-size:200% 100%;
+    z-index:0;
+  }
+  .steps.is-active::before{animation:step-connector 2.4s linear infinite}
+
+  /* FAQ 高度平滑过渡 */
+  details{
+    border:1px solid var(--line);border-radius:12px;background:#fff;
+    margin-bottom:14px;overflow:hidden;
+    transition:border-color .2s;
+    display:block;
+  }
+  details:hover{border-color:var(--green-accent)}
+  details .faq-content{
+    max-height:0;overflow:hidden;
+    transition:max-height .4s cubic-bezier(.22,1,.36,1);
+  }
+  details[open] .faq-content{max-height:300px}
   .step h3{font-size:18px;font-weight:700;margin-bottom:8px}
   .step p{font-size:14.5px;color:var(--ink-2)}
 
   /* modes */
-  .modes-sec{background:var(--green-light);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .modes-sec{
+    background:
+      radial-gradient(ellipse at 20% 50%,rgba(90,155,127,.08) 0%,transparent 60%),
+      radial-gradient(ellipse at 80% 50%,rgba(62,125,98,.06) 0%,transparent 60%),
+      var(--green-light);
+    border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  }
   .modes{display:grid;grid-template-columns:1fr 1fr;gap:24px}
   .mode{
     background:#fff;border:1px solid var(--line);border-radius:var(--radius);
-    padding:34px 30px;
+    padding:34px 30px;position:relative;overflow:hidden;
+    transition:transform .25s,box-shadow .25s;
   }
+  .mode:hover{transform:translateY(-4px);box-shadow:0 14px 40px rgba(62,125,98,.10)}
   .mode-badge{
     display:inline-block;font-size:12.5px;font-weight:700;letter-spacing:1px;
     padding:4px 12px;border-radius:999px;margin-bottom:16px;
@@ -161,48 +366,63 @@
   .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
   .feat{
     border:1px solid var(--line);border-radius:var(--radius);
-    padding:28px 24px;background:#fff;
-    transition:transform .2s,box-shadow .2s,border-color .2s;
+    padding:28px 24px;background:#fff;position:relative;overflow:hidden;
+    transition:transform .25s,box-shadow .25s,border-color .25s;
   }
-  .feat:hover{transform:translateY(-4px);box-shadow:0 10px 30px rgba(62,125,98,.10);border-color:var(--green-accent)}
+  .feat::after{
+    content:"";position:absolute;top:-30px;right:-30px;width:80px;height:80px;border-radius:50%;
+    background:var(--green-light);opacity:0;transform:scale(0);
+    transition:transform .35s ease,opacity .35s ease;
+  }
+  .feat:hover{transform:translateY(-4px);box-shadow:0 14px 40px rgba(62,125,98,.10);border-color:var(--green-accent)}
+  .feat:hover::after{opacity:1;transform:scale(1.3)}
   .feat-icon{
     width:44px;height:44px;border-radius:11px;background:var(--green-light);
-    display:flex;align-items:center;justify-content:center;margin-bottom:16px;
+    display:flex;align-items:center;justify-content:center;margin-bottom:16px;position:relative;z-index:1;
   }
   .feat-icon svg{width:22px;height:22px;stroke:var(--green);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-  .feat h3{font-size:16.5px;font-weight:700;margin-bottom:6px}
-  .feat p{font-size:14px;color:var(--ink-2)}
+  .feat h3{font-size:16.5px;font-weight:700;margin-bottom:6px;position:relative;z-index:1}
+  .feat p{font-size:14px;color:var(--ink-2);position:relative;z-index:1}
 
   /* download */
-  .dl-sec{background:var(--green);color:#fff;position:relative;overflow:hidden}
+  .dl-sec{
+    background:
+      radial-gradient(ellipse at 30% 30%,rgba(255,255,255,.08) 0%,transparent 55%),
+      radial-gradient(ellipse at 70% 70%,rgba(90,155,127,.15) 0%,transparent 55%),
+      var(--green);
+    color:#fff;position:relative;overflow:hidden;
+  }
+  /* 几何装饰线条 */
+  .dl-sec::before{
+    content:"";position:absolute;inset:0;pointer-events:none;opacity:.12;
+    background-image:
+      repeating-linear-gradient(135deg,transparent,transparent 30px,rgba(255,255,255,.6) 30px,rgba(255,255,255,.6) 31px);
+  }
   .dl-sec .sec-tag{color:#BFE0D0}
   .dl-sec .sec-head h2{color:#fff}
   .dl-sec .sec-head p{color:#D6EAE0}
-  .dl-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:900px;margin:0 auto}
+  .dl-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:900px;margin:0 auto;position:relative;z-index:1}
   .dl-card{
     background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);
     border-radius:var(--radius);padding:28px 24px;text-align:center;color:#fff;
-    transition:background .2s,transform .2s;
-    display:flex;flex-direction:column;align-items:center;gap:6px;
+    transition:background .25s,transform .25s,border-color .25s;
+    display:flex;flex-direction:column;align-items:center;gap:6px;backdrop-filter:blur(8px);
   }
-  .dl-card:hover{background:rgba(255,255,255,.16);transform:translateY(-3px)}
+  .dl-card:hover{background:rgba(255,255,255,.18);transform:translateY(-5px);border-color:rgba(255,255,255,.4)}
   .dl-card svg{width:34px;height:34px;margin-bottom:8px;fill:#fff}
   .dl-card .os-name{font-size:18px;font-weight:700}
   .dl-card .os-file{font-size:12.5px;color:#C9E4D7;min-height:20px}
   .dl-card .os-btn{
     margin-top:14px;font-size:14px;font-weight:600;color:var(--green-active);
     background:#fff;border-radius:8px;padding:8px 22px;
+    transition:background .15s,transform .15s,box-shadow .15s;
   }
-  .dl-card .os-btn:hover{background:var(--green-light)}
-  .dl-note{text-align:center;font-size:13px;color:#C9E4D7;margin-top:28px}
+  .dl-card .os-btn:hover{background:var(--green-light);transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.15)}
+  .dl-note{text-align:center;font-size:13px;color:#C9E4D7;margin-top:28px;position:relative;z-index:1}
   .dl-note a{color:#fff;border-bottom:1px dashed rgba(255,255,255,.5)}
 
   /* faq */
   .faq{max-width:760px;margin:0 auto}
-  details{
-    border:1px solid var(--line);border-radius:12px;background:#fff;
-    margin-bottom:14px;overflow:hidden;
-  }
   summary{
     cursor:pointer;list-style:none;padding:18px 24px;
     font-weight:600;font-size:15.5px;display:flex;align-items:center;
@@ -210,11 +430,11 @@
   summary::-webkit-details-marker{display:none}
   summary::after{
     content:"+";margin-left:auto;font-size:20px;color:var(--green);font-weight:400;
-    transition:transform .2s;
+    transition:transform .25s cubic-bezier(.22,1,.36,1);
   }
   details[open] summary::after{transform:rotate(45deg)}
-  details p{padding:0 24px 20px;font-size:14.5px;color:var(--ink-2)}
-  details code{background:var(--green-light);padding:1px 6px;border-radius:5px;font-size:13px}
+  details .faq-content p{padding:0 24px 20px;font-size:14.5px;color:var(--ink-2)}
+  details .faq-content code{background:var(--green-light);padding:1px 6px;border-radius:5px;font-size:13px}
 
   /* footer */
   footer{border-top:1px solid var(--line);padding:44px 0 40px;background:#fff}
@@ -232,10 +452,26 @@
     .modes{grid-template-columns:1fr}
     .nav-links .hide-m{display:none}
     section{padding:64px 0}
+    .hero-bg::before{width:240px;height:240px;top:-80px;right:-40px}
+    .hero-bg::after{width:200px;height:200px;bottom:-60px;left:-40px}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{
+      animation-duration:.01ms !important;
+      animation-iteration-count:1 !important;
+      transition-duration:.01ms !important;
+    }
   }
 </style>
 </head>
 <body>
+<!-- 滚动进度条 -->
+<div class="progress-bar" aria-hidden="true"></div>
+<!-- 回到顶部 -->
+<button class="back-top" aria-label="回到顶部">
+  <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+</button>
 
 <!-- ============ Nav ============ -->
 <nav>
@@ -263,24 +499,12 @@
 
 <!-- ============ Hero ============ -->
 <header class="hero" id="top">
-  <div class="hero-bg">
-    <svg width="100%" height="100%" preserveAspectRatio="xMidYMid slice" viewBox="0 0 1200 600">
-      <g fill="none" stroke="#3E7D62" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".07">
-        <path d="M-40 120 L300 120 L300 200 L160 200 L160 280 L420 280"/>
-        <path d="M1240 420 L940 420 L940 340 L1080 340 L1080 260 L820 260"/>
-        <path d="M-40 520 L200 520 L200 460 L340 460"/>
-        <path d="M1240 80 L1000 80 L1000 150 L880 150"/>
-      </g>
-      <g opacity=".12">
-        <circle cx="300" cy="120" r="7" fill="#3E7D62"/>
-        <circle cx="940" cy="420" r="7" fill="#E07A3C"/>
-        <circle cx="200" cy="520" r="7" fill="#3E7D62"/>
-        <circle cx="1000" cy="80" r="7" fill="#3E7D62"/>
-      </g>
-    </svg>
+  <div class="hero-bg" data-depth="0.06">
+    <canvas class="hero-canvas" aria-hidden="true"></canvas>
   </div>
+  <div class="hero-grid-overlay" data-depth="0.03"></div>
   <div class="wrap hero-inner">
-    <div class="hero-text">
+    <div class="hero-text" data-depth="-0.60">
       <span class="eyebrow"><i></i>开源 · 免费 · 跨平台</span>
       <h1>Gerber 到 3D 打印 —<br /><span class="hl">两种模式全搞定</span></h1>
       <p class="hero-sub">
@@ -313,50 +537,59 @@
 
     <!-- 两种模式核心产物（部件色与 App 内一致） -->
     <div class="hero-visual" aria-hidden="true">
-      <svg viewBox="0 0 520 420" width="500">
+      <svg class="hero-svg" viewBox="0 0 560 420" width="500">
         <defs>
           <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
             <path d="M20 0 H0 V20" fill="none" stroke="#D8E4DD" stroke-width="1"/>
           </pattern>
-        </defs>
+          <radialGradient id="softGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#3E7D62" stop-opacity=".08"/>
+            <stop offset="100%" stop-color="#3E7D62" stop-opacity="0"/>
+          </radialGradient>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3.5" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+        <!-- 底板柔光 -->
         <rect x="6" y="6" width="508" height="408" rx="16" fill="url(#grid)" opacity=".5"/>
+        <circle cx="260" cy="210" r="200" fill="url(#softGlow)"/>
 
         <!-- ========== 左侧:夹具模式三件套爆炸图 ========== -->
         <!-- 模式标签 -->
-        <g font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
+        <g class="part part-tag" data-depth="-0.28" font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
           <rect x="18" y="18" width="110" height="20" rx="10" fill="#EDF2F7"/>
           <text x="24" y="32" fill="#4C6F94">JIG · 钢网夹具</text>
         </g>
-        <!-- 虚线对齐 -->
-        <g stroke="#5A9B7F" stroke-width="1.2" stroke-dasharray="4 5" opacity=".4">
-          <line x1="100" y1="72" x2="100" y2="370"/>
-          <line x1="250" y1="72" x2="250" y2="370"/>
+        <!-- 虚线对齐（先隐藏后划线） -->
+        <g class="part part-line" data-depth="-0.25" stroke="#5A9B7F" stroke-width="1.2" stroke-dasharray="4 5" opacity=".5">
+          <line class="dash-line" x1="100" y1="72" x2="100" y2="370"/>
+          <line class="dash-line" x1="250" y1="72" x2="250" y2="370"/>
         </g>
-        <!-- cover 顶盖 (顶面 y=102) -->
-        <g>
+        <!-- cover 顶盖 (top) -->
+        <g class="part part-top float-y" filter="url(#glow)" data-depth="-0.48" style="transform-origin:175px 110px">
           <polygon points="100,102 175,68 250,102 175,136" fill="#E3A052"/>
           <polygon points="100,102 175,136 175,154 100,120" fill="#D9913D"/>
           <polygon points="175,136 250,102 250,120 175,154" fill="#B87530"/>
-          <!-- A 面窗口开口 -->
           <polygon points="138,102 175,84 212,102 175,120" fill="#FDFEFD"/>
         </g>
-        <!-- insert 托盘 (顶面 y=202) -->
-        <g>
+        <!-- insert 托盘 (mid) -->
+        <g class="part part-mid float-mid" data-depth="-0.30" style="transform-origin:175px 210px">
           <polygon points="100,202 175,168 250,202 175,236" fill="#69AB8C"/>
           <polygon points="100,202 175,236 175,254 100,220" fill="#5A9B7F"/>
           <polygon points="175,236 250,202 250,220 175,254" fill="#487E66"/>
-          <!-- PCB 槽凹陷 -->
           <polygon points="128,202 175,180 222,202 175,224" fill="#2D5A4B" opacity=".7"/>
-          <!-- 定位柱 -->
           <circle cx="112" cy="210" r="3" fill="#FDFEFD"/>
           <circle cx="238" cy="210" r="3" fill="#FDFEFD"/>
         </g>
-        <!-- base 底座 (顶面 y=302) -->
-        <g>
+        <!-- base 底座 (bot) -->
+        <g class="part part-bot float-fast" filter="url(#glow)" data-depth="-0.18" style="transform-origin:175px 310px">
           <polygon points="100,302 175,268 250,302 175,336" fill="#5D7FA3"/>
           <polygon points="100,302 175,336 175,354 100,320" fill="#4C6F94"/>
           <polygon points="175,336 250,302 250,320 175,354" fill="#3D5A79"/>
-          <!-- 螺丝孔 -->
           <g fill="#3D5A79">
             <circle cx="114" cy="308" r="3.5"/>
             <circle cx="236" cy="308" r="3.5"/>
@@ -365,63 +598,63 @@
           </g>
         </g>
         <!-- 部件标注 -->
-        <g font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
+        <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
           <text x="268" y="110">cover 顶盖</text>
           <text x="268" y="210">insert 托盘</text>
           <text x="268" y="316">base 底座</text>
         </g>
 
         <!-- ========== 右侧:钢网模式一体式钢网 ========== -->
-        <!-- 模式标签 -->
-        <g font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
-          <rect x="270" y="18" width="110" height="20" rx="10" fill="#FDF1E4"/>
-          <text x="276" y="32" fill="#B87530">STENCIL · PCB 钢网</text>
+        <g class="part part-tag">
+          <rect x="300" y="18" width="110" height="20" rx="10" fill="#FDF1E4"/>
+          <text x="306" y="32" fill="#B87530" font-family="inherit" font-size="10" font-weight="700" letter-spacing="1">STENCIL · PCB 钢网</text>
         </g>
-        <!-- 一体式钢网等距视图 (顶面 y=220, 中心 x=400) -->
-        <!-- 顶面 -->
-        <polygon points="310,220 400,172 490,220 400,268" fill="#69AB8C"/>
-        <!-- 右侧面 -->
-        <polygon points="400,268 490,220 490,236 400,284" fill="#487E66"/>
-        <!-- 左侧面 -->
-        <polygon points="310,220 400,268 400,284 310,236" fill="#3E7D62"/>
-        <!-- PCB 卡槽凹陷 (顶面上的小矩形) -->
-        <polygon points="338,220 400,186 462,220 400,254" fill="#5A9B7F"/>
-        <!-- 焊盘开孔阵列 (小圆) -->
-        <g fill="#FDFEFD" opacity=".85">
-          <circle cx="340" cy="230" r="1.6"/>
-          <circle cx="358" cy="238" r="1.4"/>
-          <circle cx="376" cy="242" r="1.8"/>
-          <circle cx="394" cy="244" r="1.2"/>
-          <circle cx="412" cy="242" r="1.8"/>
-          <circle cx="430" cy="238" r="1.4"/>
-          <circle cx="448" cy="230" r="1.6"/>
-          <circle cx="349" cy="218" r="1.2"/>
-          <circle cx="367" cy="224" r="1.5"/>
-          <circle cx="385" cy="228" r="1.3"/>
-          <circle cx="403" cy="230" r="1.7"/>
-          <circle cx="421" cy="228" r="1.3"/>
-          <circle cx="439" cy="224" r="1.5"/>
-          <circle cx="457" cy="218" r="1.2"/>
-          <circle cx="356" cy="206" r="1.5"/>
-          <circle cx="374" cy="210" r="1.3"/>
-          <circle cx="392" cy="212" r="1.8"/>
-          <circle cx="410" cy="212" r="1.8"/>
-          <circle cx="428" cy="210" r="1.3"/>
-          <circle cx="446" cy="206" r="1.5"/>
+        <!-- 一体式钢网等距视图 -->
+        <g class="part part-mid float-mid stencil-part" data-depth="-0.38" style="transform-origin:400px 232px">
+          <g transform="translate(30,0)">
+          <polygon points="310,220 400,172 490,220 400,268" fill="#69AB8C"/>
+          <polygon points="400,268 490,220 490,236 400,284" fill="#487E66"/>
+          <polygon points="310,220 400,268 400,284 310,236" fill="#3E7D62"/>
+          <polygon points="338,220 400,186 462,220 400,254" fill="#5A9B7F"/>
+          <!-- 焊盘开孔阵列 -->
+          <g fill="#FDFEFD" opacity=".85">
+            <circle cx="340" cy="230" r="1.6"/>
+            <circle cx="358" cy="238" r="1.4"/>
+            <circle cx="376" cy="242" r="1.8"/>
+            <circle cx="394" cy="244" r="1.2"/>
+            <circle cx="412" cy="242" r="1.8"/>
+            <circle cx="430" cy="238" r="1.4"/>
+            <circle cx="448" cy="230" r="1.6"/>
+            <circle cx="349" cy="218" r="1.2"/>
+            <circle cx="367" cy="224" r="1.5"/>
+            <circle cx="385" cy="228" r="1.3"/>
+            <circle cx="403" cy="230" r="1.7"/>
+            <circle cx="421" cy="228" r="1.3"/>
+            <circle cx="439" cy="224" r="1.5"/>
+            <circle cx="457" cy="218" r="1.2"/>
+            <circle cx="356" cy="206" r="1.5"/>
+            <circle cx="374" cy="210" r="1.3"/>
+            <circle cx="392" cy="212" r="1.8"/>
+            <circle cx="410" cy="212" r="1.8"/>
+            <circle cx="428" cy="210" r="1.3"/>
+            <circle cx="446" cy="206" r="1.5"/>
+          </g>
+          </g>
         </g>
         <!-- 一体式钢网标注 -->
-        <g font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
-          <text x="500" y="226">一体式 PCB 钢网</text>
+        <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
+          <text x="530" y="226">一体式 PCB 钢网</text>
         </g>
-        <!-- 箭头连接线 -->
-        <g stroke="#E07A3C" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-dasharray="3 3" opacity=".6">
-          <path d="M476 230 L500 226"/>
+        <g class="part part-line" stroke="#E07A3C" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".6">
+          <path class="dash-line" d="M506 230 L530 226"/>
         </g>
 
-        <!-- ========== 底部 logo 蛇形线点缀 ========== -->
-        <path d="M240 388 L286 388 L286 376 L254 376 L254 364 L296 364" fill="none" stroke="#3E7D62" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
-        <circle cx="240" cy="388" r="4" fill="#3E7D62"/>
-        <circle cx="296" cy="364" r="4" fill="#E07A3C"/>
+        <!-- 底部 logo 蛇形线点缀 -->
+        <g class="part part-label">
+          <path d="M240 388 L286 388 L286 376 L254 376 L254 364 L296 364" fill="none" stroke="#3E7D62" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
+          <circle cx="240" cy="388" r="4" fill="#3E7D62"/>
+          <circle cx="296" cy="364" r="4" fill="#E07A3C"/>
+        </g>
       </svg>
     </div>
   </div>
@@ -430,23 +663,23 @@
 <!-- ============ Workflow ============ -->
 <section id="workflow">
   <div class="wrap">
-    <div class="sec-head">
+    <div class="sec-head reveal">
       <div class="sec-tag">WORKFLOW</div>
       <h2>拖入 → 预览 → 导出</h2>
       <p>核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。</p>
     </div>
     <div class="steps">
-      <div class="step">
+      <div class="step reveal">
         <div class="step-num">1</div>
         <h3>拖入 Gerber ZIP</h3>
         <p>自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。</p>
       </div>
-      <div class="step">
+      <div class="step reveal">
         <div class="step-num">2</div>
         <h3>实时 3D 预览</h3>
         <p>参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。</p>
       </div>
-      <div class="step">
+      <div class="step reveal">
         <div class="step-num">3</div>
         <h3>导出 STL / STEP</h3>
         <p>一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。</p>
@@ -457,14 +690,27 @@
 
 <!-- ============ Modes ============ -->
 <section id="modes" class="modes-sec">
+  <!-- PCB 走线装饰 -->
+  <svg class="pcb-trace" viewBox="0 0 1200 400">
+    <path class="trace-path" d="M80 60 L300 60 L300 140 L200 140 L200 220 L500 220 L500 320 L800 320"/>
+    <path class="trace-path" d="M1120 340 L900 340 L900 260 L1000 260 L1000 180 L720 180 L720 80 L480 80" style="animation-delay:1.1s;opacity:.7"/>
+    <circle class="pcb-node node-1" cx="300" cy="60" r="4"/>
+    <circle class="pcb-node node-2" cx="300" cy="140" r="4"/>
+    <circle class="pcb-node node-3" cx="200" cy="220" r="4"/>
+    <circle class="pcb-node node-4" cx="500" cy="220" r="4"/>
+    <circle class="pcb-node node-1" cx="500" cy="320" r="4"/>
+    <circle class="pcb-node node-2" cx="720" cy="180" r="4"/>
+    <circle class="pcb-node node-3" cx="1000" cy="260" r="4"/>
+    <circle class="pcb-node node-4" cx="900" cy="340" r="4"/>
+  </svg>
   <div class="wrap">
-    <div class="sec-head">
+    <div class="sec-head reveal">
       <div class="sec-tag">TWO MODES</div>
       <h2>两种模式，覆盖原型到量产</h2>
       <p>从快速原型验证到小批量生产，选择最适合你场景的工作方式。</p>
     </div>
     <div class="modes">
-      <div class="mode mode-jig">
+      <div class="mode mode-jig reveal">
         <span class="mode-badge">JIG MODE</span>
         <h3>钢网夹具模式</h3>
         <p>生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。</p>
@@ -474,7 +720,7 @@
           <li>夹具尺寸按钢网自动计算，同尺寸 PCB 复用</li>
         </ul>
       </div>
-      <div class="mode mode-stencil">
+      <div class="mode mode-stencil reveal">
         <span class="mode-badge">STENCIL MODE</span>
         <h3>PCB 钢网模式</h3>
         <p>根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。</p>
@@ -491,38 +737,38 @@
 <!-- ============ Features ============ -->
 <section id="features">
   <div class="wrap">
-    <div class="sec-head">
+    <div class="sec-head reveal">
       <div class="sec-tag">FEATURES</div>
       <h2>为锡膏印刷而生的细节</h2>
       <p>自研 RS-274X 解析器 + build123d 参数化 CAD 内核，把每个环节做到开箱即用。</p>
     </div>
     <div class="feats">
-      <div class="feat">
+      <div class="feat reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h5"/></svg></div>
         <h3>自研 Gerber 解析器</h3>
         <p>支持 %LM 镜像 / %LR 旋转 / %LS 缩放图层变换，G02/G03 弧线，区域填充与宏光圈。</p>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>
         <h3>参数化 CAD 内核</h3>
         <p>基于 build123d + Shapely，异形板框、沉孔、定位柱、梯形取放缺口全部参数可控。</p>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></div>
         <h3>实时 3D 预览</h3>
         <p>three.js 按需渲染 + 参数哈希缓存，多部件后台预热，2400+ 焊盘约 3 秒完成。</p>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
         <h3>内置引擎零配置</h3>
         <p>发布包内嵌完整 Python 运行时，最终用户无需安装任何环境，双击即用。</p>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
         <h3>零云依赖</h3>
         <p>Gerber 解析与 CAD 生成全部在本地完成，设计文件不出你的电脑，离线可用。</p>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="feat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
         <h3>中英双语 · 开源</h3>
         <p>MIT 协议完全开源，Tauri 2 + Vue 3 + Rust 技术栈，欢迎 Issue 与 PR。</p>
@@ -534,25 +780,25 @@
 <!-- ============ Download ============ -->
 <section id="download" class="dl-sec">
   <div class="wrap">
-    <div class="sec-head">
+    <div class="sec-head reveal">
       <div class="sec-tag">DOWNLOAD</div>
       <h2>下载 Mason</h2>
       <p id="dl-ver-text">三个平台均提供预编译安装包，开箱即用。</p>
     </div>
     <div class="dl-cards">
-      <div class="dl-card" data-os="windows">
+      <div class="dl-card reveal" data-os="windows">
         <svg viewBox="0 0 24 24"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
         <div class="os-name">Windows</div>
         <div class="os-file">.msi 安装包 · Win 10/11</div>
         <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
       </div>
-      <div class="dl-card" data-os="mac">
+      <div class="dl-card reveal" data-os="mac">
         <svg viewBox="0 0 24 24"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.56-1.702"/></svg>
         <div class="os-name">macOS</div>
         <div class="os-file">.dmg · Apple Silicon</div>
         <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
       </div>
-      <div class="dl-card" data-os="linux">
+      <div class="dl-card reveal" data-os="linux">
         <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         <div class="os-name">Linux</div>
         <div class="os-file">.deb / .rpm · Debian/RHEL 系</div>
@@ -566,26 +812,34 @@
 <!-- ============ FAQ ============ -->
 <section id="faq">
   <div class="wrap">
-    <div class="sec-head">
+    <div class="sec-head reveal">
       <div class="sec-tag">FAQ</div>
       <h2>常见问题</h2>
     </div>
     <div class="faq">
-      <details>
+      <details class="reveal">
         <summary>需要什么运行环境？</summary>
-        <p>发布版自带内置 Python 引擎，无需安装任何环境，下载安装即可使用。仅开发者从源码运行时才需要 Node.js 20+ / Rust 1.77+ / Python 3.11+。</p>
+      <div class="faq-content">
+        <p>发布版自带内置 Python 引擎，无需安装任何环境，下载安装即可使用。仅开发者从源码运行时才需要 Node.js 20+ / Rust 1.77+ / Python 3.11+。</p>      </div>
+    
       </details>
-      <details>
+      <details class="reveal">
         <summary>支持哪些 Gerber 文件？</summary>
-        <p>支持嘉立创 / JLCPCB 导出的 Gerber ZIP。板框识别依赖 <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code> 文件；钢网模式还需要 <code>.GTP</code> / <code>.GBP</code> 锡膏层。文件命名特殊时可在导入界面手动选择。</p>
+      <div class="faq-content">
+        <p>支持嘉立创 / JLCPCB 导出的 Gerber ZIP。板框识别依赖 <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code> 文件；钢网模式还需要 <code>.GTP</code> / <code>.GBP</code> 锡膏层。文件命名特殊时可在导入界面手动选择。</p>      </div>
+    
       </details>
-      <details>
+      <details class="reveal">
         <summary>钢网焊盘和 PCB 焊盘对不上怎么办？</summary>
-        <p>Mason 默认对长圆形焊盘做方形化处理（匹配钢网厂工艺），并按 PCB 板框居中对齐。若仍有偏差，请检查 Gerber 坐标系是否与板框层一致。</p>
+      <div class="faq-content">
+        <p>Mason 默认对长圆形焊盘做方形化处理（匹配钢网厂工艺），并按 PCB 板框居中对齐。若仍有偏差，请检查 Gerber 坐标系是否与板框层一致。</p>      </div>
+    
       </details>
-      <details>
+      <details class="reveal">
         <summary>导出的文件在哪里？</summary>
-        <p>导出时会在所选目录创建 <code>mason_export_&lt;时间戳&gt;/</code> 子文件夹，所有 STL / STEP 文件放入其中，避免与现有文件混淆。</p>
+      <div class="faq-content">
+        <p>导出时会在所选目录创建 <code>mason_export_&lt;时间戳&gt;/</code> 子文件夹，所有 STL / STEP 文件放入其中，避免与现有文件混淆。</p>      </div>
+    
       </details>
     </div>
   </div>
@@ -639,6 +893,27 @@
   document.getElementById("hero-primary-label").textContent =
     "免费下载 · " + osName[os];
 
+  /* ---------- 滚动入场动画 ---------- */
+  var reveals = document.querySelectorAll(".reveal");
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          var el = entry.target;
+          var idx = Array.prototype.indexOf.call(el.parentElement.children, el);
+          var delay = Math.min(idx, 6) * 80;
+          setTimeout(function () {
+            el.classList.add("in");
+          }, delay);
+          io.unobserve(el);
+        }
+      });
+    }, { threshold: 0.15, rootMargin: "0px 0px -40px 0px" });
+    reveals.forEach(function (r) { io.observe(r); });
+  } else {
+    reveals.forEach(function (r) { r.classList.add("in"); });
+  }
+
   /* 拉取最新 Release，绑定真实安装包直链 */
   function fmtSize(bytes) {
     return (bytes / 1024 / 1024).toFixed(1) + " MB";
@@ -663,7 +938,6 @@
         linux: matchAsset(data.assets, /\.deb$/i) ||
                matchAsset(data.assets, /\.rpm$/i)
       };
-      /* 下载卡片与系统 chip 换直链 */
       Object.keys(map).forEach(function (key) {
         var a = map[key];
         if (!a) return;
@@ -673,7 +947,6 @@
         var fileEl = document.querySelector('.dl-card[data-os="' + key + '"] .os-file');
         if (fileEl) fileEl.textContent = a.name + " · " + fmtSize(a.size);
       });
-      /* Hero 主按钮指向当前平台安装包 */
       if (map[os]) {
         document.getElementById("hero-primary").href = map[os].browser_download_url;
       }
@@ -685,6 +958,346 @@
       }
     })
     .catch(function () { /* 离线或限流时保持 Releases 页链接 */ });
+
+  /* ---------- Hero SVG 鼠标视差 ---------- */
+  var heroVisual = document.querySelector(".hero-visual");
+  var heroEl = document.querySelector(".hero");
+  if (heroVisual && heroEl && !window.matchMedia("(prefers-reduced-motion:reduce)").matches) {
+    heroEl.addEventListener("mousemove", function (e) {
+      var rect = heroEl.getBoundingClientRect();
+      var mx = (e.clientX - rect.left) / rect.width - 0.5;
+      var my = (e.clientY - rect.top) / rect.height - 0.5;
+      heroVisual.style.transform = "perspective(1100px) rotateX(" + (my * -4).toFixed(2) + "deg) rotateY(" + (mx * 6).toFixed(2) + "deg) translateZ(10px)";
+    });
+    heroEl.addEventListener("mouseleave", function () {
+      heroVisual.style.transform = "perspective(1100px) rotateX(0) rotateY(0) translateZ(0)";
+    });
+  }
+
+  /* ---------- Hero grid scroll 视差 ---------- */
+  var gridOverlay = document.querySelector(".hero-grid-overlay");
+  if (gridOverlay && !window.matchMedia("(prefers-reduced-motion:reduce)").matches) {
+    var raf = null;
+    window.addEventListener("scroll", function () {
+      if (raf) return;
+      raf = requestAnimationFrame(function () {
+        var y = window.scrollY;
+        gridOverlay.style.transform = "translateY(" + (y * 0.08) + "px)";
+        raf = null;
+      });
+    }, { passive: true });
+  }
+
+  /* ---------- feat 卡片 3D tilt ---------- */
+  var feats = document.querySelectorAll(".feat");
+  feats.forEach(function (card) {
+    if (window.matchMedia("(prefers-reduced-motion:reduce)").matches) return;
+    card.addEventListener("mousemove", function (e) {
+      var rect = card.getBoundingClientRect();
+      var x = (e.clientX - rect.left) / rect.width;
+      var y = (e.clientY - rect.top) / rect.height;
+      var rx = (y - 0.5) * -8;
+      var ry = (x - 0.5) * 8;
+      card.style.transform = "perspective(800px) rotateX(" + rx + "deg) rotateY(" + ry + "deg) translateY(-4px)";
+    });
+    card.addEventListener("mouseleave", function () {
+      card.style.transform = "";
+    });
+  });
+
+  /* ---------- Canvas 粒子背景 (炫酷版) ---------- */
+  (function initParticles(){
+    if (window.matchMedia("(prefers-reduced-motion:reduce)").matches) return;
+    var canvas = document.querySelector(".hero-canvas");
+    if (!canvas) return;
+    var ctx = canvas.getContext("2d");
+    var W, H, DPR = Math.min(window.devicePixelRatio || 1, 2);
+    var particles = [];
+    var mouse = { x: -9999, y: -9999, active: false };
+    var lastTime = performance.now();
+    /* 三色青瓷绿系 */
+    var palette = [
+      { fill: "rgba(50,104,79,0.95)", glow: "rgba(50,104,79,0.35)", baseR: 3.2, weight: 0.06 },
+      { fill: "rgba(62,125,98,0.85)", glow: "rgba(62,125,98,0.20)", baseR: 2.0, weight: 0.26 },
+      { fill: "rgba(90,155,127,0.70)", glow: "rgba(90,155,127,0.08)", baseR: 1.1, weight: 0.68 }
+    ];
+
+    function pickType(){
+      var r = Math.random(), cum = 0;
+      for (var i = 0; i < palette.length; i++) { cum += palette[i].weight; if (r <= cum) return i; }
+      return palette.length - 1;
+    }
+
+    function resize(){
+      var rect = canvas.parentElement.getBoundingClientRect();
+      W = rect.width; H = rect.height;
+      canvas.width = W * DPR; canvas.height = H * DPR;
+      canvas.style.width = W + "px"; canvas.style.height = H + "px";
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      build();
+    }
+    function build(){
+      var count = Math.round(Math.min(W, H) / 18);
+      particles.length = 0;
+      for (var i = 0; i < count; i++) {
+        var t = pickType(), col = palette[t];
+        particles.push({
+          x: Math.random() * W, y: Math.random() * H,
+          vx: (Math.random() - 0.5) * 0.6,
+          vy: (Math.random() - 0.5) * 0.6,
+          type: t, baseR: col.baseR, phase: Math.random() * Math.PI * 2
+        });
+      }
+    }
+    function step(now){
+      var dt = Math.min((now - lastTime) / 16.667, 3); lastTime = now;
+      /* 半透明清屏 = 拖影 */
+      ctx.fillStyle = "rgba(253,254,253,0.14)";
+      ctx.fillRect(0, 0, W, H);
+
+      /* 更新粒子 */
+      for (var i = 0; i < particles.length; i++) {
+        var p = particles[i];
+        /* 脉动半径 */
+        var r = p.baseR * (1 + Math.sin(now * 0.002 + p.phase) * 0.18);
+        /* 鼠标漩涡 */
+        if (mouse.active) {
+          var dx = p.x - mouse.x, dy = p.y - mouse.y;
+          var d2 = dx*dx + dy*dy, dist = Math.sqrt(d2);
+          if (dist < 240 && dist > 1) {
+            var inv = 1 / dist;
+            var nx = dx * inv, ny = dy * inv;
+            /* 排斥 (< 80) + 吸引 (80-220) + 切线 */
+            var radial = dist < 80 ? -1 : (dist < 220 ? 0.6 : 0);
+            var tang = 0.35 * (1 - Math.min(dist, 200) / 200);
+            p.vx += (nx * radial + -ny * tang) * 0.12 * dt;
+            p.vy += (ny * radial +  nx * tang) * 0.12 * dt;
+          }
+        }
+        /* 阻尼 + 微漂移 */
+        p.vx *= 0.97; p.vy *= 0.97;
+        if (Math.abs(p.vx) < 0.3) p.vx += (Math.random() - 0.5) * 0.08;
+        if (Math.abs(p.vy) < 0.3) p.vy += (Math.random() - 0.5) * 0.08;
+        /* 速度上限 */
+        var sp = Math.sqrt(p.vx*p.vx + p.vy*p.vy);
+        if (sp > 2.4) { p.vx = p.vx / sp * 2.4; p.vy = p.vy / sp * 2.4; }
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        /* 边界环绕 */
+        if (p.x < -10) p.x = W + 10; if (p.x > W + 10) p.x = -10;
+        if (p.y < -10) p.y = H + 10; if (p.y > H + 10) p.y = -10;
+        /* 绘制 */
+        var col = palette[p.type];
+        if (p.type === 0) {
+          /* 大粒子发光 */
+          var grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 4);
+          grad.addColorStop(0, col.glow);
+          grad.addColorStop(0.4, "rgba(62,125,98,0.08)");
+          grad.addColorStop(1, "rgba(62,125,98,0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath(); ctx.arc(p.x, p.y, r * 4, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = col.fill;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+      }
+      /* 连线 (更密) */
+      for (var i = 0; i < particles.length; i++) {
+        for (var j = i + 1; j < particles.length; j++) {
+          var a = particles[i], b = particles[j];
+          var dx = a.x - b.x, dy = a.y - b.y;
+          var d2 = dx*dx + dy*dy;
+          if (d2 < 32400 /* 180^2 */) {
+            var d = Math.sqrt(d2);
+            /* 大粒子参与时更亮 */
+            var boost = (a.type === 0 || b.type === 0) ? 1.5 : 1;
+            var alpha = (1 - d / 180) * 0.22 * boost;
+            ctx.strokeStyle = "rgba(62,125,98," + Math.min(alpha, 0.4) + ")";
+            ctx.lineWidth = (a.type === 0 || b.type === 0) ? 1.0 : 0.7;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+      raf = requestAnimationFrame(step);
+    }
+    var raf;
+    resize();
+    raf = requestAnimationFrame(step);
+    window.addEventListener("resize", resize);
+    var heroEl = document.querySelector(".hero");
+    if (heroEl) {
+      heroEl.addEventListener("mousemove", function(e){
+        var rect = heroEl.getBoundingClientRect();
+        mouse.x = e.clientX - rect.left;
+        mouse.y = e.clientY - rect.top;
+        mouse.active = true;
+      });
+      heroEl.addEventListener("mouseleave", function(){
+        mouse.active = false;
+        mouse.x = -9999; mouse.y = -9999;
+      });
+    }
+  })();
+
+  /* ==========================================================
+     滚动主控：进度条 + Hero 视差/退出 + Nav 高亮 + 回到顶部
+  ========================================================== */
+  var progressBar = document.querySelector(".progress-bar");
+  var heroEl = document.querySelector("header.hero");
+  var heroVisual = document.querySelector(".hero-visual");
+  var backTop = document.querySelector(".back-top");
+  var navEl = document.querySelector("nav");
+  var navLinks = document.querySelectorAll(".nav-links a[href^='#']");
+  var sections = [];
+
+  // 收集可跳转 section
+  navLinks.forEach(function(a){
+    var id = a.getAttribute("href").slice(1);
+    var el = document.getElementById(id);
+    if (el) sections.push({ el: el, link: a, id: id });
+  });
+
+  /* Hero 全层视差：收集所有带 data-depth 的元素 */
+  var parallaxLayers = [];
+  var allDepthEls = document.querySelectorAll("[data-depth]");
+  allDepthEls.forEach(function(el){
+    var depth = parseFloat(el.getAttribute("data-depth")) || 0;
+    if (!isNaN(depth)) {
+      parallaxLayers.push({ el: el, depth: depth, isSvg: el instanceof SVGElement });
+    }
+  });
+
+  var prefersReduceMotion = window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+
+  function onScroll(){
+    var y = window.scrollY;
+    var maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    var pct = maxScroll > 0 ? (y / maxScroll * 100) : 0;
+
+    // 1) 进度条
+    if (progressBar) progressBar.style.width = pct + "%";
+
+    // 2) Nav 阴影
+    if (navEl) {
+      if (y > 12) navEl.classList.add("is-scrolled");
+      else navEl.classList.remove("is-scrolled");
+    }
+
+    // 3) 回到顶部显隐
+    if (backTop) {
+      if (y > 400) backTop.classList.add("is-visible");
+      else backTop.classList.remove("is-visible");
+    }
+
+    // 4) Hero 退出 + 全层视差
+    if (heroEl && !prefersReduceMotion) {
+      var heroH = heroEl.offsetHeight;
+      var heroProgress = Math.min(y / heroH, 1);
+      if (heroProgress > 0.08) heroEl.classList.add("is-scroll-out");
+      else heroEl.classList.remove("is-scroll-out");
+
+      parallaxLayers.forEach(function(item){
+        var offY = heroProgress * 450 * item.depth;
+        if (item.isSvg) {
+          item.el.style.setProperty("--parallax-y", offY.toFixed(2) + "px");
+        } else {
+          item.el.style.transform = "translateY(" + offY.toFixed(1) + "px)";
+        }
+      });
+    }
+
+    // 5) Section 高亮
+    if (sections.length) {
+      var offset = 120;
+      var current = sections[0].id;
+      for (var i = sections.length - 1; i >= 0; i--) {
+        if (sections[i].el.offsetTop - offset <= y) { current = sections[i].id; break; }
+      }
+      sections.forEach(function(s){
+        if (s.id === current) s.link.classList.add("is-active");
+        else s.link.classList.remove("is-active");
+      });
+    }
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  /* ---------- 平滑滚动 (offset sticky nav) ---------- */
+  function smoothScrollTo(target, offsetPx){
+    var start = window.scrollY;
+    var el = typeof target === "string" ? document.querySelector(target) : target;
+    if (!el) { window.scrollTo({ top: offsetPx, behavior: prefersReduceMotion ? "auto" : "smooth" }); return; }
+    var end = el.getBoundingClientRect().top + start - offsetPx;
+    var duration = 520;
+    var startTime = null;
+    function step(now){
+      if (startTime === null) startTime = now;
+      var elapsed = now - startTime;
+      var p = Math.min(elapsed / duration, 1);
+      var ease = 1 - Math.pow(1 - p, 3); // easeOutCubic
+      window.scrollTo(0, start + (end - start) * ease);
+      if (p < 1) requestAnimationFrame(step);
+    }
+    if (prefersReduceMotion) { window.scrollTo(0, end); return; }
+    requestAnimationFrame(step);
+  }
+
+  // Nav 锚点
+  navLinks.forEach(function(a){
+    a.addEventListener("click", function(e){
+      var href = a.getAttribute("href");
+      if (href && href.startsWith("#") && href.length > 1) {
+        e.preventDefault();
+        smoothScrollTo(href, 68);
+      }
+    });
+  });
+
+  // 回到顶部
+  if (backTop) {
+    backTop.addEventListener("click", function(){
+      smoothScrollTo(0, 0);
+    });
+  }
+
+  // 顶部 logo 也走平滑
+  var navLogo = document.querySelector(".nav-logo");
+  if (navLogo) {
+    navLogo.addEventListener("click", function(e){
+      var href = navLogo.getAttribute("href");
+      if (href === "#top") {
+        e.preventDefault();
+        smoothScrollTo(0, 0);
+      }
+    });
+  }
+
+  /* ---------- Steps 连接线激活 ---------- */
+  var stepsWrap = document.querySelector(".steps");
+  if (stepsWrap && "IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) {
+          stepsWrap.classList.add("is-active");
+          io.unobserve(stepsWrap);
+        }
+      });
+    }, { threshold: 0.4 });
+    io.observe(stepsWrap);
+  }
+
+  /* ---------- 版本号打字机 ---------- */
+  function typeText(id, text, speed) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = "";
+    var i = 0;
+    var t = setInterval(function () {
+      if (i >= text.length) { clearInterval(t); return; }
+      el.textContent += text.charAt(i++);
+    }, speed || 50);
+  }
 })();
 </script>
 </body>
