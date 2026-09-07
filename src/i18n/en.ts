@@ -92,7 +92,7 @@ export default {
     stackValue: "Tauri 2 · Vue 3 · Python (build123d + Shapely) · three.js",
     openRepo: "Open GitHub Repo",
     submitIssue: "Submit Issue",
-    openAuthor: "Open @NingZiXi",
+    openAuthor: "Open {'@'}NingZiXi",
   },
   preview: {
     insert: "PCB Tray",

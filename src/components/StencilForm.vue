@@ -2,8 +2,6 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
-import type { PadPolygon } from "../lib/gerber/pads";
-import GerberImport from "./GerberImport.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -43,24 +41,10 @@ function toggleNotchSide(s: NotchSide) {
 
 // 高级参数默认折叠:常规流程(Gerber → 导出)用默认值即可
 const showAdvanced = ref(false);
-
-function onStencilDetected(payload: {
-  outlinePoints: Array<[number, number]>;
-  topPads: PadPolygon[];
-  bottomPads: PadPolygon[];
-  width: number;
-  height: number;
-}) {
-  store.applyStencilGerber(payload.width, payload.height, payload.outlinePoints, payload.topPads, payload.bottomPads);
-}
 </script>
 
 <template>
   <div class="stencil-form">
-    <!-- 导入锡膏层 -->
-    <div class="section-label">{{ t('stencil.import') }}</div>
-    <GerberImport mode="stencil" @stencil-detected="onStencilDetected" />
-
     <!-- 钢网参数 -->
     <div class="section-label">{{ t('stencil.params') }}</div>
 

@@ -55,30 +55,58 @@ interface DisplayResult {
 const display = computed<DisplayResult | null>(() => {
   if (props.mode === "stencil") {
     const r = stencil.result.value;
-    if (!r) return null;
+    if (r) {
+      return {
+        width: r.width,
+        height: r.height,
+        filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
+        outlinePoints: r.outlinePoints,
+        holes: r.outlineHoles,
+        padCount: r.padCount,
+        topPadCount: r.topPads.length,
+        bottomPadCount: r.bottomPads.length,
+        skipped: r.skipped,
+      };
+    }
+    // fallback: stencil 没有结果时,回退到 outline 的板框预览
+    const o = outline.result.value;
+    if (o) {
+      return {
+        width: o.width,
+        height: o.height,
+        filename: o.filename,
+        outlinePoints: o.outlinePoints,
+        holes: o.holes,
+        bbox: { units: o.bbox.units },
+        parse: { arcsLinearized: o.parse.arcsLinearized },
+      };
+    }
+    return null;
+  }
+  const r = outline.result.value;
+  if (r) {
     return {
       width: r.width,
       height: r.height,
-      filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
+      filename: r.filename,
       outlinePoints: r.outlinePoints,
-      holes: r.outlineHoles,
-      padCount: r.padCount,
-      topPadCount: r.topPads.length,
-      bottomPadCount: r.bottomPads.length,
-      skipped: r.skipped,
+      holes: r.holes,
+      bbox: { units: r.bbox.units },
+      parse: { arcsLinearized: r.parse.arcsLinearized },
     };
   }
-  const r = outline.result.value;
-  if (!r) return null;
-  return {
-    width: r.width,
-    height: r.height,
-    filename: r.filename,
-    outlinePoints: r.outlinePoints,
-    holes: r.holes,
-    bbox: { units: r.bbox.units },
-    parse: { arcsLinearized: r.parse.arcsLinearized },
-  };
+  // fallback: jig 模式没有 outline 结果时,回退到 stencil 的板框
+  const s = stencil.result.value;
+  if (s) {
+    return {
+      width: s.width,
+      height: s.height,
+      filename: [s.topPasteFile, s.bottomPasteFile].filter(Boolean).join(" + "),
+      outlinePoints: s.outlinePoints,
+      holes: s.outlineHoles,
+    };
+  }
+  return null;
 });
 
 const fileInput = ref<HTMLInputElement | null>(null);

@@ -457,13 +457,12 @@ onBeforeUnmount(() => {
           />
         </div>
 
-        <!-- Gerber Import (jig mode) -->
-        <template v-if="appMode === 'jig'">
+        <!-- Gerber Import (两种模式共用) -->
         <div id="slot-gerber" class="card-slot" :style="slotStyle('gerber')">
           <div class="slot-header" @click="toggleCollapse('gerber')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="1">1</span>
-              <span class="slot-title">{{ t('cards.gerber') }}</span>
+              <span class="slot-title">{{ appMode === 'stencil' ? t('stencil.import') : t('cards.gerber') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.gerber }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -480,6 +479,9 @@ onBeforeUnmount(() => {
             @dblclick="onHandleDblClick('gerber')"
           />
         </div>
+
+        <!-- Gerber Import (jig mode) -->
+        <template v-if="appMode === 'jig'">
 
         <!-- Config Form -->
         <div id="slot-config" class="card-slot" :style="slotStyle('config')">
