@@ -2225,17 +2225,37 @@
   function stopShotTimer() {
     if (shotTimer) { clearInterval(shotTimer); shotTimer = null; }
   }
+  /* 用户与任意 demo 控件交互时，永久暂停自动轮播；
+     mouseleave 触发后延迟 8 秒再恢复，避免切走正在操作的状态 */
+  var demoResumeTimer = null;
+  function pauseShotTimerForInteraction() {
+    stopShotTimer();
+    if (demoResumeTimer) { clearTimeout(demoResumeTimer); demoResumeTimer = null; }
+  }
+  function scheduleResumeShotTimer() {
+    if (demoResumeTimer) clearTimeout(demoResumeTimer);
+    demoResumeTimer = setTimeout(function () {
+      demoResumeTimer = null;
+      startShotTimer();
+    }, 8000);
+  }
   shotItems.forEach(function (item) {
     item.addEventListener("click", function () {
+      pauseShotTimerForInteraction();
       goShot(Number(item.getAttribute("data-shot")));
-      startShotTimer(); // 重置自动播放节拍
     });
   });
   var showcaseEl = document.getElementById("showcase");
   if (showcaseEl) {
-    showcaseEl.addEventListener("mouseenter", stopShotTimer);
-    showcaseEl.addEventListener("mouseleave", startShotTimer);
+    /* 监听 showcase 内部任意交互：暂停轮播，离开 showcase 8 秒后再恢复 */
+    showcaseEl.addEventListener("pointerdown", pauseShotTimerForInteraction, true);
+    showcaseEl.addEventListener("input", pauseShotTimerForInteraction, true);
+    showcaseEl.addEventListener("wheel", pauseShotTimerForInteraction, true);
+    showcaseEl.addEventListener("keydown", pauseShotTimerForInteraction, true);
+    showcaseEl.addEventListener("mouseleave", scheduleResumeShotTimer);
   }
+  /* 任何 shot-demo 内部事件冒泡到 showcase 即暂停；
+     离开 showcase 后 8 秒再恢复 */
   startShotTimer();
 
   /* ==========================================================
