@@ -630,15 +630,35 @@
   }
   /* demo SVG 元素 */
   .d-outline{
-    fill:rgba(90,155,127,.08);stroke:var(--green);stroke-width:2;
+    fill:rgba(90,155,127,.06);stroke:var(--green);stroke-width:2;
     animation:demo-draw 1.1s ease forwards;stroke-dasharray:900;stroke-dashoffset:900;
   }
   @keyframes demo-draw{to{stroke-dashoffset:0}}
+  /* 元器件丝印外框（IC/QFP 位置） */
+  .d-silk{
+    fill:none;stroke:var(--green);stroke-width:.7;stroke-dasharray:1.5,1.5;
+    opacity:.55;
+    animation:silk-fade .8s ease forwards;animation-delay:.9s;opacity:0;
+  }
+  @keyframes silk-fade{to{opacity:.55}}
+  /* 焊盘 = paste 开口：浅绿描边 + 半透白填充 */
   .d-pad{
-    fill:var(--green-accent);opacity:0;
+    fill:rgba(255,255,255,.55);stroke:var(--green);stroke-width:.7;
+    opacity:0;
     animation:pad-pop .5s ease forwards;
   }
-  @keyframes pad-pop{from{opacity:0;transform:scale(.3)}to{opacity:.85;transform:scale(1)}}
+  /* SMD 圆形开口（0805 / 0603） */
+  .d-pad-oval{stroke-width:.75;fill:rgba(255,255,255,.6)}
+  /* SOT-23 / QFN 方形开口 */
+  .d-pad-rect{stroke-width:.7;fill:rgba(255,255,255,.55);rx:.6}
+  /* SOIC / 连接器 长条形开口 — 更显眼，模拟引脚 */
+  .d-pad-long{stroke-width:.65;fill:rgba(255,255,255,.65);rx:.4}
+  /* 焊盘中心十字 — 对准标记 */
+  .d-pad-cross line{
+    stroke:var(--green);stroke-width:.5;opacity:.7;
+    stroke-linecap:round;
+  }
+  @keyframes pad-pop{from{opacity:0;transform:scale(.3)}to{opacity:1;transform:scale(1)}}
   .d-dim{font-size:11px;fill:var(--ink-2);font-weight:700;letter-spacing:.5px}
   .s-jig{fill:none;stroke:var(--ink-2);stroke-width:2;opacity:.45}
   .s-win{fill:rgba(62,125,98,.10);stroke:var(--green);stroke-width:1.5;stroke-dasharray:5,4}
@@ -2274,7 +2294,7 @@
         "G01 X400000 Y400000 D01*",
         "M02*"
       ],
-      dims: "80.0 × 40.0", verts: 4, pads: 128
+      dims: "80.0 × 40.0", verts: 4, pads: 56
     },
     lshape: {
       path: "M40 40 H170 V120 H300 V200 H40 Z",
@@ -2289,7 +2309,7 @@
         "G01 X400000 Y400000 D01*",
         "M02*"
       ],
-      dims: "80.0 × 40.0", verts: 6, pads: 96
+      dims: "80.0 × 40.0", verts: 6, pads: 44
     },
     rounded: {
       path: "M62 40 H278 Q300 40 300 62 V178 Q300 200 278 200 H62 Q40 200 40 178 V62 Q40 40 62 40 Z",
@@ -2306,31 +2326,75 @@
         "G02 X620000 Y400000 I220000 J0 D01*",
         "M02*"
       ],
-      dims: "78.4 × 38.4", verts: 8, pads: 112
+      dims: "78.4 × 38.4", verts: 8, pads: 52
     }
   };
-  // 焊盘阵列（固定 seed，三形状数量不同）
+  // 焊盘阵列：按真实 PCB SMD 风格生成 —— 网格对齐 + 圆形/方形/长方形混合
+  // - 圆形焊盘：0805/0603 SMD pad（占 ~70%）
+  // - 方形焊盘：SOT-23 之类小封装（占 ~20%）
+  // - 长方形焊盘：连接器/SOIC（占 ~10%）
+  // - 全部走 4px 网格，与 Gerber 真实 0.1mm 分辨率对应
+  // - 用 Sutherland-Hodgman 点在多边形内判定，避免飘出板框
+  var POLY = {
+    rect: [[40,40],[300,40],[300,200],[40,200]],
+    /* 与 SHAPES.lshape.path="M40 40 H170 V120 H300 V200 H40 Z" 一致：
+       顺时针 — 左上 (40,40) → 沿顶部到 (170,40) → 沿内沿下到 (170,120) →
+       沿内沿右到 (300,120) → 沿右边下到 (300,200) → 沿底部回 (40,200) → 闭合
+       缺角位于 左上：(40,170) × (40,120) */
+    lshape: [[40,40],[170,40],[170,120],[300,120],[300,200],[40,200]],
+    rounded: null /* 圆角板由 inRounded 单独判定 */
+  };
+
+  /* 与 SHAPES.lshape.path 一致的辅助函数：左上角才是缺角 */
+  function inLShape(x, y) {
+    /* 在下半部分（y ∈ [120, 200]）— 整条都是板的 */
+    if (y >= 120 && y <= 200 && x >= 40 && x <= 300) return true;
+    /* 在左上角块（x ∈ [40, 170]）的上半部分 — 也是板的 */
+    if (x >= 40 && x <= 170 && y >= 40 && y <= 120) return true;
+    /* 其余都是缺角 */
+    return false;
+  }
+  function pointInPolygon(px, py, verts) {
+    var inside = false;
+    for (var i = 0, j = verts.length - 1; i < verts.length; j = i++) {
+      var xi = verts[i][0], yi = verts[i][1];
+      var xj = verts[j][0], yj = verts[j][1];
+      var intersect = ((yi > py) !== (yj > py)) &&
+        (px < (xj - xi) * (py - yi) / (yj - yi + 1e-9) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+  function inRounded(x, y) {
+    var r = 22;
+    var x0 = 40 + r, y0 = 40 + r;
+    var x1 = 300 - r, y1 = 200 - r;
+    if ((x - x0) * (x - x0) + (y - y0) * (y - y0) <= r * r) return true;
+    if ((x - x1) * (x - x1) + (y - y0) * (y - y0) <= r * r) return true;
+    if ((x - x0) * (x - x0) + (y - y1) * (y - y1) <= r * r) return true;
+    if ((x - x1) * (x - x1) + (y - y1) * (y - y1) <= r * r) return true;
+    if (x >= x0 && x <= x1 && y >= 40 && y <= 200) return true;
+    if (x >= 40 && x <= 300 && y >= y0 && y <= y1) return true;
+    return false;
+  }
   function padPoints(shape, n) {
     var pts = [];
+    var verts = POLY[shape];
     var seed = 42;
     function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
-    var inShape = {
-      rect: function (x, y) { return true; },
-      lshape: function (x, y) { return x < 0.45 || y > 0.4; },
-      rounded: function (x, y) {
-        var r = 22 / 260, w = 1 - r;
-        if ((x < r && y < r) && Math.hypot(r - x, r - y) > r) return false;
-        if ((x > w && y < r) && Math.hypot(x - w, r - y) > r) return false;
-        if ((x < r && y > w) && Math.hypot(r - x, y - w) > r) return false;
-        if ((x > w && y > w) && Math.hypot(x - w, y - w) > r) return false;
-        return true;
-      }
-    }[shape];
     var tries = 0;
-    while (pts.length < n && tries < n * 30) {
+    while (pts.length < n && tries < n * 40) {
       tries++;
-      var x = 0.08 + rnd() * 0.84, y = 0.14 + rnd() * 0.72;
-      if (inShape(x, y)) pts.push([x, y, rnd()]);
+      /* 网格对齐：4px 步进（= Gerber 0.1mm 真实采样）*/
+      var gx = Math.floor((40 + 6 + rnd() * 254) / 4) * 4;
+      var gy = Math.floor((40 + 6 + rnd() * 148) / 4) * 4;
+      var inOk = verts ? pointInPolygon(gx, gy, verts) : inRounded(gx, gy);
+      if (!inOk) continue;
+      var w = 2 + Math.floor(rnd() * 9);
+      var roll = rnd();
+      var kind = roll < 0.7 ? "c" : (roll < 0.9 ? "r" : "long");
+      var p = { x: gx, y: gy, kind: kind, w: w };
+      pts.push(p);
     }
     return pts;
   }
@@ -2344,15 +2408,61 @@
     var s = SHAPES[shapeKey];
     if (!s || !gerberSvg) return;
     var pads = padPoints(shapeKey, s.pads);
-    var padEls = pads.map(function (p) {
-      var isRect = p[2] > 0.6;
-      var x = 40 + p[0] * 260, y = 40 + p[1] * 160;
-      return isRect
-        ? '<rect x="' + (x - 2.4).toFixed(1) + '" y="' + (y - 1.7).toFixed(1) + '" width="4.8" height="3.4" rx="0.6" class="d-pad"/>'
-        : '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="' + (1.6 + p[2] * 1.2).toFixed(1) + '" class="d-pad"/>';
-    }).join("");
+    /* 真实 PCB 钢网开孔：paste 开口 = 描边 + 半透白填充；长方形焊盘用于 SOIC 引脚；
+       每个焊盘居中带细十字（对准标记）。三种混合：
+       - oval (70%): 0805 / 0603 类 SMD 圆形开口
+       - rect (20%): SOT-23 / QFN 方形开口
+       - long (10%): SOIC / 连接器 长条形开口  */
+    var padEls = "";
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      var cx = p.x, cy = p.y;
+      var cls = "d-pad d-pad-oval";
+      var shape = "";
+      if (p.kind === "c") {
+        var r = 2.4 + p.w * 0.18;
+        shape = '<circle cx="' + cx + '" cy="' + cy + '" r="' + r.toFixed(1) + '" class="' + cls + '"/>';
+      } else if (p.kind === "r") {
+        cls = "d-pad d-pad-rect";
+        var w = 3.6 + p.w * 0.35, h = 2.6 + p.w * 0.28;
+        shape = '<rect x="' + (cx - w/2).toFixed(1) + '" y="' + (cy - h/2).toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="0.6" class="' + cls + '"/>';
+      } else {
+        cls = "d-pad d-pad-long";
+        var lw = 7.5 + p.w * 0.7, lh = 1.6 + p.w * 0.18;
+        shape = '<rect x="' + (cx - lw/2).toFixed(1) + '" y="' + (cy - lh/2).toFixed(1) + '" width="' + lw.toFixed(1) + '" height="' + lh.toFixed(1) + '" rx="0.4" class="' + cls + '"/>';
+      }
+      /* 居中细十字 — PCB 对位标记，长条形焊盘不画（避免与长条重叠） */
+      var cross = "";
+      if (p.kind !== "long") {
+        cross = '<g class="d-pad-cross" style="--cx:' + cx + ';--cy:' + cy + '"><line x1="' + (cx - 1.2) + '" y1="' + cy + '" x2="' + (cx + 1.2) + '" y2="' + cy + '"/><line x1="' + cx + '" y1="' + (cy - 1.2) + '" x2="' + cx + '" y2="' + (cy + 1.2) + '"/></g>';
+      }
+      padEls += shape + cross;
+    }
+    /* 元器件丝印外框：随机 3-4 个 IC/QFP 区域，让画面更像 PCB */
+    var silks = [];
+    var seed2 = 7;
+    function r2() { seed2 = (seed2 * 16807) % 2147483647; return seed2 / 2147483647; }
+    var verts = POLY[shapeKey];
+    for (var k = 0; k < 4; k++) {
+      var tries2 = 0, placed = false;
+      while (!placed && tries2++ < 60) {
+        var sw = 18 + Math.floor(r2() * 18);
+        var sh = 12 + Math.floor(r2() * 14);
+        var sx = Math.floor((40 + 8 + r2() * (260 - sw)) / 4) * 4;
+        var sy = Math.floor((40 + 8 + r2() * (160 - sh)) / 4) * 4;
+        var ok = verts ? pointInPolygon(sx + sw/2, sy + sh/2, verts) : inRounded(sx + sw/2, sy + sh/2);
+        if (!ok) continue;
+        var verts_ok = verts ? (pointInPolygon(sx, sy, verts) && pointInPolygon(sx + sw, sy, verts) && pointInPolygon(sx, sy + sh, verts) && pointInPolygon(sx + sw, sy + sh, verts)) : (inRounded(sx, sy) && inRounded(sx + sw, sy) && inRounded(sx, sy + sh) && inRounded(sx + sw, sy + sh));
+        if (!verts_ok) continue;
+        silks.push('<rect x="' + sx + '" y="' + sy + '" width="' + sw + '" height="' + sh + '" rx="1.4" class="d-silk"/>');
+        placed = true;
+      }
+    }
+    var silkEls = silks.join("");
     gerberSvg.innerHTML =
-      '<path class="d-outline" d="' + s.path + '"/>' + padEls +
+      '<path class="d-outline" d="' + s.path + '"/>' +
+      silkEls +
+      padEls +
       '<text class="d-dim" x="170" y="224" text-anchor="middle">' + s.dims + ' mm</text>';
     if (gerberCode) {
       gerberCode.innerHTML = s.gerber.map(function (line, i) {
