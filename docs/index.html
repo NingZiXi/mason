@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网</title>
+<meta name="description" content="Mason 是一款开源桌面工具：拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。Windows / macOS / Linux 全平台，内置引擎零配置。" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50' fill='none' stroke='%233E7D62' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='14' r='5' fill='%233E7D62'/%3E%3Ccircle cx='14' cy='50' r='5' fill='%23E07A3C'/%3E%3C/svg%3E" />
+<style>
+  :root{
+    --green:#3E7D62;
+    --green-hover:#4A8A70;
+    --green-active:#32684F;
+    --green-accent:#5A9B7F;
+    --green-light:#E8F1EC;
+    --orange:#E07A3C;
+    --ink:#22302B;
+    --ink-2:#5A6B63;
+    --line:#D8E4DD;
+    --paper:#FDFEFD;
+    --base-blue:#4C6F94;
+    --cover-amber:#D9913D;
+    --radius:14px;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:var(--font);
+    color:var(--ink);
+    background:var(--paper);
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+
+  /* ---------- Nav ---------- */
+  nav{
+    position:sticky;top:0;z-index:50;
+    background:rgba(253,254,253,.88);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+  }
+  .nav-inner{display:flex;align-items:center;gap:12px;height:64px}
+  .nav-logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;letter-spacing:.5px}
+  .nav-logo svg{width:30px;height:30px;display:block}
+  .nav-logo .cn{font-size:12px;font-weight:500;color:var(--ink-2);letter-spacing:3px;margin-left:2px}
+  .nav-links{margin-left:auto;display:flex;align-items:center;gap:26px;font-size:14.5px;color:var(--ink-2)}
+  .nav-links a:hover{color:var(--green)}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    border-radius:10px;font-weight:600;cursor:pointer;
+    transition:background .15s ease,transform .15s ease,box-shadow .15s ease;
+    border:1px solid transparent;
+  }
+  .btn-github{
+    padding:8px 16px;font-size:14px;color:var(--ink);
+    border-color:var(--line);background:#fff;
+  }
+  .btn-github:hover{border-color:var(--green-accent);color:var(--green)}
+  .btn-primary{
+    padding:14px 28px;font-size:16px;color:#fff;background:var(--green);
+    box-shadow:0 4px 14px rgba(62,125,98,.25);
+  }
+  .btn-primary:hover{background:var(--green-hover);transform:translateY(-1px)}
+  .btn-primary:active{background:var(--green-active)}
+  .btn-ghost{
+    padding:13px 22px;font-size:15px;color:var(--green);
+    border-color:var(--green-accent);background:#fff;
+  }
+  .btn-ghost:hover{background:var(--green-light)}
+
+  /* ---------- Hero ---------- */
+  .hero{position:relative;overflow:hidden;border-bottom:1px solid var(--line)}
+  .hero-bg{position:absolute;inset:0;pointer-events:none;opacity:.5}
+  .hero-inner{
+    position:relative;display:flex;align-items:center;gap:56px;
+    padding:84px 0 92px;
+  }
+  .hero-text{flex:1.1;min-width:0}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:13px;letter-spacing:2px;color:var(--green);
+    background:var(--green-light);border:1px solid var(--line);
+    padding:5px 14px;border-radius:999px;font-weight:600;
+  }
+  .eyebrow i{width:6px;height:6px;border-radius:50%;background:var(--green)}
+  h1{
+    font-size:46px;line-height:1.25;font-weight:800;letter-spacing:1px;
+    margin:22px 0 16px;
+  }
+  h1 .hl{color:var(--green)}
+  .hero-sub{font-size:17px;color:var(--ink-2);max-width:480px}
+  .hero-sub b{color:var(--ink);font-weight:600}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:34px;align-items:center}
+  .os-row{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .os-chip{
+    display:inline-flex;align-items:center;gap:7px;
+    font-size:13.5px;color:var(--ink-2);
+    border:1px solid var(--line);border-radius:8px;padding:7px 13px;background:#fff;
+    transition:border-color .15s,color .15s;
+  }
+  .os-chip:hover{border-color:var(--green-accent);color:var(--green)}
+  .os-chip.active{border-color:var(--green);color:var(--green);background:var(--green-light);font-weight:600}
+  .hero-ver{font-size:13px;color:var(--ink-2);margin-top:16px}
+  .hero-ver a{color:var(--green);border-bottom:1px dashed var(--green-accent)}
+  .hero-visual{flex:.9;display:flex;justify-content:center;min-width:0}
+  .hero-visual svg{max-width:100%;height:auto}
+
+  /* ---------- Sections ---------- */
+  section{padding:88px 0}
+  .sec-head{text-align:center;max-width:640px;margin:0 auto 56px}
+  .sec-tag{font-size:13px;letter-spacing:3px;color:var(--green);font-weight:700}
+  .sec-head h2{font-size:32px;font-weight:800;margin:12px 0 12px;letter-spacing:1px}
+  .sec-head p{color:var(--ink-2);font-size:16px}
+
+  /* steps */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+  .step{
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    padding:30px 26px;position:relative;
+    transition:transform .2s,box-shadow .2s,border-color .2s;
+  }
+  .step:hover{transform:translateY(-4px);box-shadow:0 10px 30px rgba(62,125,98,.10);border-color:var(--green-accent)}
+  .step-num{
+    width:38px;height:38px;border-radius:10px;background:var(--green-light);
+    color:var(--green);font-weight:800;font-size:17px;
+    display:flex;align-items:center;justify-content:center;margin-bottom:18px;
+  }
+  .step h3{font-size:18px;font-weight:700;margin-bottom:8px}
+  .step p{font-size:14.5px;color:var(--ink-2)}
+
+  /* modes */
+  .modes-sec{background:var(--green-light);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .mode{
+    background:#fff;border:1px solid var(--line);border-radius:var(--radius);
+    padding:34px 30px;
+  }
+  .mode-badge{
+    display:inline-block;font-size:12.5px;font-weight:700;letter-spacing:1px;
+    padding:4px 12px;border-radius:999px;margin-bottom:16px;
+  }
+  .mode-jig .mode-badge{background:#EDF2F7;color:var(--base-blue)}
+  .mode-stencil .mode-badge{background:#FDF1E4;color:#B87530}
+  .mode h3{font-size:21px;font-weight:800;margin-bottom:10px}
+  .mode p{font-size:14.5px;color:var(--ink-2);margin-bottom:18px}
+  .mode ul{list-style:none}
+  .mode li{
+    font-size:14.5px;color:var(--ink);padding:7px 0 7px 26px;position:relative;
+    border-top:1px dashed var(--line);
+  }
+  .mode li::before{
+    content:"";position:absolute;left:2px;top:14px;width:12px;height:7px;
+    border-left:2.5px solid var(--green);border-bottom:2.5px solid var(--green);
+    transform:rotate(-45deg);
+  }
+
+  /* features */
+  .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+  .feat{
+    border:1px solid var(--line);border-radius:var(--radius);
+    padding:28px 24px;background:#fff;
+    transition:transform .2s,box-shadow .2s,border-color .2s;
+  }
+  .feat:hover{transform:translateY(-4px);box-shadow:0 10px 30px rgba(62,125,98,.10);border-color:var(--green-accent)}
+  .feat-icon{
+    width:44px;height:44px;border-radius:11px;background:var(--green-light);
+    display:flex;align-items:center;justify-content:center;margin-bottom:16px;
+  }
+  .feat-icon svg{width:22px;height:22px;stroke:var(--green);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .feat h3{font-size:16.5px;font-weight:700;margin-bottom:6px}
+  .feat p{font-size:14px;color:var(--ink-2)}
+
+  /* download */
+  .dl-sec{background:var(--green);color:#fff;position:relative;overflow:hidden}
+  .dl-sec .sec-tag{color:#BFE0D0}
+  .dl-sec .sec-head h2{color:#fff}
+  .dl-sec .sec-head p{color:#D6EAE0}
+  .dl-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;max-width:900px;margin:0 auto}
+  .dl-card{
+    background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);
+    border-radius:var(--radius);padding:28px 24px;text-align:center;color:#fff;
+    transition:background .2s,transform .2s;
+    display:flex;flex-direction:column;align-items:center;gap:6px;
+  }
+  .dl-card:hover{background:rgba(255,255,255,.16);transform:translateY(-3px)}
+  .dl-card svg{width:34px;height:34px;margin-bottom:8px;fill:#fff}
+  .dl-card .os-name{font-size:18px;font-weight:700}
+  .dl-card .os-file{font-size:12.5px;color:#C9E4D7;min-height:20px}
+  .dl-card .os-btn{
+    margin-top:14px;font-size:14px;font-weight:600;color:var(--green-active);
+    background:#fff;border-radius:8px;padding:8px 22px;
+  }
+  .dl-card .os-btn:hover{background:var(--green-light)}
+  .dl-note{text-align:center;font-size:13px;color:#C9E4D7;margin-top:28px}
+  .dl-note a{color:#fff;border-bottom:1px dashed rgba(255,255,255,.5)}
+
+  /* faq */
+  .faq{max-width:760px;margin:0 auto}
+  details{
+    border:1px solid var(--line);border-radius:12px;background:#fff;
+    margin-bottom:14px;overflow:hidden;
+  }
+  summary{
+    cursor:pointer;list-style:none;padding:18px 24px;
+    font-weight:600;font-size:15.5px;display:flex;align-items:center;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::after{
+    content:"+";margin-left:auto;font-size:20px;color:var(--green);font-weight:400;
+    transition:transform .2s;
+  }
+  details[open] summary::after{transform:rotate(45deg)}
+  details p{padding:0 24px 20px;font-size:14.5px;color:var(--ink-2)}
+  details code{background:var(--green-light);padding:1px 6px;border-radius:5px;font-size:13px}
+
+  /* footer */
+  footer{border-top:1px solid var(--line);padding:44px 0 40px;background:#fff}
+  .foot{display:flex;flex-wrap:wrap;gap:24px;align-items:center}
+  .foot-brand{display:flex;align-items:center;gap:10px;font-weight:700}
+  .foot-brand svg{width:26px;height:26px}
+  .foot-links{display:flex;gap:22px;margin-left:auto;font-size:14px;color:var(--ink-2)}
+  .foot-links a:hover{color:var(--green)}
+  .foot-copy{width:100%;font-size:13px;color:var(--ink-2);margin-top:6px}
+
+  @media (max-width:900px){
+    .hero-inner{flex-direction:column;padding:64px 0 72px;gap:44px}
+    h1{font-size:34px}
+    .steps,.feats,.dl-cards{grid-template-columns:1fr}
+    .modes{grid-template-columns:1fr}
+    .nav-links .hide-m{display:none}
+    section{padding:64px 0}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ Nav ============ -->
+<nav>
+  <div class="wrap nav-inner">
+    <a class="nav-logo" href="#top">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="#3E7D62" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="14" cy="14" r="5" fill="#3E7D62"/>
+        <circle cx="14" cy="50" r="5" fill="#E07A3C"/>
+      </svg>
+      Mason<span class="cn">泥瓦匠</span>
+    </a>
+    <div class="nav-links">
+      <a href="#workflow" class="hide-m">工作流程</a>
+      <a href="#modes" class="hide-m">两种模式</a>
+      <a href="#features" class="hide-m">特性</a>
+      <a href="#download" class="hide-m">下载</a>
+      <a class="btn btn-github" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- ============ Hero ============ -->
+<header class="hero" id="top">
+  <div class="hero-bg">
+    <svg width="100%" height="100%" preserveAspectRatio="xMidYMid slice" viewBox="0 0 1200 600">
+      <g fill="none" stroke="#3E7D62" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity=".07">
+        <path d="M-40 120 L300 120 L300 200 L160 200 L160 280 L420 280"/>
+        <path d="M1240 420 L940 420 L940 340 L1080 340 L1080 260 L820 260"/>
+        <path d="M-40 520 L200 520 L200 460 L340 460"/>
+        <path d="M1240 80 L1000 80 L1000 150 L880 150"/>
+      </g>
+      <g opacity=".12">
+        <circle cx="300" cy="120" r="7" fill="#3E7D62"/>
+        <circle cx="940" cy="420" r="7" fill="#E07A3C"/>
+        <circle cx="200" cy="520" r="7" fill="#3E7D62"/>
+        <circle cx="1000" cy="80" r="7" fill="#3E7D62"/>
+      </g>
+    </svg>
+  </div>
+  <div class="wrap hero-inner">
+    <div class="hero-text">
+      <span class="eyebrow"><i></i>开源 · 免费 · 跨平台</span>
+      <h1>Gerber 到 3D 打印 —<br /><span class="hl">两种模式全搞定</span></h1>
+      <p class="hero-sub">
+        从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具三件套</b>（底座 / 托盘 / 顶盖），
+        也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。
+      </p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" id="hero-primary" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span id="hero-primary-label">免费下载</span>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener">查看源码</a>
+      </div>
+      <div class="os-row" id="os-row">
+        <a class="os-chip" data-os="windows" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+          Windows
+        </a>
+        <a class="os-chip" data-os="mac" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.56-1.702"/></svg>
+          macOS
+        </a>
+        <a class="os-chip" data-os="linux" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          Linux
+        </a>
+      </div>
+      <p class="hero-ver" id="hero-ver">最新版本：<a href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">前往 Releases 查看</a></p>
+    </div>
+
+    <!-- 两种模式核心产物（部件色与 App 内一致） -->
+    <div class="hero-visual" aria-hidden="true">
+      <svg viewBox="0 0 520 420" width="500">
+        <defs>
+          <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M20 0 H0 V20" fill="none" stroke="#D8E4DD" stroke-width="1"/>
+          </pattern>
+        </defs>
+        <rect x="6" y="6" width="508" height="408" rx="16" fill="url(#grid)" opacity=".5"/>
+
+        <!-- ========== 左侧:夹具模式三件套爆炸图 ========== -->
+        <!-- 模式标签 -->
+        <g font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
+          <rect x="18" y="18" width="110" height="20" rx="10" fill="#EDF2F7"/>
+          <text x="24" y="32" fill="#4C6F94">JIG · 钢网夹具</text>
+        </g>
+        <!-- 虚线对齐 -->
+        <g stroke="#5A9B7F" stroke-width="1.2" stroke-dasharray="4 5" opacity=".4">
+          <line x1="100" y1="72" x2="100" y2="370"/>
+          <line x1="250" y1="72" x2="250" y2="370"/>
+        </g>
+        <!-- cover 顶盖 (顶面 y=102) -->
+        <g>
+          <polygon points="100,102 175,68 250,102 175,136" fill="#E3A052"/>
+          <polygon points="100,102 175,136 175,154 100,120" fill="#D9913D"/>
+          <polygon points="175,136 250,102 250,120 175,154" fill="#B87530"/>
+          <!-- A 面窗口开口 -->
+          <polygon points="138,102 175,84 212,102 175,120" fill="#FDFEFD"/>
+        </g>
+        <!-- insert 托盘 (顶面 y=202) -->
+        <g>
+          <polygon points="100,202 175,168 250,202 175,236" fill="#69AB8C"/>
+          <polygon points="100,202 175,236 175,254 100,220" fill="#5A9B7F"/>
+          <polygon points="175,236 250,202 250,220 175,254" fill="#487E66"/>
+          <!-- PCB 槽凹陷 -->
+          <polygon points="128,202 175,180 222,202 175,224" fill="#2D5A4B" opacity=".7"/>
+          <!-- 定位柱 -->
+          <circle cx="112" cy="210" r="3" fill="#FDFEFD"/>
+          <circle cx="238" cy="210" r="3" fill="#FDFEFD"/>
+        </g>
+        <!-- base 底座 (顶面 y=302) -->
+        <g>
+          <polygon points="100,302 175,268 250,302 175,336" fill="#5D7FA3"/>
+          <polygon points="100,302 175,336 175,354 100,320" fill="#4C6F94"/>
+          <polygon points="175,336 250,302 250,320 175,354" fill="#3D5A79"/>
+          <!-- 螺丝孔 -->
+          <g fill="#3D5A79">
+            <circle cx="114" cy="308" r="3.5"/>
+            <circle cx="236" cy="308" r="3.5"/>
+            <circle cx="140" cy="326" r="3"/>
+            <circle cx="210" cy="326" r="3"/>
+          </g>
+        </g>
+        <!-- 部件标注 -->
+        <g font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
+          <text x="268" y="110">cover 顶盖</text>
+          <text x="268" y="210">insert 托盘</text>
+          <text x="268" y="316">base 底座</text>
+        </g>
+
+        <!-- ========== 右侧:钢网模式一体式钢网 ========== -->
+        <!-- 模式标签 -->
+        <g font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
+          <rect x="270" y="18" width="110" height="20" rx="10" fill="#FDF1E4"/>
+          <text x="276" y="32" fill="#B87530">STENCIL · PCB 钢网</text>
+        </g>
+        <!-- 一体式钢网等距视图 (顶面 y=220, 中心 x=400) -->
+        <!-- 顶面 -->
+        <polygon points="310,220 400,172 490,220 400,268" fill="#69AB8C"/>
+        <!-- 右侧面 -->
+        <polygon points="400,268 490,220 490,236 400,284" fill="#487E66"/>
+        <!-- 左侧面 -->
+        <polygon points="310,220 400,268 400,284 310,236" fill="#3E7D62"/>
+        <!-- PCB 卡槽凹陷 (顶面上的小矩形) -->
+        <polygon points="338,220 400,186 462,220 400,254" fill="#5A9B7F"/>
+        <!-- 焊盘开孔阵列 (小圆) -->
+        <g fill="#FDFEFD" opacity=".85">
+          <circle cx="340" cy="230" r="1.6"/>
+          <circle cx="358" cy="238" r="1.4"/>
+          <circle cx="376" cy="242" r="1.8"/>
+          <circle cx="394" cy="244" r="1.2"/>
+          <circle cx="412" cy="242" r="1.8"/>
+          <circle cx="430" cy="238" r="1.4"/>
+          <circle cx="448" cy="230" r="1.6"/>
+          <circle cx="349" cy="218" r="1.2"/>
+          <circle cx="367" cy="224" r="1.5"/>
+          <circle cx="385" cy="228" r="1.3"/>
+          <circle cx="403" cy="230" r="1.7"/>
+          <circle cx="421" cy="228" r="1.3"/>
+          <circle cx="439" cy="224" r="1.5"/>
+          <circle cx="457" cy="218" r="1.2"/>
+          <circle cx="356" cy="206" r="1.5"/>
+          <circle cx="374" cy="210" r="1.3"/>
+          <circle cx="392" cy="212" r="1.8"/>
+          <circle cx="410" cy="212" r="1.8"/>
+          <circle cx="428" cy="210" r="1.3"/>
+          <circle cx="446" cy="206" r="1.5"/>
+        </g>
+        <!-- 一体式钢网标注 -->
+        <g font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
+          <text x="500" y="226">一体式 PCB 钢网</text>
+        </g>
+        <!-- 箭头连接线 -->
+        <g stroke="#E07A3C" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-dasharray="3 3" opacity=".6">
+          <path d="M476 230 L500 226"/>
+        </g>
+
+        <!-- ========== 底部 logo 蛇形线点缀 ========== -->
+        <path d="M240 388 L286 388 L286 376 L254 376 L254 364 L296 364" fill="none" stroke="#3E7D62" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".8"/>
+        <circle cx="240" cy="388" r="4" fill="#3E7D62"/>
+        <circle cx="296" cy="364" r="4" fill="#E07A3C"/>
+      </svg>
+    </div>
+  </div>
+</header>
+
+<!-- ============ Workflow ============ -->
+<section id="workflow">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-tag">WORKFLOW</div>
+      <h2>拖入 → 预览 → 导出</h2>
+      <p>核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>拖入 Gerber ZIP</h3>
+        <p>自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>实时 3D 预览</h3>
+        <p>参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>导出 STL / STEP</h3>
+        <p>一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Modes ============ -->
+<section id="modes" class="modes-sec">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-tag">TWO MODES</div>
+      <h2>两种模式，覆盖原型到量产</h2>
+      <p>从快速原型验证到小批量生产，选择最适合你场景的工作方式。</p>
+    </div>
+    <div class="modes">
+      <div class="mode mode-jig">
+        <span class="mode-badge">JIG MODE</span>
+        <h3>钢网夹具模式</h3>
+        <p>生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。</p>
+        <ul>
+          <li>三件套参数化生成，免螺丝一体定位柱</li>
+          <li>螺丝布局自动补位，M2 / M2.5 / M3 规格联动</li>
+          <li>夹具尺寸按钢网自动计算，同尺寸 PCB 复用</li>
+        </ul>
+      </div>
+      <div class="mode mode-stencil">
+        <span class="mode-badge">STENCIL MODE</span>
+        <h3>PCB 钢网模式</h3>
+        <p>根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。</p>
+        <ul>
+          <li>焊盘开孔与板框坐标精确对齐</li>
+          <li>焊盘方形化、测试点过滤，匹配钢网厂工艺</li>
+          <li>密脚错排、大孔开网格等后处理选项</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Features ============ -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-tag">FEATURES</div>
+      <h2>为锡膏印刷而生的细节</h2>
+      <p>自研 RS-274X 解析器 + build123d 参数化 CAD 内核，把每个环节做到开箱即用。</p>
+    </div>
+    <div class="feats">
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8M8 17h5"/></svg></div>
+        <h3>自研 Gerber 解析器</h3>
+        <p>支持 %LM 镜像 / %LR 旋转 / %LS 缩放图层变换，G02/G03 弧线，区域填充与宏光圈。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div>
+        <h3>参数化 CAD 内核</h3>
+        <p>基于 build123d + Shapely，异形板框、沉孔、定位柱、梯形取放缺口全部参数可控。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg></div>
+        <h3>实时 3D 预览</h3>
+        <p>three.js 按需渲染 + 参数哈希缓存，多部件后台预热，2400+ 焊盘约 3 秒完成。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>
+        <h3>内置引擎零配置</h3>
+        <p>发布包内嵌完整 Python 运行时，最终用户无需安装任何环境，双击即用。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+        <h3>零云依赖</h3>
+        <p>Gerber 解析与 CAD 生成全部在本地完成，设计文件不出你的电脑，离线可用。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+        <h3>中英双语 · 开源</h3>
+        <p>MIT 协议完全开源，Tauri 2 + Vue 3 + Rust 技术栈，欢迎 Issue 与 PR。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Download ============ -->
+<section id="download" class="dl-sec">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-tag">DOWNLOAD</div>
+      <h2>下载 Mason</h2>
+      <p id="dl-ver-text">三个平台均提供预编译安装包，开箱即用。</p>
+    </div>
+    <div class="dl-cards">
+      <div class="dl-card" data-os="windows">
+        <svg viewBox="0 0 24 24"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+        <div class="os-name">Windows</div>
+        <div class="os-file">.msi 安装包 · Win 10/11</div>
+        <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
+      </div>
+      <div class="dl-card" data-os="mac">
+        <svg viewBox="0 0 24 24"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.56-1.702"/></svg>
+        <div class="os-name">macOS</div>
+        <div class="os-file">.dmg · Apple Silicon</div>
+        <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
+      </div>
+      <div class="dl-card" data-os="linux">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <div class="os-name">Linux</div>
+        <div class="os-file">.deb / .rpm · Debian/RHEL 系</div>
+        <a class="os-btn" href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener">下载</a>
+      </div>
+    </div>
+    <p class="dl-note">全部版本与更新日志请访问 <a href="https://github.com/NingZiXi/mason/releases" target="_blank" rel="noopener">GitHub Releases</a> · 遇到问题？<a href="https://github.com/NingZiXi/mason/issues" target="_blank" rel="noopener">提交 Issue</a></p>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="sec-tag">FAQ</div>
+      <h2>常见问题</h2>
+    </div>
+    <div class="faq">
+      <details>
+        <summary>需要什么运行环境？</summary>
+        <p>发布版自带内置 Python 引擎，无需安装任何环境，下载安装即可使用。仅开发者从源码运行时才需要 Node.js 20+ / Rust 1.77+ / Python 3.11+。</p>
+      </details>
+      <details>
+        <summary>支持哪些 Gerber 文件？</summary>
+        <p>支持嘉立创 / JLCPCB 导出的 Gerber ZIP。板框识别依赖 <code>.GKO</code> / <code>Edge.Cuts</code> / <code>.GM1</code> 文件；钢网模式还需要 <code>.GTP</code> / <code>.GBP</code> 锡膏层。文件命名特殊时可在导入界面手动选择。</p>
+      </details>
+      <details>
+        <summary>钢网焊盘和 PCB 焊盘对不上怎么办？</summary>
+        <p>Mason 默认对长圆形焊盘做方形化处理（匹配钢网厂工艺），并按 PCB 板框居中对齐。若仍有偏差，请检查 Gerber 坐标系是否与板框层一致。</p>
+      </details>
+      <details>
+        <summary>导出的文件在哪里？</summary>
+        <p>导出时会在所选目录创建 <code>mason_export_&lt;时间戳&gt;/</code> 子文件夹，所有 STL / STEP 文件放入其中，避免与现有文件混淆。</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Footer ============ -->
+<footer>
+  <div class="wrap foot">
+    <div class="foot-brand">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="#3E7D62" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="14" cy="14" r="5" fill="#3E7D62"/>
+        <circle cx="14" cy="50" r="5" fill="#E07A3C"/>
+      </svg>
+      Mason · 泥瓦匠
+    </div>
+    <div class="foot-links">
+      <a href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/NingZiXi/mason/releases" target="_blank" rel="noopener">更新日志</a>
+      <a href="https://github.com/NingZiXi/mason/issues" target="_blank" rel="noopener">反馈问题</a>
+      <a href="https://github.com/NingZiXi" target="_blank" rel="noopener">作者主页</a>
+    </div>
+    <p class="foot-copy">© <span id="year">2026</span> Mason · MIT License · 从 Gerber 到 3D 打印钢网</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var RELEASES = "https://github.com/NingZiXi/mason/releases/latest";
+  var API = "https://api.github.com/repos/NingZiXi/mason/releases/latest";
+
+  /* 当前年份 */
+  document.getElementById("year").textContent = new Date().getFullYear();
+
+  /* 操作系统检测 */
+  function detectOS() {
+    var ua = navigator.userAgent;
+    if (/Windows/i.test(ua)) return "windows";
+    if (/Mac OS X|Macintosh/i.test(ua)) return "mac";
+    if (/Linux/i.test(ua)) return "linux";
+    return "windows";
+  }
+  var os = detectOS();
+
+  /* 高亮推荐平台 */
+  var chips = document.querySelectorAll(".os-chip");
+  chips.forEach(function (c) {
+    if (c.dataset.os === os) c.classList.add("active");
+  });
+  var osName = { windows: "Windows", mac: "macOS", linux: "Linux" };
+  document.getElementById("hero-primary-label").textContent =
+    "免费下载 · " + osName[os];
+
+  /* 拉取最新 Release，绑定真实安装包直链 */
+  function fmtSize(bytes) {
+    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  }
+  function matchAsset(assets, re) {
+    for (var i = 0; i < assets.length; i++) {
+      if (re.test(assets[i].name)) return assets[i];
+    }
+    return null;
+  }
+  fetch(API)
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (!data || !data.assets) return;
+      var ver = data.tag_name || "";
+      var map = {
+        windows: matchAsset(data.assets, /\.msi$/i) ||
+                 matchAsset(data.assets, /setup.*\.exe$/i) ||
+                 matchAsset(data.assets, /\.exe$/i),
+        mac: matchAsset(data.assets, /aarch64.*\.dmg$/i) ||
+             matchAsset(data.assets, /\.dmg$/i),
+        linux: matchAsset(data.assets, /\.deb$/i) ||
+               matchAsset(data.assets, /\.rpm$/i)
+      };
+      /* 下载卡片与系统 chip 换直链 */
+      Object.keys(map).forEach(function (key) {
+        var a = map[key];
+        if (!a) return;
+        document
+          .querySelectorAll('.dl-card[data-os="' + key + '"] .os-btn, .os-chip[data-os="' + key + '"]')
+          .forEach(function (el) { el.href = a.browser_download_url; });
+        var fileEl = document.querySelector('.dl-card[data-os="' + key + '"] .os-file');
+        if (fileEl) fileEl.textContent = a.name + " · " + fmtSize(a.size);
+      });
+      /* Hero 主按钮指向当前平台安装包 */
+      if (map[os]) {
+        document.getElementById("hero-primary").href = map[os].browser_download_url;
+      }
+      if (ver) {
+        document.getElementById("hero-ver").innerHTML =
+          '最新版本：<a href="' + RELEASES + '" target="_blank" rel="noopener">' + ver + "</a></p>";
+        document.getElementById("dl-ver-text").textContent =
+          "当前版本 " + ver + " · 三个平台均提供预编译安装包，开箱即用。";
+      }
+    })
+    .catch(function () { /* 离线或限流时保持 Releases 页链接 */ });
+})();
+</script>
+</body>
+</html>
