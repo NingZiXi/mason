@@ -2345,7 +2345,7 @@
     rounded: null /* 圆角板由 inRounded 单独判定 */
   };
 
-  /* 与 SHAPES.lshape.path 一致的辅助函数：左上角才是缺角 */
+  /* 与 SHAPES.lshape.path 一致的辅助函数：缺角位于右上 (170,40)~(300,120) */
   function inLShape(x, y) {
     /* 在下半部分（y ∈ [120, 200]）— 整条都是板的 */
     if (y >= 120 && y <= 200 && x >= 40 && x <= 300) return true;
@@ -2377,23 +2377,58 @@
     if (x >= 40 && x <= 300 && y >= y0 && y <= y1) return true;
     return false;
   }
+  /* 各 pad 类型在网格坐标系 (340×260 画布) 中预估的 bounding 半径 */
+  function padHalfWidth(p) {
+    /* 半宽 = pad 本体半径 + 描边 margin；用于边框 / 重叠检查 */
+    if (p.kind === "c")  return 2.4 + p.w * 0.18 + 0.6;       /* 圆形 */
+    if (p.kind === "r")  return Math.max(1.8 + p.w * 0.18, 1.3 + p.w * 0.14) + 0.6; /* 方形取长边半长 */
+    return (7.5 + p.w * 0.7) / 2 + 0.6;                       /* 长条取宽方向半长 */
+  }
+  /* 给定中心点 (cx,cy)，检查是否：①bbox 4 角 + 中心都在板内 ②与已放置 pad 中心距离 ≥ sum(halfs)+GAP */
+  function canPlace(cx, cy, hw, pts, verts) {
+    var GAP = 2;            /* 与邻居 pad 中心距 ≥ sum(hw) + GAP */
+    /* ① 外接矩形安全框（覆盖所有形状的外接矩形 40,40–300,200）*/
+    if (cx - hw < 40 || cx + hw > 300) return false;
+    if (cy - hw < 40 || cy + hw > 200) return false;
+    /* ② 板内判定：用对应形状的 helper 测中心 + 4 个 bbox 角 */
+    var test;
+    if (verts) {
+      test = function (x, y) { return pointInPolygon(x, y, verts); };
+    } else {
+      test = function (x, y) { return inRounded(x, y); };
+    }
+    if (!test(cx, cy)) return false;
+    if (!test(cx - hw, cy) || !test(cx + hw, cy)) return false;
+    if (!test(cx, cy - hw) || !test(cx, cy + hw)) return false;
+    /* ③ 邻居距离 */
+    for (var i = 0; i < pts.length; i++) {
+      var q = pts[i];
+      var dx = cx - q.x, dy = cy - q.y;
+      var d2 = dx * dx + dy * dy;
+      var minD = hw + q.hw + GAP;
+      if (d2 < minD * minD) return false;
+    }
+    return true;
+  }
   function padPoints(shape, n) {
     var pts = [];
     var verts = POLY[shape];
     var seed = 42;
     function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
     var tries = 0;
-    while (pts.length < n && tries < n * 40) {
+    var maxTries = n * 200;
+    while (pts.length < n && tries < maxTries) {
       tries++;
       /* 网格对齐：4px 步进（= Gerber 0.1mm 真实采样）*/
-      var gx = Math.floor((40 + 6 + rnd() * 254) / 4) * 4;
-      var gy = Math.floor((40 + 6 + rnd() * 148) / 4) * 4;
-      var inOk = verts ? pointInPolygon(gx, gy, verts) : inRounded(gx, gy);
-      if (!inOk) continue;
+      var gx = Math.floor((40 + 8 + rnd() * 244) / 4) * 4;
+      var gy = Math.floor((40 + 8 + rnd() * 144) / 4) * 4;
+      /* 先随机定类型 + 大小，决定 half-width */
       var w = 2 + Math.floor(rnd() * 9);
       var roll = rnd();
       var kind = roll < 0.7 ? "c" : (roll < 0.9 ? "r" : "long");
       var p = { x: gx, y: gy, kind: kind, w: w };
+      p.hw = padHalfWidth(p);
+      if (!canPlace(gx, gy, p.hw, pts, verts)) continue;
       pts.push(p);
     }
     return pts;
