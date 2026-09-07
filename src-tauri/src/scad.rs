@@ -222,12 +222,39 @@ fn resolve_python(app: Option<&AppHandle>, configured: Option<&str>) -> Option<S
     bundled_python(app).or_else(openscad_detect::detect_python)
 }
 
-/// 项目根目录(tauri dev 时 cwd 在 src-tauri,用 CARGO_MANIFEST_DIR 上溯一层)
-fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+/// 查找 Python 脚本路径
+/// 开发模式:项目根目录 python/jig_generator.py(CARGO_MANIFEST_DIR 编译期常量)
+/// 发布模式:resource_dir/resources/scripts/jig_generator.py
+fn find_script(app: &AppHandle) -> PathBuf {
+    // 开发模式:CARGO_MANIFEST_DIR 上溯一层 = 项目根目录
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
+        .join("python")
+        .join("jig_generator.py");
+    if dev.exists() {
+        return dev;
+    }
+    // 发布模式:resource_dir
+    if let Ok(dir) = app.path().resource_dir() {
+        for rel in ["resources/scripts", "scripts"] {
+            let p = dir.join(rel).join("jig_generator.py");
+            if p.exists() {
+                return p;
+            }
+        }
+    }
+    // 兜底:exe 同级
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("scripts").join("jig_generator.py");
+            if p.exists() {
+                return p;
+            }
+        }
+    }
+    dev
 }
 
 /// 发送 generate 请求(必要时拉起 server);传输失败时杀掉 server,下次请求重新拉起
@@ -244,7 +271,7 @@ async fn request_generate(
         )
     })?;
 
-    let script_path = project_root().join("python").join("jig_generator.py");
+    let script_path = find_script(app);
     if !script_path.exists() {
         return Err(AppError::Other(format!(
             "Python 脚本不存在: {}。请确认在项目根目录运行",
