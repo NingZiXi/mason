@@ -471,6 +471,12 @@
     .showcase{grid-template-columns:1fr}
     .shot-list{flex-direction:row;overflow-x:auto;padding-bottom:4px}
     .shot-item{min-width:220px}
+    .shot-viewport{min-height:520px}
+    .demo-body{flex-direction:column;overflow:auto}
+    .demo-code{width:auto;max-height:150px}
+    .demo-controls{width:auto;flex-direction:row;flex-wrap:wrap}
+    .demo-controls .demo-field{flex:1;min-width:140px}
+    .demo-svg{width:100%;flex:none}
     .workflow-grid{grid-template-columns:1fr}
     .feats-bento{grid-template-columns:1fr}
     .feat-a,.feat-b,.feat-e,.feat-f{grid-column:span 1;grid-row:auto}
@@ -541,18 +547,105 @@
     transition:opacity .55s ease,transform .55s ease;
     pointer-events:none;
   }
-  .shot-img.shot-img-contain{
-    object-fit:contain;padding:26px;
-    filter:drop-shadow(0 12px 32px rgba(34,48,43,.20));
-  }
   .shot-img.is-active{opacity:1;transform:scale(1);pointer-events:auto}
-  /* 竖图同图模糊背景填充：铺满舞台消除两侧留白 */
-  .shot-img.shot-blur{
-    object-fit:cover;transform:scale(1.25);
-    filter:blur(30px) brightness(1.04) saturate(1.05);
-    padding:0;
+
+  /* ---------- 交互式 LIVE 演示面板 ---------- */
+  .shot-demo{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    opacity:0;visibility:hidden;transition:opacity .45s ease;
+    background:
+      radial-gradient(ellipse at 30% 15%, #F4F9F6 0%, #EDF3EF 55%, #E7EFEA 100%);
+    padding:18px 20px 14px;
   }
-  .shot-img.shot-blur.is-active{opacity:.5;transform:scale(1.25)}
+  .shot-demo.is-active{opacity:1;visibility:visible}
+  .demo-head{
+    display:flex;align-items:center;gap:12px;margin-bottom:12px;flex:none;
+  }
+  .demo-badge{
+    background:var(--green);color:#fff;font-size:10px;font-weight:800;
+    letter-spacing:1.2px;padding:2px 9px;border-radius:99px;flex:none;
+  }
+  .demo-shape-btns,.demo-spec-btns{display:flex;gap:8px;flex-wrap:wrap}
+  .shape-btn{
+    font-family:inherit;font-size:12px;font-weight:600;color:var(--ink-2);
+    background:#fff;border:1px solid var(--line);border-radius:99px;
+    padding:4px 13px;cursor:pointer;transition:all .2s;
+  }
+  .shape-btn:hover{border-color:var(--green-accent);color:var(--green)}
+  .shape-btn.is-on{
+    background:var(--green);border-color:var(--green);color:#fff;
+    box-shadow:0 3px 10px rgba(62,125,98,.3);
+  }
+  .demo-body{
+    flex:1;display:flex;gap:16px;align-items:stretch;min-height:0;
+  }
+  .demo-svg{
+    flex:1;min-width:0;height:auto;align-self:center;
+    background:#fff;border:1px solid var(--line);border-radius:12px;
+    padding:10px;max-height:100%;
+  }
+  .demo-code{
+    flex:none;width:178px;overflow:hidden;
+    background:var(--ink);border-radius:12px;padding:14px 16px;
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
+    font-size:10.5px;line-height:1.9;color:#9DB8AC;
+    display:flex;flex-direction:column;justify-content:center;
+  }
+  .demo-code b{color:#8CD3AE;font-weight:700}
+  .demo-code .c-line{opacity:0;animation:code-in .5s ease forwards;animation-delay:calc(var(--i) * .07s)}
+  @keyframes code-in{from{opacity:0;transform:translateX(6px)}to{opacity:1;transform:translateX(0)}}
+  .demo-controls{
+    flex:none;width:186px;display:flex;flex-direction:column;gap:14px;justify-content:center;
+  }
+  .demo-field{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--ink-2);font-weight:600}
+  .demo-field .demo-val{
+    font-size:14px;color:var(--green);font-weight:800;font-variant-numeric:tabular-nums;
+  }
+  .demo-val i{font-style:normal;font-size:10px;color:var(--ink-2);margin-left:2px;font-weight:600}
+  .demo-field input[type="range"]{
+    -webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:99px;
+    background:var(--line);outline:none;cursor:pointer;
+  }
+  .demo-field input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;
+    background:var(--green);border:2.5px solid #fff;
+    box-shadow:0 1px 5px rgba(62,125,98,.45);cursor:grab;
+  }
+  .demo-field input[type="range"]::-moz-range-thumb{
+    width:15px;height:15px;border-radius:50%;background:var(--green);
+    border:2.5px solid #fff;box-shadow:0 1px 5px rgba(62,125,98,.45);cursor:grab;
+  }
+  .demo-stats{
+    flex:none;display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;
+  }
+  .stat-chip{
+    background:rgba(255,255,255,.85);border:1px solid var(--line);border-radius:99px;
+    padding:3px 13px;font-size:11.5px;color:var(--ink-2);font-weight:600;
+  }
+  .stat-chip b{color:var(--green);font-weight:800;font-variant-numeric:tabular-nums}
+  .live-flag{
+    font-style:normal;font-size:9px;font-weight:800;color:var(--green);
+    border:1px solid var(--green-accent);border-radius:4px;padding:0 4px;
+    margin-left:6px;vertical-align:1px;letter-spacing:.5px;
+  }
+  /* demo SVG 元素 */
+  .d-outline{
+    fill:rgba(90,155,127,.08);stroke:var(--green);stroke-width:2;
+    animation:demo-draw 1.1s ease forwards;stroke-dasharray:900;stroke-dashoffset:900;
+  }
+  @keyframes demo-draw{to{stroke-dashoffset:0}}
+  .d-pad{
+    fill:var(--green-accent);opacity:0;
+    animation:pad-pop .5s ease forwards;
+  }
+  @keyframes pad-pop{from{opacity:0;transform:scale(.3)}to{opacity:.85;transform:scale(1)}}
+  .d-dim{font-size:11px;fill:var(--ink-2);font-weight:700;letter-spacing:.5px}
+  .s-jig{fill:none;stroke:var(--ink-2);stroke-width:2;opacity:.45}
+  .s-win{fill:rgba(62,125,98,.10);stroke:var(--green);stroke-width:1.5;stroke-dasharray:5,4}
+  .s-pcb{fill:rgba(90,155,127,.22);stroke:var(--green-accent);stroke-width:1;stroke-dasharray:3,3}
+  .s-peri{fill:var(--green);stroke:#fff;stroke-width:1;animation:pad-pop .4s ease forwards;opacity:0}
+  .s-corner{fill:var(--green-active);stroke:#fff;stroke-width:1.4;animation:pad-pop .4s ease forwards;opacity:0;transform-box:fill-box;transform-origin:center}
+  .s-dim{font-size:10.5px;fill:var(--ink-2);font-weight:700;letter-spacing:.8px}
   .shot-list{display:flex;flex-direction:column;gap:12px}
   .shot-item{
     display:flex;align-items:center;gap:14px;text-align:left;
@@ -993,10 +1086,57 @@
           <div class="shot-viewport">
             <img src="assets/shot-jig.png" alt="Mason 夹具模式界面" class="shot-img is-active" data-shot="0" />
             <img src="assets/shot-stencil.png" alt="Mason 钢网模式界面" class="shot-img" data-shot="1" loading="lazy" />
-            <img src="assets/shot-import.png" alt="" aria-hidden="true" class="shot-img shot-blur" data-shot="2" loading="lazy" />
-            <img src="assets/shot-import.png" alt="Gerber 导入识别" class="shot-img shot-img-contain" data-shot="2" loading="lazy" />
-            <img src="assets/shot-screws.png" alt="" aria-hidden="true" class="shot-img shot-blur" data-shot="3" loading="lazy" />
-            <img src="assets/shot-screws.png" alt="螺丝布局自动计算" class="shot-img shot-img-contain" data-shot="3" loading="lazy" />
+
+            <!-- 镜头 3 · 交互式 Gerber 解析演示 -->
+            <div class="shot-demo" data-shot="2">
+              <div class="demo-head">
+                <span class="demo-badge">LIVE</span>
+                <div class="demo-shape-btns" id="shape-btns">
+                  <button class="shape-btn is-on" data-shape="rect" data-i18n="demo.rect">矩形板</button>
+                  <button class="shape-btn" data-shape="lshape" data-i18n="demo.lshape">L 形板</button>
+                  <button class="shape-btn" data-shape="rounded" data-i18n="demo.rounded">圆角板</button>
+                </div>
+              </div>
+              <div class="demo-body">
+                <svg id="gerber-svg" class="demo-svg" viewBox="0 0 340 240"></svg>
+                <div class="demo-code" id="gerber-code"></div>
+              </div>
+              <div class="demo-stats" id="gerber-stats"></div>
+            </div>
+
+            <!-- 镜头 4 · 交互式螺丝布局计算器（复刻应用内算法） -->
+            <div class="shot-demo" data-shot="3">
+              <div class="demo-head">
+                <span class="demo-badge">LIVE</span>
+                <div class="demo-spec-btns" id="spec-btns">
+                  <button class="shape-btn" data-spec="M2.5">M2.5</button>
+                  <button class="shape-btn is-on" data-spec="M3">M3</button>
+                  <button class="shape-btn" data-spec="M4">M4</button>
+                  <button class="shape-btn" data-spec="M5">M5</button>
+                </div>
+              </div>
+              <div class="demo-body">
+                <svg id="screw-svg" class="demo-svg" viewBox="0 0 300 300"></svg>
+                <div class="demo-controls">
+                  <label class="demo-field">
+                    <span data-i18n="demo.pcbX">PCB 长 X</span>
+                    <b class="demo-val" id="v-pcbx">80<i>mm</i></b>
+                    <input type="range" id="in-pcbx" min="30" max="180" step="5" value="80" />
+                  </label>
+                  <label class="demo-field">
+                    <span data-i18n="demo.pcbY">PCB 宽 Y</span>
+                    <b class="demo-val" id="v-pcby">60<i>mm</i></b>
+                    <input type="range" id="in-pcby" min="30" max="180" step="5" value="60" />
+                  </label>
+                  <label class="demo-field">
+                    <span data-i18n="demo.spacing">周圈螺丝间距</span>
+                    <b class="demo-val" id="v-spacing">40<i>mm</i></b>
+                    <input type="range" id="in-spacing" min="0" max="60" step="5" value="40" />
+                  </label>
+                </div>
+              </div>
+              <div class="demo-stats" id="screw-stats"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -1019,15 +1159,15 @@
         <button class="shot-item" data-shot="2" role="tab">
           <span class="shot-item-num">03</span>
           <span class="shot-item-text">
-            <b data-i18n="showcase.s3t">Gerber 导入识别</b>
-            <i data-i18n="showcase.s3d">板框 / 尺寸 / 顶点自动解析</i>
+            <b><span data-i18n="showcase.s3t">Gerber 解析演示</span><em class="live-flag">PLAY</em></b>
+            <i data-i18n="showcase.s3d">点选板形 · 实时解析板框与焊盘</i>
           </span>
         </button>
         <button class="shot-item" data-shot="3" role="tab">
           <span class="shot-item-num">04</span>
           <span class="shot-item-text">
-            <b data-i18n="showcase.s4t">螺丝布局自动计算</b>
-            <i data-i18n="showcase.s4d">角部 M5 + 周圈 M3 联动</i>
+            <b><span data-i18n="showcase.s4t">螺丝布局计算器</span><em class="live-flag">PLAY</em></b>
+            <i data-i18n="showcase.s4d">拖动滑块 · 与应用同算法实时联动</i>
           </span>
         </button>
       </div>
@@ -1360,14 +1500,28 @@
       "showcase.s1d": "托盘 / 底座 / 顶盖实时渲染",
       "showcase.s2t": "钢网模式 · 焊盘开孔",
       "showcase.s2d": "450+ 焊盘一体式钢网",
-      "showcase.s3t": "Gerber 导入识别",
-      "showcase.s3d": "板框 / 尺寸 / 顶点自动解析",
-      "showcase.s4t": "螺丝布局自动计算",
-      "showcase.s4d": "角部 M5 + 周圈 M3 联动",
+      "showcase.s3t": "Gerber 解析演示",
+      "showcase.s3d": "点选板形 · 实时解析板框与焊盘",
+      "showcase.s4t": "螺丝布局计算器",
+      "showcase.s4d": "拖动滑块 · 与应用同算法实时联动",
       "showcase.cap1": "夹具模式 · 三件套 3D 预览",
       "showcase.cap2": "钢网模式 · 450+ 焊盘开孔",
-      "showcase.cap3": "Gerber 导入 · 板框自动识别",
-      "showcase.cap4": "螺丝布局 · 自动计算联动",
+      "showcase.cap3": "Gerber 解析 · 在线演示",
+      "showcase.cap4": "螺丝布局 · 在线计算器",
+      "demo.rect": "矩形板",
+      "demo.lshape": "L 形板",
+      "demo.rounded": "圆角板",
+      "demo.pcbX": "PCB 长 X",
+      "demo.pcbY": "PCB 宽 Y",
+      "demo.spacing": "周圈螺丝间距",
+      "demo.off": "关闭",
+      "demo.stDims": "板子尺寸",
+      "demo.stVerts": "顶点",
+      "demo.stPads": "焊盘",
+      "demo.stScrews": "螺丝总数",
+      "demo.stWindow": "窗口",
+      "demo.stJig": "夹具边长",
+      "demo.stHole": "周圈孔径",
       "workflow.h2": "拖入 → 预览 → 导出",
       "workflow.sub": "核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。",
       "workflow.drop": "拖入此处",
@@ -1455,14 +1609,28 @@
       "showcase.s1d": "Insert / base / cover live render",
       "showcase.s2t": "Stencil Mode · Pad Apertures",
       "showcase.s2d": "450+ pads on a one-piece stencil",
-      "showcase.s3t": "Gerber Import",
-      "showcase.s3d": "Outline / size / vertices auto-parsed",
-      "showcase.s4t": "Auto Screw Layout",
-      "showcase.s4d": "Corner M5 + perimeter M3",
+      "showcase.s3t": "Gerber Parser Demo",
+      "showcase.s3d": "Pick a shape · outline & pads parsed live",
+      "showcase.s4t": "Screw Layout Calculator",
+      "showcase.s4d": "Drag sliders · same algorithm as the app",
       "showcase.cap1": "Jig Mode · 3-piece 3D Preview",
       "showcase.cap2": "Stencil Mode · 450+ Apertures",
-      "showcase.cap3": "Gerber Import · Auto Outline",
-      "showcase.cap4": "Screw Layout · Auto Layout",
+      "showcase.cap3": "Gerber Parser · Live Demo",
+      "showcase.cap4": "Screw Layout · Live Calculator",
+      "demo.rect": "Rectangle",
+      "demo.lshape": "L-shape",
+      "demo.rounded": "Rounded",
+      "demo.pcbX": "PCB Length X",
+      "demo.pcbY": "PCB Width Y",
+      "demo.spacing": "Perimeter Spacing",
+      "demo.off": "Off",
+      "demo.stDims": "Board",
+      "demo.stVerts": "Vertices",
+      "demo.stPads": "Pads",
+      "demo.stScrews": "Total Screws",
+      "demo.stWindow": "Window",
+      "demo.stJig": "Jig Size",
+      "demo.stHole": "Hole Dia.",
       "workflow.h2": "Drop → Preview → Export",
       "workflow.sub": "The core design goal is a minimal workflow: drop in a Gerber, export an STL. Sensible defaults produce usable results.",
       "workflow.drop": "DROP HERE",
@@ -1575,6 +1743,9 @@
     renderHeroLabel();
     renderReleaseInfo();
     renderShotTitle(currentShot);
+    /* demo 面板动态文案重渲染（函数声明已 hoist，DOM 引用此时已就绪） */
+    if (typeof renderGerber === "function") renderGerber(currentShape);
+    if (typeof renderScrews === "function") renderScrews();
   }
 
   /* 当前年份 */
@@ -2023,26 +2194,31 @@
   }
 
   /* ==========================================================
-     Showcase 截图轮播
+     Showcase 镜头轮播（截图 + LIVE demo 混排）
   ========================================================== */
   var currentShot = 0;
   var shotImgs = document.querySelectorAll(".shot-img");
+  var shotDemos = document.querySelectorAll(".shot-demo");
   var shotItems = document.querySelectorAll(".shot-item");
   var shotTimer = null;
+  var SHOT_COUNT = shotItems.length || 4;
 
   function goShot(idx) {
     currentShot = idx;
     shotImgs.forEach(function (img) {
       img.classList.toggle("is-active", Number(img.getAttribute("data-shot")) === idx);
     });
+    shotDemos.forEach(function (d) {
+      d.classList.toggle("is-active", Number(d.getAttribute("data-shot")) === idx);
+    });
     shotItems.forEach(function (item) {
       item.classList.toggle("is-active", Number(item.getAttribute("data-shot")) === idx);
     });
     renderShotTitle(idx);
   }
-  function nextShot() { goShot((currentShot + 1) % shotImgs.length); }
+  function nextShot() { goShot((currentShot + 1) % SHOT_COUNT); }
   function startShotTimer() {
-    if (prefersReduceMotion || !shotImgs.length) return;
+    if (prefersReduceMotion || !SHOT_COUNT) return;
     stopShotTimer();
     shotTimer = setInterval(nextShot, 4500);
   }
@@ -2061,6 +2237,240 @@
     showcaseEl.addEventListener("mouseleave", startShotTimer);
   }
   startShotTimer();
+
+  /* ==========================================================
+     LIVE Demo 1 · Gerber 解析演示（镜头 3）
+     三种板形 × 实时 SVG 板框描绘 + Gerber 代码联动
+  ========================================================== */
+  var SHAPES = {
+    rect: {
+      path: "M40 40 H300 V200 H40 Z",
+      gerber: [
+        "G04 Rectangular PCB*",
+        "G01 X400000 Y400000 D02*",
+        "G01 X3000000 Y400000 D01*",
+        "G01 X3000000 Y2000000 D01*",
+        "G01 X400000 Y2000000 D01*",
+        "G01 X400000 Y400000 D01*",
+        "M02*"
+      ],
+      dims: "80.0 × 40.0", verts: 4, pads: 128
+    },
+    lshape: {
+      path: "M40 40 H170 V120 H300 V200 H40 Z",
+      gerber: [
+        "G04 L-shape PCB*",
+        "G01 X400000 Y400000 D02*",
+        "G01 X1700000 Y400000 D01*",
+        "G01 X1700000 Y1200000 D01*",
+        "G01 X3000000 Y1200000 D01*",
+        "G01 X3000000 Y2000000 D01*",
+        "G01 X400000 Y2000000 D01*",
+        "G01 X400000 Y400000 D01*",
+        "M02*"
+      ],
+      dims: "80.0 × 40.0", verts: 6, pads: 96
+    },
+    rounded: {
+      path: "M62 40 H278 Q300 40 300 62 V178 Q300 200 278 200 H62 Q40 200 40 178 V62 Q40 40 62 40 Z",
+      gerber: [
+        "G04 Rounded PCB*",
+        "G01 X620000 Y400000 D02*",
+        "G01 X2780000 Y400000 D01*",
+        "G02 X3000000 Y620000 I0 J220000 D01*",
+        "G01 X3000000 Y1780000 D01*",
+        "G02 X2780000 Y2000000 I-220000 J0 D01*",
+        "G01 X620000 Y2000000 D01*",
+        "G02 X400000 Y1780000 I0 J-220000 D01*",
+        "G01 X400000 Y620000 D01*",
+        "G02 X620000 Y400000 I220000 J0 D01*",
+        "M02*"
+      ],
+      dims: "78.4 × 38.4", verts: 8, pads: 112
+    }
+  };
+  // 焊盘阵列（固定 seed，三形状数量不同）
+  function padPoints(shape, n) {
+    var pts = [];
+    var seed = 42;
+    function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+    var inShape = {
+      rect: function (x, y) { return true; },
+      lshape: function (x, y) { return x < 0.45 || y > 0.4; },
+      rounded: function (x, y) {
+        var r = 22 / 260, w = 1 - r;
+        if ((x < r && y < r) && Math.hypot(r - x, r - y) > r) return false;
+        if ((x > w && y < r) && Math.hypot(x - w, r - y) > r) return false;
+        if ((x < r && y > w) && Math.hypot(r - x, y - w) > r) return false;
+        if ((x > w && y > w) && Math.hypot(x - w, y - w) > r) return false;
+        return true;
+      }
+    }[shape];
+    var tries = 0;
+    while (pts.length < n && tries < n * 30) {
+      tries++;
+      var x = 0.08 + rnd() * 0.84, y = 0.14 + rnd() * 0.72;
+      if (inShape(x, y)) pts.push([x, y, rnd()]);
+    }
+    return pts;
+  }
+  var gerberSvg = document.getElementById("gerber-svg");
+  var gerberCode = document.getElementById("gerber-code");
+  var gerberStats = document.getElementById("gerber-stats");
+  var currentShape = "rect";
+
+  function renderGerber(shapeKey) {
+    currentShape = shapeKey;
+    var s = SHAPES[shapeKey];
+    if (!s || !gerberSvg) return;
+    var pads = padPoints(shapeKey, s.pads);
+    var padEls = pads.map(function (p) {
+      var isRect = p[2] > 0.6;
+      var x = 40 + p[0] * 260, y = 40 + p[1] * 160;
+      return isRect
+        ? '<rect x="' + (x - 2.4).toFixed(1) + '" y="' + (y - 1.7).toFixed(1) + '" width="4.8" height="3.4" rx="0.6" class="d-pad"/>'
+        : '<circle cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="' + (1.6 + p[2] * 1.2).toFixed(1) + '" class="d-pad"/>';
+    }).join("");
+    gerberSvg.innerHTML =
+      '<path class="d-outline" d="' + s.path + '"/>' + padEls +
+      '<text class="d-dim" x="170" y="224" text-anchor="middle">' + s.dims + ' mm</text>';
+    if (gerberCode) {
+      gerberCode.innerHTML = s.gerber.map(function (line, i) {
+        return '<span class="c-line" style="--i:' + i + '">' + line.replace(/\*/g, '<b>*</b>') + "</span>";
+      }).join("");
+    }
+    if (gerberStats) {
+      gerberStats.innerHTML =
+        '<span class="stat-chip">' + t("demo.stDims") + ' <b>' + s.dims + 'mm</b></span>' +
+        '<span class="stat-chip">' + t("demo.stVerts") + ' <b>' + s.verts + '</b></span>' +
+        '<span class="stat-chip">' + t("demo.stPads") + ' <b>' + pads.length + '</b></span>';
+    }
+  }
+  var shapeBtns = document.querySelectorAll("#shape-btns .shape-btn");
+  shapeBtns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      shapeBtns.forEach(function (x) { x.classList.remove("is-on"); });
+      b.classList.add("is-on");
+      renderGerber(b.getAttribute("data-shape"));
+    });
+  });
+  renderGerber("rect");
+
+  /* ==========================================================
+     LIVE Demo 2 · 螺丝布局计算器（镜头 4）
+     与应用 config.ts 同算法：windowHalfXY / computeJigSize /
+     screwPositions / cornerScrews / 钢网自动推荐
+  ========================================================== */
+  var SCREW_SPECS = {
+    "M2.5": { holeD: 2.7 }, "M3": { holeD: 3.2 }, "M4": { holeD: 4.3 }, "M5": { holeD: 5.3 }
+  };
+  var demoCfg = { pcbX: 80, pcbY: 60, spacing: 40, spec: "M3" };
+
+  function windowHalfXY(c) {
+    var clr = 0.15; // pcbPocketClearance 默认值
+    var slotHX = c.pcbX / 2 + clr, slotHY = c.pcbY / 2 + clr;
+    var slotHalfMax = Math.max(slotHX, slotHY);
+    // 钢网自动推荐：板子最大边 + 20mm，10mm 步进
+    var stencil = Math.ceil((Math.max(c.pcbX, c.pcbY) + 20) / 10) * 10;
+    // 台阶宽自动值：均边 8%，夹 6~12
+    var avg = (c.pcbX + c.pcbY) / 2;
+    var margin = Math.min(12, Math.max(6, Math.round(avg * 0.08 * 2) / 2));
+    margin = Math.max(margin, stencil / 2 - slotHalfMax + 2.0);
+    return { half: slotHalfMax + margin + 0.4, stencil: stencil };
+  }
+  function computeJigSize(c) {
+    var wh = windowHalfXY(c);
+    var raw = 2 * (wh.half + 24);            // 周圈孔带 + 外缘
+    var floor = wh.stencil + 20;             // 夹具必须大于钢网
+    return Math.max(60, Math.ceil(Math.max(raw, floor) / 20) * 20);
+  }
+  function screwPositions(c, jig) {
+    var out = [];
+    if (c.spacing <= 0) return out;
+    var half = windowHalfXY(c).half;
+    var band = Math.max(jig / 2 - 10, half + 4);
+    var limit = jig / 2 - 14;
+    if (limit < c.spacing) {
+      if (limit > 0) out.push([0, band], [0, -band], [band, 0], [-band, 0]);
+      return out;
+    }
+    var n = Math.floor(limit / c.spacing);
+    var seen = {};
+    for (var i = -n; i <= n; i++) {
+      var cc = i * c.spacing;
+      if (Math.abs(cc) > limit) continue;
+      [[cc, band], [cc, -band], [band, cc], [-band, cc]].forEach(function (p) {
+        var key = p[0].toFixed(3) + "," + p[1].toFixed(3);
+        if (!seen[key]) { seen[key] = 1; out.push(p); }
+      });
+    }
+    return out;
+  }
+  var screwSvg = document.getElementById("screw-svg");
+  var screwStats = document.getElementById("screw-stats");
+
+  function renderScrews() {
+    if (!screwSvg) return;
+    var c = demoCfg;
+    var jig = computeJigSize(c);
+    var wh = windowHalfXY(c);
+    var peri = screwPositions(c, jig);
+    var cs = Math.max(jig / 2 - 7, wh.half + 3.5);
+    var corner = [[cs, cs], [cs, -cs], [-cs, cs], [-cs, -cs]];
+
+    var S = 300, pad = 18, scale = (S - 2 * pad) / jig, half = jig / 2;
+    function P(x, y) { return [pad + (half + x) * scale, pad + (half + y) * scale]; }
+
+    var periEls = peri.map(function (p) {
+      var q = P(p[0], p[1]);
+      return '<circle cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" r="3.4" class="s-peri"/>';
+    }).join("");
+    var cornerEls = corner.map(function (p) {
+      var q = P(p[0], p[1]);
+      return '<circle cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" r="5.4" class="s-corner"/>';
+    }).join("");
+    var win = wh.half * 2 * scale;
+    var winX = pad + (jig * scale - win) / 2;
+
+    screwSvg.innerHTML =
+      '<rect x="' + pad + '" y="' + pad + '" width="' + (jig * scale).toFixed(1) + '" height="' + (jig * scale).toFixed(1) + '" rx="8" class="s-jig"/>' +
+      '<rect x="' + winX.toFixed(1) + '" y="' + winX.toFixed(1) + '" width="' + win.toFixed(1) + '" height="' + win.toFixed(1) + '" rx="6" class="s-win"/>' +
+      '<rect x="' + (winX + win * 0.16).toFixed(1) + '" y="' + (winX + win * 0.2).toFixed(1) + '" width="' + (win * 0.68).toFixed(1) + '" height="' + (win * 0.6).toFixed(1) + '" rx="3" class="s-pcb"/>' +
+      periEls + cornerEls +
+      '<text x="' + (S / 2) + '" y="' + (S - 4) + '" text-anchor="middle" class="s-dim">JIG ' + jig + '×' + jig + ' mm</text>';
+
+    if (screwStats) {
+      var total = peri.length + corner.length;
+      screwStats.innerHTML =
+        '<span class="stat-chip">' + t("demo.stScrews") + ' <b>' + total + '</b></span>' +
+        '<span class="stat-chip">' + t("demo.stWindow") + ' <b>' + (wh.half * 2).toFixed(1) + 'mm</b></span>' +
+        '<span class="stat-chip">' + t("demo.stJig") + ' <b>' + jig + 'mm</b></span>' +
+        '<span class="stat-chip">' + t("demo.stHole") + ' <b>Ø' + SCREW_SPECS[c.spec].holeD + '</b></span>';
+    }
+  }
+  function bindRange(id, valId, key) {
+    var el = document.getElementById(id);
+    var val = document.getElementById(valId);
+    if (!el) return;
+    el.addEventListener("input", function () {
+      demoCfg[key] = Number(el.value);
+      if (val) val.innerHTML = (key === "spacing" && Number(el.value) === 0 ? t("demo.off") : el.value) + "<i>mm</i>";
+      renderScrews();
+    });
+  }
+  bindRange("in-pcbx", "v-pcbx", "pcbX");
+  bindRange("in-pcby", "v-pcby", "pcbY");
+  bindRange("in-spacing", "v-spacing", "spacing");
+  var specBtns = document.querySelectorAll("#spec-btns .shape-btn");
+  specBtns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      specBtns.forEach(function (x) { x.classList.remove("is-on"); });
+      b.classList.add("is-on");
+      demoCfg.spec = b.getAttribute("data-spec");
+      renderScrews();
+    });
+  });
+  renderScrews();
 
   /* ==========================================================
      语言切换绑定 + 初始化
