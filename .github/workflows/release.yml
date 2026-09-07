@@ -67,7 +67,12 @@ jobs:
         run: bash scripts/build-python-env.sh
 
       - name: Build Tauri app
+        if: matrix.platform != 'ubuntu-latest'
         run: npm run tauri:build
+
+      - name: Build Tauri app (Linux, skip AppImage)
+        if: matrix.platform == 'ubuntu-latest'
+        run: npm run tauri:build -- --bundles deb,rpm
 
       - name: Collect artifacts (Windows)
         if: matrix.platform == 'windows-latest'
@@ -93,7 +98,7 @@ jobs:
         run: |
           mkdir -p artifacts
           cp src-tauri/target/release/bundle/deb/*.deb artifacts/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/appimage/*.AppImage artifacts/ 2>/dev/null || true
+          cp src-tauri/target/release/bundle/rpm/*.rpm artifacts/ 2>/dev/null || true
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
