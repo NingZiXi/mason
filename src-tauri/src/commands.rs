@@ -196,10 +196,18 @@ fn check_deps_blocking(python: &str) -> Vec<String> {
          missing=[m for m in {REQUIRED:?} if importlib.util.find_spec(m) is None];\
          print(','.join(missing))"
     );
-    match std::process::Command::new(python)
-        .arg("-c")
-        .arg(&script)
-        .output()
+    let mut check_cmd = std::process::Command::new(python);
+    check_cmd.arg("-c").arg(&script);
+
+    // Windows: 隐藏控制台黑窗口
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        check_cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match check_cmd.output()
     {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -260,6 +268,14 @@ async fn run_with_log(app: &AppHandle, mut cmd: std::process::Command) -> Result
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
     use tauri::Emitter;
+
+    // Windows: 隐藏控制台黑窗口
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd

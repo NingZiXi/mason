@@ -41,7 +41,7 @@ function closeSettings() {
     </svg>
   </button>
 
-  <el-dialog v-model="showSettings" width="540px" :show-close="false" align-center class="settings-dialog">
+  <el-dialog v-model="showSettings" width="540px" :show-close="false" align-center :z-index="3000" class="settings-dialog">
     <div class="dialog-root">
       <!-- 顶部栏 -->
       <div class="dialog-header">
@@ -476,11 +476,16 @@ a.link-row:hover .link-label {
 <style>
 /* settings-dialog 专用覆盖（非 scoped，因对话框 teleport 到 body，scoped :deep() 无法命中） */
 .settings-dialog.el-dialog {
-  margin: 0 auto;
-  padding: 0;
+  margin: 0 auto !important;
+  padding: 0 !important;
   border-radius: var(--radius-12);
   overflow: hidden;
   align-self: center;
+  z-index: 3001 !important;
+}
+.settings-dialog + .el-overlay,
+.el-overlay:has(.settings-dialog) {
+  z-index: 3000 !important;
 }
 .settings-dialog .el-dialog__header {
   display: none !important;

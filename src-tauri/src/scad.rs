@@ -70,13 +70,23 @@ fn server_cell() -> &'static Mutex<Option<Server>> {
 }
 
 async fn spawn_server(python_path: &str, script_path: &std::path::Path) -> Result<Server, AppError> {
-    let mut child = Command::new(python_path)
-        .arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
+    let mut cmd = Command::new(python_path);
+    cmd.arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
         .arg(script_path)
         .arg("--server")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null()) // stderr 只写日志;null 防止管道缓冲塞满阻塞 Python
+        .stderr(Stdio::null()); // stderr 只写日志;null 防止管道缓冲塞满阻塞 Python
+
+    // Windows: 隐藏控制台黑窗口
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| AppError::Io(format!("启动 Python 服务失败: {}", e)))?;
 
