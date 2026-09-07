@@ -15,6 +15,7 @@ import StencilForm from "./components/StencilForm.vue";
 import PythonSetup from "./components/PythonSetup.vue";
 import ProjectMenu from "./components/ProjectMenu.vue";
 import SettingsMenu from "./components/SettingsMenu.vue";
+import type { PadPolygon } from "./lib/gerber/pads";
 
 const configStore = useConfigStore();
 const ui = useUiStore();
@@ -295,6 +296,22 @@ function onSizeDetected(payload: {
   );
 }
 
+function onStencilDetected(payload: {
+  width: number;
+  height: number;
+  outlinePoints: Array<[number, number]>;
+  topPads: PadPolygon[];
+  bottomPads: PadPolygon[];
+}) {
+  configStore.applyStencilGerber(
+    payload.width,
+    payload.height,
+    payload.outlinePoints,
+    payload.topPads,
+    payload.bottomPads
+  );
+}
+
 onMounted(() => {
   configStore.detectPython();
   document.addEventListener("mousemove", onWidthMove);
@@ -453,7 +470,7 @@ onBeforeUnmount(() => {
             </svg>
           </div>
           <div v-show="!collapsed.gerber" class="slot-body">
-            <GerberImport @size-detected="onSizeDetected" />
+            <GerberImport :mode="appMode" @size-detected="onSizeDetected" @stencil-detected="onStencilDetected" />
           </div>
           <div
             v-if="!collapsed.gerber"
