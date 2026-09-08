@@ -48,10 +48,12 @@ function paramsHash() {
   const c = store.config;
   // 只 hash 跟几何相关的参数(避免无关改动触发重渲染)
   // pcbOutlinePoints 用完整点列表:同点数的异形板框也要正确失效
+  // mode 必须入 hash:钢网/治具模式下同一 stencilSize 生成不同外框
   return JSON.stringify({
-    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles],
+    mode: appMode.value,
+    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSize],
     screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight],
-    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterMargin, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD, c.outerCornerRadius],
+    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD, c.outerCornerRadius, c.platterWidth, c.stencilLip, c.windowGap],
     notch: [c.pryNotchSides, c.pryNotchScale],
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
       c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
@@ -69,7 +71,10 @@ function buildScadParams() {
     pcb_pocket_clearance: c.pcbPocketClearance,
     pcb_outline_points: c.pcbOutlinePoints,
     pcb_outline_holes: c.pcbOutlineHoles,
-    stencil_size: c.stencilSize,
+    // 治具模式:stencil_size 是夹具装配用的钢网外径(正方形);
+    // 钢网模式:独立钢网外框由 板框+边框宽/外框形状 推导,stencil_size 置 0
+    // (compute_frame_poly 里 stencil_size>0 会短路,忽略 frame_shape/frame_width)
+    stencil_size: appMode.value === "stencil" ? 0 : c.stencilSize,
     screw_spacing: c.screwSpacing,
     screw_spec: c.screwSpec,
     base_height: c.baseHeight,
@@ -77,7 +82,9 @@ function buildScadParams() {
     jig_size: c.jigSize,
     insert_height: c.insertHeight,
     platter_height: c.platterHeight,
-    platter_margin: c.platterMargin,
+    platter_width: c.platterWidth,
+    stencil_lip: c.stencilLip,
+    window_gap: c.windowGap,
     platter_corner_radius: c.platterCornerRadius,
     eject_slot_width: c.ejectSlotWidth,
     pry_notch_sides: c.pryNotchSides,
@@ -119,14 +126,14 @@ function initThreeScene() {
   const h = container.clientHeight;
 
   const s = new THREE.Scene();
-  s.background = new THREE.Color(ui.theme === "dark" ? 0x232325 : 0xF5F5F5);
+  // 背景交由 CSS 径向渐变(renderer alpha),场景只负责模型与网格
 
   // 相机:斜俯视(参考 Dream_maker 风格,约 30° 俯视,既看布局又看高度)
   const cam = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
   cam.position.set(120, 80, 150);  // X 远, Y 中, Z 中 = 倾斜俯视
   cam.lookAt(0, 0, 0);
 
-  const r = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const r = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
   r.setSize(w, h);
   // HiDPI 屏 cap 到 2x:3x 的像素增益肉眼不可辨,填充率/显存开销却翻倍
   r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -320,13 +327,10 @@ watch(
   }
 );
 
-// 主题切换 → 更新场景背景与网格颜色(模型不动)
+// 主题切换 → 更新网格颜色(背景走 CSS 渐变,模型不动)
 watch(
   () => ui.theme,
   (theme) => {
-    if (scene.value) {
-      scene.value.background = new THREE.Color(theme === "dark" ? 0x232325 : 0xF5F5F5);
-    }
     // 替换旧网格(remove + dispose,避免反复切换累积显存)
     const old = scene.value?.children.find((c) => c instanceof THREE.GridHelper);
     if (old) {
@@ -391,6 +395,25 @@ async function refreshAll() {
   // 触发当前 tab 重新渲染
   await renderCurrent();
   refreshing.value = false;
+}
+
+// 视图快捷切换:front 正视 / top 俯视 / iso 等轴(保持当前缩放距离)
+function setView(view: "front" | "top" | "iso") {
+  const cam = camera.value;
+  const ctrl = controls.value;
+  if (!cam || !ctrl) return;
+  const dist = cam.position.distanceTo(ctrl.target);
+  // iso 方向与初始相机 (120, 80, 150) 归一化一致,切回即还原默认视角
+  const dirs: Record<typeof view, [number, number, number]> = {
+    front: [0, 0, 1],
+    top: [0, 1, 0.0001],
+    iso: [120, 80, 150],
+  };
+  const d = new THREE.Vector3(...dirs[view]).normalize();
+  cam.position.copy(ctrl.target).addScaledVector(d, dist);
+  cam.lookAt(ctrl.target);
+  ctrl.update();
+  invalidate();
 }
 
 // 窗口尺寸变化
@@ -547,6 +570,25 @@ watch(partTabs, (tabs) => {
         <span v-if="preloading.size > 0" class="preload-badge">
           {{ t('preview.preloading', { n: allParts.length - preloading.size }) }}
         </span>
+        <!-- 视图快捷切换 -->
+        <div class="view-btns">
+          <button class="view-btn" :title="t('preview.viewFront')" @click="setView('front')">
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4" />
+            </svg>
+          </button>
+          <button class="view-btn" :title="t('preview.viewTop')" @click="setView('top')">
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <path d="M8 3.5l4.5 4.5L8 12.5 3.5 8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="view-btn" :title="t('preview.viewIso')" @click="setView('iso')">
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <path d="M8 2l5.2 3v6L8 14l-5.2-3V5zM8 8l5.2-3M8 8L2.8 5M8 8v6"
+                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
         <button class="action-btn" @click="refreshAll" :disabled="refreshing">
           <svg viewBox="0 0 16 16" width="14" height="14" :class="{ spinning: refreshing }">
             <path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"
@@ -580,17 +622,20 @@ watch(partTabs, (tabs) => {
 
     <div class="canvas-container">
       <canvas ref="canvasEl" />
-      <!-- 空状态引导:无模型、无加载、无错误时显示 -->
+      <!-- 空状态引导:无模型、无加载、无错误时显示(虚线卡片模拟拖放目标) -->
       <div
         v-if="!currentMesh && !loading && !errorMsg && store.pythonDetected"
         class="empty-state"
       >
-        <svg viewBox="0 0 64 64" width="44" height="44" class="empty-icon">
-          <rect x="5" y="5" width="54" height="54" rx="11" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="7,5" />
-          <rect x="24" y="24" width="16" height="16" rx="3" fill="currentColor" opacity="0.55" />
-        </svg>
-        <p class="empty-line1">{{ t('preview.emptyLine1') }}</p>
-        <p class="empty-line2">{{ t('preview.emptyLine2') }}</p>
+        <div class="empty-card">
+          <svg viewBox="0 0 64 64" width="48" height="48" class="empty-icon">
+            <rect x="5" y="5" width="54" height="54" rx="11" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="7,5" />
+            <path d="M32 20v18M24 30l8 8 8-8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+            <rect x="24" y="46" width="16" height="4" rx="2" fill="currentColor" opacity="0.55" />
+          </svg>
+          <p class="empty-line1">{{ t('preview.emptyLine1') }}</p>
+          <p class="empty-line2">{{ t('preview.emptyLine2') }}</p>
+        </div>
       </div>
       <div v-if="loading" class="overlay">
         <svg class="spin-icon" viewBox="0 0 16 16" width="20" height="20">
@@ -717,15 +762,16 @@ watch(partTabs, (tabs) => {
   cursor: not-allowed;
 }
 
+/* 导出(主 CTA)用品牌橙:绿=调节/导航,橙=动作/输出,与 Logo 起绿终橙呼应 */
 .action-btn.primary {
-  background: var(--bg-brand);
-  border-color: var(--bg-brand);
+  background: var(--brand-accent);
+  border-color: var(--brand-accent);
   color: var(--text-onbrand);
 }
 
 .action-btn.primary:hover {
-  background: var(--bg-brand-hover);
-  border-color: var(--bg-brand-hover);
+  background: var(--brand-accent-hover);
+  border-color: var(--brand-accent-hover);
   color: var(--text-onbrand);
 }
 
@@ -738,6 +784,36 @@ watch(partTabs, (tabs) => {
   opacity: 0.8;
 }
 
+/* 视图快捷按钮组(正/顶/等轴) */
+.view-btns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: var(--bg-base-default);
+}
+
+.view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-4);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.view-btn:hover {
+  background: var(--bg-overlay-l1);
+  color: var(--text-default);
+}
+
 .spinning {
   animation: spin 1s linear infinite;
 }
@@ -746,12 +822,16 @@ watch(partTabs, (tabs) => {
   to { transform: rotate(360deg); }
 }
 
-/* Canvas */
+/* Canvas:背景用径向渐变模拟"工作台"顶光,模型区有纵深感 */
 .canvas-container {
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
-  background: var(--bg-base-secondary);
+  background: radial-gradient(120% 90% at 50% 38%, #FFFFFF 0%, #F1F1F0 62%, #E8E8E6 100%);
+}
+
+html.dark .canvas-container {
+  background: radial-gradient(120% 90% at 50% 38%, #2C2C2F 0%, #232325 62%, #1D1D1F 100%);
 }
 
 canvas {
@@ -760,21 +840,34 @@ canvas {
   height: 100%;
 }
 
-/* 空状态引导 */
+/* 空状态引导:虚线卡片模拟拖放目标 */
 .empty-state {
   position: absolute;
   inset: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
   pointer-events: none;
 }
 
+.empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 36px 56px;
+  border: 1.5px dashed var(--border-neutral-l3);
+  border-radius: var(--radius-12, 12px);
+  background: var(--bg-overlay-l1);
+}
+
+html.dark .empty-card {
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .empty-icon {
-  color: var(--border-neutral-l3);
-  margin-bottom: 8px;
+  color: var(--text-disabled);
+  margin-bottom: 6px;
 }
 
 .empty-line1 {

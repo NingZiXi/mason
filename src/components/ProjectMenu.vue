@@ -28,7 +28,9 @@ function buildScadParams() {
     jig_size: c.jigSize,
     insert_height: c.insertHeight,
     platter_height: c.platterHeight,
-    platter_margin: c.platterMargin,
+    platter_width: c.platterWidth,
+    stencil_lip: c.stencilLip,
+    window_gap: c.windowGap,
     platter_corner_radius: c.platterCornerRadius,
     eject_slot_width: c.ejectSlotWidth,
     corner_screw_d: c.cornerScrewD,
@@ -111,7 +113,17 @@ async function loadProject() {
     store.config.jigSize = cfg.jig_size;
     store.config.insertHeight = cfg.insert_height ?? 8;
     store.config.platterHeight = cfg.platter_height ?? 4;
-    store.config.platterMargin = cfg.platter_margin ?? 5;
+    // 优先读 stencil_lip(新字段);旧项目文件仅有 platter_margin 时把它当作 lip 兜底
+    if (cfg.stencil_lip !== undefined) {
+      store.config.stencilLip = cfg.stencil_lip;
+    } else if (cfg.platter_margin !== undefined) {
+      store.config.stencilLip = cfg.platter_margin;
+    } else {
+      // 默认 lip 占 lipMax 上界 60%:与 store 默认值保持一致
+      store.config.stencilLip = 15;
+    }
+    store.config.platterWidth = cfg.platter_width ?? Math.max(cfg.pcb_size_x, cfg.pcb_size_y);
+    store.config.windowGap = cfg.window_gap ?? 0.5;
     store.config.platterCornerRadius = cfg.platter_corner_radius ?? 4.5;
     store.config.ejectSlotWidth = cfg.eject_slot_width ?? 22;
     // 旧项目文件的 pry_notch_side 单值也兼容:转成数组

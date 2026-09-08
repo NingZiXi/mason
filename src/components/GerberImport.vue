@@ -142,12 +142,47 @@ async function handleResult() {
   }
 }
 
+/**
+ * 统一入口:按当前模式解析,并把结果同步到另一模式的数据源 ——
+ * 治具模式导入 ZIP 时顺带解析锡膏层焊盘(best-effort,无锡膏层静默跳过),
+ * 切到钢网模式后无需重复导入即可看到带开孔的钢网;
+ * 钢网模式的板框已含在结果里(applyStencilGerber 会写 pcbOutlinePoints),
+ * 切回治具模式天然可用。
+ */
+async function processFile(file: File) {
+  if (props.mode === "stencil") {
+    await stencil.processFile(file);
+    await handleResult();
+    return;
+  }
+  await outline.processFile(file);
+  await handleResult();
+  // 治具模式:同一文件再跑一遍锡膏解析,焊盘写入 store(stencilPadsTop/Bottom)
+  try {
+    await stencil.processFile(file);
+    const r = stencil.result.value;
+    if (r) {
+      emit("stencilDetected", {
+        width: r.width,
+        height: r.height,
+        outlinePoints: r.outlinePoints,
+        topPads: r.topPads,
+        bottomPads: r.bottomPads,
+      });
+    } else {
+      // 纯板框文件(无锡膏层):清掉失败状态,避免污染钢网模式的导入 UI
+      stencil.reset();
+    }
+  } catch {
+    stencil.reset();
+  }
+}
+
 async function onFileChange(e: Event) {
   const target = e.target as HTMLInputElement;
   const file = target.files?.[0];
   if (!file) return;
-  await (props.mode === "stencil" ? stencil.processFile(file) : outline.processFile(file));
-  await handleResult();
+  await processFile(file);
   target.value = "";
 }
 
@@ -156,8 +191,7 @@ async function onDrop(e: DragEvent) {
   dragOver.value = false;
   const file = e.dataTransfer?.files?.[0];
   if (!file) return;
-  await (props.mode === "stencil" ? stencil.processFile(file) : outline.processFile(file));
-  await handleResult();
+  await processFile(file);
 }
 
 function onDragOver(e: DragEvent) {
@@ -183,8 +217,7 @@ async function processDroppedPaths(paths: string[]) {
         ? "application/zip"
         : "text/plain",
     });
-    await (props.mode === "stencil" ? stencil.processFile(file) : outline.processFile(file));
-    await handleResult();
+    await processFile(file);
   } catch (err) {
     console.error("读取拖入文件失败:", err);
   }
@@ -392,9 +425,14 @@ const outlinePath = computed(() => {
   background: var(--bg-brand-popup);
 }
 
+/* 拖文件悬停/解析中:品牌橙提示"投入信号"(与 hover 的绿区分) */
 .dropzone.active {
-  border-color: var(--bg-brand);
-  background: var(--bg-brand-popup);
+  border-color: var(--brand-accent);
+  background: var(--brand-accent-surface);
+}
+
+.dropzone.active .drop-icon {
+  color: var(--brand-accent);
 }
 
 .drop-icon {

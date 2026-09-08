@@ -124,13 +124,18 @@ ck.check("总高 12(托盘8+定位柱4) / 底 0",
          abs(allv[:, 1].max() - 12) < 0.05 and abs(allv[:, 1].min()) < 0.05)
 
 # 7. 4 角空心定位柱(外 r4.5;内孔 r2.5 全高贯穿)
+#    s = jig/2-(r_out+r_post+1)=80-11.5=68.5 兜底(异形板窗口 53+jig/2-7=73
+#    不受外缘圆角重叠约束——按新 corner_screw_positions 钳到 69.5)
 def ring_v(cx, cz, r, tol=0.12):
     return [p for p in allv if abs(math.hypot(p[0] - cx, p[2] - cz) - r) < tol]
 
-s = max(max(window_poly.bounds[2], window_poly.bounds[3]) + 3.5, params["jig_size"] / 2 - 7)
-for bx, by in [(s, s), (s, -s), (-s, s), (-s, -s)]:
-    boss = ring_v(bx, -by, 4.5)
-    bore = ring_v(bx, -by, 2.5)
+# 用 generate 实际返回值(不重复推导):boss 圆心 (s,s)/(s,-s)/...
+sp = jg.corner_screw_positions(window_poly, params["jig_size"], params)
+for bx, by in sp:
+    # STL:build (x,y)→XZ (x,-y),所以 build 角点 (bx,by)→STL (bx, -by)
+    cx, cz = bx, -by
+    boss = ring_v(cx, cz, 4.5)
+    bore = ring_v(cx, cz, 2.5)
     yb = (min((p[1] for p in boss), default=99), max((p[1] for p in boss), default=-99))
     yp = (min((p[1] for p in bore), default=99), max((p[1] for p in bore), default=-99))
     ck.check(f"定位柱@({bx:.1f},{by:.1f}) 壁Y∈[{yb[0]:.1f},{yb[1]:.1f}] 内孔Y∈[{yp[0]:.1f},{yp[1]:.1f}]",

@@ -16,14 +16,30 @@ ck = Checker()
 
 def ts_screw_positions(c):
     """TS config.ts screwPositions 的算法仿真(同步副本):
-    凸台恒为正方形(半宽 = 槽包围盒长边/2 + margin,含钢网扩张)"""
+    凸台恒为正方形(半宽 = 槽包围盒长边/2 + margin,含钢网扩张 + frame 反向钳制)"""
     if c["screw_spacing"] <= 0:
         return []
     hx = c["pcb_size_x"] / 2 + c["pcb_pocket_clearance"]
     hy = c["pcb_size_y"] / 2 + c["pcb_pocket_clearance"]
     slot_max = max(hx, hy)
-    margin = max(c["platter_margin"], c["stencil_size"] / 2 - slot_max + 2.0)
-    hx = hy = slot_max + margin + 0.4
+    # 与 src/stores/config.ts:windowHalfXY 完全一致 —— 钳制不变量
+    # margin = max(platter_margin, frame_half - slot_half - lip_min)
+    # 注意:本测试的简化 dict 只用 pcb_pocket_clearance + 无 stencil_size 时按
+    # frame_width=12(python jg 默认)+ pocket_clearance=0.1(python jg 默认)推导
+    lip_min = 2.0
+    if c["stencil_size"] > 0:
+        frame_half_max = c["stencil_size"] / 2
+    else:
+        frame_w = c.get("stencil_frame_width", 12.0)
+        pocket_clr = c.get("pocket_clearance", 0.1)
+        frame_half_max = max(
+            c["pcb_size_x"] / 2 + pocket_clr + frame_w,
+            c["pcb_size_y"] / 2 + pocket_clr + frame_w,
+        )
+    margin = max(c["platter_margin"], frame_half_max - slot_max - lip_min)
+    # 窗口 = max(platter, frame) + 0.4 单边间隙 —— 与 python get_polys 同源
+    platter_half = slot_max + margin
+    hx = hy = max(platter_half, frame_half_max) + 0.4
     jig = c["jig_size"]
     band_x = max(jig / 2 - 10.0, hx + 4.0)
     band_y = max(jig / 2 - 10.0, hy + 4.0)
@@ -46,8 +62,11 @@ def ts_screw_positions(c):
 
 
 CASES = [
-    {"pcb_size_x": 100, "pcb_size_y": 100, "stencil_size": 0, "platter_margin": 5,
-     "jig_size": 140, "screw_spacing": 25, "pcb_pocket_clearance": 0.15},
+    # 用例 1:100x100 板 + frame_w=12 —— 钳制要求 window ≥ 62.55(钢网边到边
+    # 含 0.1 间隙 + frame_w=12 + 0.4 buffer),jig 必须 ≥ window·2 + 20 = 145
+    # 才能让周圈孔带靠外(jig/2-10=60)同时净距窗口 ≥4mm
+    {"pcb_size_x": 100, "pcb_size_y": 100, "stencil_size": 0, "platter_margin": 12,
+     "jig_size": 160, "screw_spacing": 25, "pcb_pocket_clearance": 0.15},
     {"pcb_size_x": 90, "pcb_size_y": 50, "stencil_size": 110, "platter_margin": 6,
      "jig_size": 180, "screw_spacing": 40, "pcb_pocket_clearance": 0.15},
     {"pcb_size_x": 40, "pcb_size_y": 40, "stencil_size": 60, "platter_margin": 6,

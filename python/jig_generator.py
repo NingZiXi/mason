@@ -143,20 +143,83 @@ def loft_cone(coords_bot, coords_top, z_bot, z_top):
 RES = 6  # buffer 圆弧每象限段数(模块级:rounded_rect_poly 与 get_polys 共用)
 
 
-def plater_radius(p, slot_poly):
-    """凸台 margin(含钢网扩张)与圆角半径 —— get_polys / build_cover 共用,
-    钢网扩张逻辑的单一来源(改这里即可两处同步)。
+def compute_frame_poly(p):
+    """PCB 钢网外框多边形 —— build_stencil 实体构造 + get_polys 反向
+    钳制凸台共用 —— 物理约束『platter ≤ frame - 唇』的单一来源。
+
+    钢网外缘来源:
+      1) stencil_size > 0(独立模式):用户直接给钢网外径 —— 构建一个直径 =
+         stencil_size 的圆角矩形作为 frame,不再用 frame_width 推导
+      2) 否则(frame_width 路径):板框 + pocket_clearance + stencil_frame_width,
+         外角圆角 stencil_corner_radius;形状选项 stencil_frame_shape
+         (outline/rect)生效
+    """
+    stencil_size = float(p.get("stencil_size", 0.0))
+    if stencil_size > 0:
+        # 独立模式:frame = 直径 stencil_size 的圆角矩形(用板框圆角半径或
+        # 兜底值),用户给定的尺寸作为夹具装配用的真实钢网外缘
+        r_frame = max(0.0, min(float(p.get("stencil_corner_radius", 3.0)), 20.0))
+        h = stencil_size / 2
+        return rounded_rect_poly(-h, -h, h, h, r_frame)
+    pocket_clr = float(p.get("pocket_clearance", 0.1))
+    frame_w = float(p.get("stencil_frame_width", 12.0))
+    outline_pts = p.get("pcb_outline_points", [])
+    if len(outline_pts) >= 3:
+        base_poly = ShapelyPolygon(outline_pts)
+        if not base_poly.is_valid:
+            base_poly = base_poly.buffer(0)
+    else:
+        w, h = p["pcb_size_x"] / 2, p["pcb_size_y"] / 2
+        base_poly = shapely_box(-w, -h, w, h)
+    frame_poly = base_poly.buffer(
+        pocket_clr + frame_w, join_style=2, resolution=RES
+    ).simplify(0.02)
+    if str(p.get("stencil_frame_shape", "outline")).strip().lower() == "rect":
+        minx, miny, maxx, maxy = frame_poly.bounds
+        frame_poly = shapely_box(minx, miny, maxx, maxy)
+    r_frame = max(0.0, min(float(p.get("stencil_corner_radius", 3.0)), 20.0))
+    if r_frame > 0.05:
+        fr_inner = frame_poly.buffer(-r_frame, join_style=2, resolution=RES)
+        if not fr_inner.is_empty:
+            frame_poly = fr_inner.buffer(
+                r_frame, join_style=1, resolution=RES
+            ).simplify(0.02)
+    return frame_poly
+
+
+def plater_radius(p, slot_poly, frame_poly=None):
+    """凸台外扩量与圆角半径 —— get_polys / build_cover 共用,
+    物理约束『凸台顶面 ⊇ 钢网外框』的单一来源。
     凸台恒为正方形:边长 = 槽包围盒长边 + 2*margin —— 钢网是正方形,
-    方形凸台保证钢网四边支撑唇均匀一致(窄长板短边不再多出一圈台阶)"""
-    margin = p.get("platter_margin", 5.0)
+    方形凸台保证钢网四边支撑均匀一致(窄长板短边不再多出一圈台阶)。
+
+    新语义(配合双向滑动条):
+      - 用户凸台宽 platter_width(默认 97mm):凸台本身的边长(mm);
+        必须 ≥ max(pcb_size_x, pcb_size_y),保证 PCB 不悬空
+      - 唇宽 stencil_lip(默认 1.5mm)= (stencil_size - platter_width)/2,
+        由 platter_width 滑动条联动,总和保持 stencil_size
+      - 凸台外扩量 margin_eff = platter_width/2 - slot_half_max
+        (反向钳制:platter 宽度由用户决定,只对槽最小包围盒做钳制,
+         不用 stencil/2 钳 —— 否则 stencil 永远是上限、滑动条无效)
+      - A/B 框窗口 = max(platter_half, stencil_size/2) + window_gap
+        (在 get_polys 中取钢网外缘兜底,保证窗口能容纳钢网)
+
+    关键修复(此前 bug):platter_half 不应被 frame_half_max (stencil/2) 钳制,
+    否则 platter_width ≤ stencil_size 时永远走 stencil/2 上限,滑动条完全失效。
+    """
     minx, miny, maxx, maxy = slot_poly.bounds
-    stencil = p.get("stencil_size", 0.0)
-    if stencil > 0:
-        slot_half = max(maxx - minx, maxy - miny) / 2
-        margin = max(margin, stencil / 2 - slot_half + 2.0)
-    half = max(maxx - minx, maxy - miny) / 2 + margin
-    r = min(p.get("platter_corner_radius", 4.5), half - 0.5)
-    return margin, r
+    slot_half_max = max(maxx - minx, maxy - miny) / 2
+    # 用户凸台宽度(默认 97mm):保证 ≥ slot_half_max(防 PCB 悬空)
+    # 不再用 stencil/2 钳制 —— 那会让任何 ≤ stencil_size 的 platterWidth 都无效
+    # 也不叠加 platter_margin —— 旧字段已废弃(platter_width 是总半宽)
+    platter_width = float(p.get("platter_width", 0.0))
+    platter_half = max(platter_width / 2, slot_half_max)
+    # 凸台外扩量(相对槽半宽)
+    margin_eff = max(0.0, platter_half - slot_half_max)
+    # 兼容字段:把有效唇宽写回 stencil_lip(供项目文件回显)
+    p["stencil_lip"] = max(0.0, float(p.get("stencil_size", 0.0)) / 2 - platter_half)
+    r = min(p.get("platter_corner_radius", 4.5), platter_half - 0.5)
+    return margin_eff, r
 
 
 def rounded_rect_poly(minx, miny, maxx, maxy, r):
@@ -174,6 +237,14 @@ def get_polys(p):
     返回 (slot_poly, platter_poly, window_poly, is_shaped)
     性能:buffer 的圆角离散 + simplify(0.02) 压共线点 —— 否则 100+ 顶点的
     轮廓会让 OCC 的 extrude/chamfer 慢一个数量级(7s → 亚秒)。
+
+    物理约束链(自上而下):
+      jig 螺丝带  ⊃  螺丝孔(jig/2 - 10 圆心) ——
+      A/B 框窗口(压钢网外缘)  ⊃  钢网  ⊆  凸台顶面外扩台阶
+      凸台顶面外扩  ⊃  PCB 槽
+    即:螺丝夹紧 A/B 框 —— A/B 框窗口靠唇(用户调节)压在钢网外缘上,
+    钢网坐在凸台顶面四周的外扩台阶上(被凸台托住),A/B 框与凸台同号,
+    不需要 frame ⊂ window 的硬约束。
     """
     clearance = p["pcb_pocket_clearance"]
     outline_pts = p.get("pcb_outline_points", [])
@@ -192,36 +263,94 @@ def get_polys(p):
     if slot_poly.is_empty:
         raise ValueError("PCB 槽多边形为空")
 
-    # 凸台 = 恒为正方形(边长 = 槽包围盒长边 + 2*margin,中心与槽中心一致)
+    # 钢网外框:build_stencil 与 get_polys 共用同一多边形(compute_frame_poly),
+    # 凸台 margin 由 frame 反向钳制 —— 修改 frame_width/frame_shape 后,凸台
+    # 会自动扩张或收缩,保证『platter + 唇 ⊂ frame』
+    frame_poly = compute_frame_poly(p)
+
+    # 凸台 = 恒为正方形,边长受钢网反向钳制
     # —— 不跟随板框形状:异形板(圆/异形轮廓)的托盘面仍是规整方形,
     # 且钢网是正方形,方形凸台四边支撑唇均匀一致。
-    # 钢网平放在凸台顶面:凸台必须装得下钢网(外留 2mm 支撑唇),
-    # 钢网大于槽跨度时 margin 自动扩张 —— 与 TS windowHalf() 同步改
-    margin, r = plater_radius(p, slot_poly)
+    margin, r = plater_radius(p, slot_poly, frame_poly=frame_poly)
     minx, miny, maxx, maxy = slot_poly.bounds
     cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
-    half = max(maxx - minx, maxy - miny) / 2 + margin
+    half = max(maxx - minx, maxy - miny) / 2 + margin  # = platter_half
     platter_poly = rounded_rect_poly(cx - half, cy - half, cx + half, cy + half, r)
 
-    # 窗口 = 凸台 + 0.4 单边间隙(圆角矩形):
-    # cover(A面)与 base(B面)共用同一多边形 —— 两块板的开口
-    # 大小、形状、四角圆角完全一致,叠合装配时孔口重合
-    window_poly = platter_poly.buffer(0.4, join_style=1, resolution=RES).simplify(0.02)
+    # A/B 框窗口 = 凸台外缘 + window_gap(默认 0.5mm,机械余量):
+    #   物理上 A/B 框中间的开孔是『漏出钢网/PCB 的工作窗口』,
+    #   A/B 框四周压在凸台外缘的台阶上 → 窗口必须 ≥ 凸台外缘;
+    #   钢网是放在凸台顶面 + PCB 上方的薄片,不穿过 A/B 框中间,
+    #   所以 A/B 框窗口不需要跟随 stencil_size(否则会出现"凸台缩窗口
+    #   不缩"的台阶,视觉割裂)。
+    window_gap = float(p.get("window_gap", 0.5))
+    win_half = half + window_gap
+    window_poly = rounded_rect_poly(
+        cx - win_half, cy - win_half, cx + win_half, cy + win_half,
+        min(r, window_gap + 0.5),
+    )
+
+    # 兼容字段:把有效外扩量回写到 platter_margin(项目文件兼容)
+    p["platter_margin"] = margin
+    # 给 corner_screw_positions 提供凸台半宽(沿对角线,platter 是圆角矩形,半宽 = half)
+    p["platter_half_for_post"] = half
 
     return slot_poly, platter_poly, window_poly, is_shaped
 
 
-def corner_screw_positions(window_poly, jig):
+def corner_screw_positions(window_poly, jig, p=None):
     """4 角压钢网螺丝位置:紧贴夹具 4 角(沿对角线),boss(半径 corner_d/2+2)圆心
     到两边各留 7mm,外缘 R5 圆角自然包容。
-    窗口过大时沿对角线内收到窗口外 3.5mm,保证 boss 不悬空。
+    窗口过大时沿对角线内收到窗口外,保证 boss 不悬空;
+    但不能过远,避免 boss 与底板外缘 R5 圆角重叠而失去突出(到外缘
+    直线的距离 ≥ R + r_post + 1.0 安全余量)。
+    物理不变量:
+      1) boss 必须落在底板外缘圆角之外,否则被几何覆盖掉;
+      2) boss 整体在凸台(platter)外 —— 否则与凸台圆角面撞车,
+         insert 顶面上 post 圆柱面侵入凸台,印出来的夹具 4 角柱体与
+         凸台融合成一体,失去"独立定位柱"功能;
+      3) boss 整体在窗口外 —— base/cover 上的定位柱孔(半径 r_hole)
+         不能与窗口壁相交,否则孔部分落入窗口无法成形。
     """
     win_half = max(window_poly.bounds[2], window_poly.bounds[3])
-    # 角部位置:圆心到两直边各 7mm → 对角坐标 = jig/2 - 7
+    # boss 与外缘参数(默认 5)
+    r_post = (p or {}).get("corner_screw_d", 5.0) / 2 + 2.0  # d/2+2
+    r_hole = (p or {}).get("corner_screw_d", 5.0) / 2 + 2.2  # 孔 r=d/2+2.2(留 0.2 间隙)
+    r_out = (p or {}).get("outer_corner_radius", 5.0)
+    # 凸台半宽(沿对角线,platter = 圆角矩形,半宽 = slot/2 + lip 钳到 frame)
+    plater_half = (p or {}).get("platter_half_for_post", None)
+    if plater_half is None:
+        # 兜底:从凸台外扩量与槽半宽推算(与 get_polys 同源)
+        slot_half = (p or {}).get("slot_half_max", None)
+        lip = (p or {}).get("stencil_lip", 1.5)
+        if slot_half is None or slot_half <= 0:
+            plater_half = win_half  # 不可得时用窗口兜底(略保守)
+        else:
+            stencil = (p or {}).get("stencil_size", 0.0)
+            frame_half = stencil / 2 if stencil > 0 else slot_half + (p or {}).get("stencil_frame_width", 5.0)
+            margin = max(lip, frame_half - slot_half)
+            plater_half = slot_half + margin
+    r_platter_corner = (p or {}).get("platter_corner_radius", 4.5)
+    # 默认:沿对角线内收 7mm(boss 圆心到两直边各 7mm)
     s = jig / 2 - 7.0
-    # 内收保护:boss(半径 6.5)必须落在窗口外(沿轴向 ≥ win_half+3.5)
-    if s < win_half + 3.5:
-        s = win_half + 3.5
+    # 内收保护(窗口轴向):boss 圆心到窗口轴向壁 ≥ r_hole,
+    #   保证 base/cover 上的孔不与窗口壁相交
+    if s < win_half + r_hole:
+        s = win_half + r_hole
+    # 内收保护(凸台对角线方向):boss 圆心沿对角线离凸台角部圆角面 ≥ r_post,
+    #   保证 insert 上的 post 圆柱面与凸台(platter)圆角面无交集
+    #   凸台角部圆角圆心 (plater_half - r_corner, plater_half - r_corner),
+    #   boss 圆心 (s, s),沿对角线距离差 = √2·(s - (plater_half - r_corner))
+    #   要 ≥ r_corner + r_post → s ≥ plater_half + r_post/√2 - r_corner·(1 - 1/√2)
+    s_platter = plater_half + r_post / math.sqrt(2) - r_platter_corner * (1 - 1 / math.sqrt(2))
+    if s < s_platter:
+        s = s_platter
+    # 底板外缘保护:boss 圆心距 jig 外缘直线距离 ≥ R + r_post + 1.0
+    #   否则 boss 与底板外缘圆角完全重叠,被 plate 整体覆盖,Y=12 顶
+    #   面无突出 → 失去定位柱功能
+    s_outer = jig / 2 - (r_out + r_post + 1.0)
+    if s > s_outer:
+        s = s_outer
     return [(s, s), (s, -s), (-s, s), (-s, -s)]
 
 
@@ -496,7 +625,7 @@ def build_insert(p):
     post_h = total_h + cover_h
     r_post = corner_d / 2 + 2.0  # Ø9 柱
     r_bore = corner_d / 2        # Ø5 内孔,壁厚 2mm
-    for (x, y) in corner_screw_positions(window_poly, jig):
+    for (x, y) in corner_screw_positions(window_poly, jig, p):
         post = Cylinder(r_post, post_h)
         part = part + post.moved(bd.Location((x, y, post_h / 2)))
         bore = Cylinder(r_bore, post_h + 0.2)
@@ -539,7 +668,7 @@ def build_cover(p):
 
     # 3. 4 角定位柱过孔(与 insert 定位柱同心):Ø9.4 全厚贯穿,
     #    柱穿过后与盖板顶面齐平(免螺丝,柱/孔配合固定三层)
-    positions = corner_screw_positions(window_poly, jig)
+    positions = corner_screw_positions(window_poly, jig, p)
     r_post_hole = corner_d / 2 + 2.2  # 柱 Ø9 + 0.2 径向间隙
     for (x, y) in positions:
         hole = Cylinder(r_post_hole, cover_h + 0.2)
@@ -591,7 +720,7 @@ def build_base(p):
     # 4. 4 角定位柱孔(与 cover 角孔同尺寸 Ø9.4,一一对应):
     #    翻面/换面装配时收定位柱
     corner_d = p.get("corner_screw_d", 5.0)
-    for (x, y) in corner_screw_positions(window_poly, jig):
+    for (x, y) in corner_screw_positions(window_poly, jig, p):
         hole = Cylinder(corner_d / 2 + 2.2, base_h + 0.2)
         base = base - hole.moved(bd.Location((x, y, base_h / 2)))
 
@@ -1012,23 +1141,16 @@ def build_stencil(p, side="top"):
 
     # 卡槽 = 板框 + 间隙
     pocket_poly = base_poly.buffer(pocket_clr, join_style=1, resolution=RES).simplify(0.02)
-    # 外框 = 板框整体外扩(间隙+边框宽,miter 尖角)→ 外角半径独立可调
-    # (stencil_corner_radius,默认 3mm;先用 miter 拿到直角外框,
-    #  再 buffer(-r).buffer(r) 把四个外凸角圆成半径 r 的圆弧)
-    frame_poly = base_poly.buffer(
-        pocket_clr + frame_w, join_style=2, resolution=RES
-    ).simplify(0.02)
-    # 外框形状:outline=跟随板形(默认);rect=外扩成矩形(板框包围盒+边框)
-    if str(p.get("stencil_frame_shape", "outline")).strip().lower() == "rect":
-        minx, miny, maxx, maxy = frame_poly.bounds
-        frame_poly = shapely_box(minx, miny, maxx, maxy)
-    r_frame = max(0.0, min(float(p.get("stencil_corner_radius", 3.0)), 20.0))
-    if r_frame > 0.05:
-        fr_inner = frame_poly.buffer(-r_frame, join_style=2, resolution=RES)
-        if not fr_inner.is_empty:
-            frame_poly = fr_inner.buffer(
-                r_frame, join_style=1, resolution=RES
-            ).simplify(0.02)
+    # 外框 = 与 get_polys 共用 compute_frame_poly,保证凸台钳制与实际生成
+    # 钢网外缘是同一个多边形 —— 单一来源改一处即可两端同步
+    frame_poly = compute_frame_poly(p)
+    if side == "top":
+        # 顶层翻面:板框已 Y 镜像(卡槽/焊盘跟着翻),外框必须同步镜像,
+        # 否则异形板外框凹陷与卡槽开口方向相反(compute_frame_poly 读的是
+        # 原始未镜像的 pcb_outline_points)。镜像翻转环方向,orient 修正回 CCW
+        frame_poly = shapely_orient(
+            shapely_scale_aff(frame_poly, xfact=1.0, yfact=-1.0), 1.0
+        )
 
     def _build_full():
         _eps = 0.05  # 切割余量,避免共面

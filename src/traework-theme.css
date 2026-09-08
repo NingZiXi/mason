@@ -92,6 +92,8 @@
   --bg-brand-disabled: rgba(62, 125, 98, 0.22);
   --bg-brand-popup: rgba(178, 209, 192, 0.36);
   --brand-accent: #E07A3C;
+  --brand-accent-hover: #C9682C;
+  --brand-accent-surface: rgba(224, 122, 60, 0.10);
 
   /* Text */
   --text-default: #171717;
@@ -515,6 +517,8 @@ html.dark {
   --bg-brand-active: #3E7D62;
   --bg-brand-popup: rgba(90, 155, 127, 0.20);
   --brand-accent: #ED8E50;
+  --brand-accent-hover: #F0A068;
+  --brand-accent-surface: rgba(237, 142, 80, 0.14);
 
   --text-default: #E8E8E8;
   --text-secondary: #B8B8BA;

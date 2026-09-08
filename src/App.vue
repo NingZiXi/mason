@@ -24,6 +24,12 @@ const { t } = useI18n();
 // Element Plus 内置组件文案(弹窗按钮等)跟随语言切换
 const epLocale = computed(() => (ui.locale === "en" ? enLocale : zhCn));
 const appMode = computed(() => configStore.config.appMode);
+// Gerber 导入完成态:治具模式看板框轮廓,钢网模式看焊盘(用于步骤圆点 1 → ✓)
+const gerberDone = computed(() =>
+  appMode.value === "stencil"
+    ? configStore.config.stencilPadsTop.length > 0 || configStore.config.stencilPadsBottom.length > 0
+    : configStore.config.pcbOutlinePoints.length > 0
+);
 function switchMode(mode: "jig" | "stencil") {
   configStore.setMode(mode);
 }
@@ -430,7 +436,7 @@ onBeforeUnmount(() => {
         <div id="slot-python" class="card-slot" :style="slotStyle('python')">
           <div class="slot-header" @click="toggleCollapse('python')">
             <div class="slot-label">
-              <span class="slot-step-dot" data-icon="py">Py</span>
+              <span class="slot-step-dot" data-icon="py" :class="{ 'is-done': configStore.pythonDetected }">Py</span>
               <span class="slot-title">{{ t('cards.python') }}</span>
             </div>
             <div class="slot-meta">
@@ -461,7 +467,7 @@ onBeforeUnmount(() => {
         <div id="slot-gerber" class="card-slot" :style="slotStyle('gerber')">
           <div class="slot-header" @click="toggleCollapse('gerber')">
             <div class="slot-label">
-              <span class="slot-step-dot" data-step="1">1</span>
+              <span class="slot-step-dot" data-step="1" :class="{ 'is-done': gerberDone }">{{ gerberDone ? '✓' : '1' }}</span>
               <span class="slot-title">{{ appMode === 'stencil' ? t('stencil.import') : t('cards.gerber') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.gerber }" viewBox="0 0 16 16" width="16" height="16">
@@ -836,6 +842,12 @@ onBeforeUnmount(() => {
 
 .slot-step-dot[data-step] {
   background: var(--bg-brand);
+  color: var(--text-onbrand);
+}
+
+/* 完成态:导入成功/环境就绪后,步骤圆点变成功绿(数字换成 ✓) */
+.slot-step-dot.is-done {
+  background: var(--status-success-default);
   color: var(--text-onbrand);
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeMount, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useConfigStore, windowHalf } from "../stores/config";
+import { useConfigStore, windowHalf, effectivePlatterMargin } from "../stores/config";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -9,47 +9,50 @@ const c = computed(() => store.config);
 const warnings = computed(() => store.warnings);
 const windowSize = computed(() => (windowHalf(store.config) * 2).toFixed(1));
 
-// 实际生效台阶宽 = max(手动值, 钢网所需最小台阶)
-// (凸台必须装得下钢网并外留 2mm 支撑唇 —— 与 Python get_polys / windowHalfXY 同式)
-const effectiveMargin = computed(() => {
-  const c = store.config;
-  const slotHX = c.pcbSizeX / 2 + c.pcbPocketClearance;
-  const slotHY = c.pcbSizeY / 2 + c.pcbPocketClearance;
-  const slotHalfMax = Math.max(slotHX, slotHY);
-  return Math.max(c.platterMargin, c.stencilSize / 2 - slotHalfMax + 2.0);
+// 组件 setup 之前先钳制异常值 —— 防止 ElementPlus InputNumber 在 setup 阶段抛
+// "min should not be greater than max" 阻断整个应用挂载:
+//   1. 加载旧工程 / localStorage 持久化的脏数据(用户曾经手动改过 jigSize < 60 等);
+//   2. ElementPlus 的 watch 在 InputNumber 内部用 throw 报告错(uncaught),而非 return,会让
+//      整个 setup 失败 → 整个页面白屏。
+// 解决:在 setup 之前把所有数值钳到合法范围,InputNumber 后续只接收合法值。
+onBeforeMount(() => {
+  const cfg = store.config;
+  // windowGap ≥ 0(下界钳制由 store watch 完成)
+  cfg.windowGap = Math.max(0, cfg.windowGap ?? 0.5);
+  // jigSize ≥ 60(InputNumber :min 是硬约束;下界钳制由 store watch 完成)
+  cfg.jigSize = Math.max(60, cfg.jigSize || 60);
 });
 
-// 台阶宽输入下限 = 钢网所需最小台阶(0.5 步进取整):
-// 低于此值不生效(被扩张兜底),干脆不允许输入,避免"输入了却没反应"
-const minMargin = computed(() => {
-  const c = store.config;
-  const slotHX = c.pcbSizeX / 2 + c.pcbPocketClearance;
-  const slotHY = c.pcbSizeY / 2 + c.pcbPocketClearance;
-  const floor = c.stencilSize / 2 - Math.max(slotHX, slotHY) + 2.0;
-  return Math.max(1, Math.ceil(floor * 2) / 2);
-});
+// 实际生效凸台外扩量 = max(stencilLip, 钢网要求的最小外扩量)
+//   与 Python get_polys / plater_radius 同式:
+//   凸台 = PCB 槽 + stencilLip;钢网反向钳制下凸台还得继续外扩到 frame_half
+//   (A/B 框压在凸台四周的边缘 → 凸台托住钢网外缘,钢网不悬空)
+const effectiveMargin = computed(() => effectivePlatterMargin(c.value));
 
-// 台阶宽上限必须 ≥ 下限:大钢网(如 150mm)会把最小台阶顶到 50+,
-// 若 max 固定 20 会造成 min>max,Element Plus 抛异常并打断 Vue 渲染管线,
-// 之后整个表单的更新(含高级区开合)全部失效
-const maxMargin = computed(() => Math.max(20, minMargin.value));
+// 双向滑块:绑 platterWidth(凸台宽度),向右拖 = 凸台变大、唇宽变小(符合直觉)
+//   滑块范围 [pcbMax, stencilSize]:左端=凸台最小(=板子边长,唇宽最大),
+//   右端=凸台最大(=钢网外缘,唇宽=0)
+//   与 store watch 中 lipMax 同源:lMax = (stencilSize - pcbMax)/2
+const pcbMaxSide = computed(() => Math.max(c.value.pcbSizeX, c.value.pcbSizeY));
+const platterMinBound = computed(() => pcbMaxSide.value);
+const platterMaxBound = computed(() => c.value.stencilSize);
+const platterSliderValue = computed(() => c.value.platterWidth ?? pcbMaxSide.value);
+function onPlatterSliderChange(v: number | number[]) {
+  const pw = Array.isArray(v) ? v[0] : v;
+  // 由 platterWidth 反推 lip(保持 sum = stencilSize)
+  const clamped = Math.max(platterMinBound.value, Math.min(platterMaxBound.value, Number(pw) || 0));
+  c.value.platterWidth = clamped;
+  c.value.stencilLip = Math.max(0, (c.value.stencilSize - clamped) / 2);
+}
 
-// 夹具边长输入下限:窗口 + 周圈孔带 + 外缘(20mm 步进)。
+// 夹具边长输入下限:与 store computeJigSize 同源(两个独立约束取大):
+//   A · 2*win + 28(窗口+螺丝带+外缘)
+//   B · stencil + 20(结构边 ≥10mm/边)
 // 手动改小到装不下窗口时部件会被挖空(空 STL,模型不显示) —— 在输入框拦住
-const minJigSize = computed(() => {
-  const c = store.config;
-  const win = windowHalf(c);
-  return Math.max(60, Math.ceil((2 * (win + 24)) / 20) * 20);
-});
-
-// 已存储值低于动态下限时抬到下限(如加载旧工程/钢网变大后):
-// 值域与输入框一致,不留"显示 A 实际 B"的裂缝
-watch(minMargin, (m) => {
-  if (store.config.platterMargin < m) store.config.platterMargin = m;
-});
-watch(minJigSize, (j) => {
-  if (store.config.jigSize < j) store.config.jigSize = j;
-});
+// 已存储值低于动态下界时抬到下界(如加载旧工程/钢网变大后):
+//   值域与输入框一致,不留"显示 A 实际 B"的裂缝
+//   注意:store 内的 watch[pcb/stencil/lip] 已经在 immediate 时执行同向钳制,
+//   这里只做"输入框强制约束"——v-model 范围(防止用户绕过)
 
 // 取放缺口:四向点亮开关(可任意组合,全灭 = 关闭)
 type NotchSide = 'up' | 'down' | 'left' | 'right';
@@ -218,58 +221,87 @@ function resetAll() {
     </button>
 
     <div v-show="showAdvanced" class="advanced-body">
-      <!-- 托盘 -->
-      <div class="section-label">{{ t('config.tray') }}</div>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('config.trayHint') }}</span>
-      </div>
+      <!-- 托盘几何:凸台/圆角/退件槽 -->
+      <div class="section-label">{{ t('config.trayGeometry') }}</div>
       <div class="field-row field-row-3">
         <div class="field">
           <label class="field-label">{{ t('config.insertHeight') }}</label>
           <el-input-number v-model="c.insertHeight" :min="4" :max="20" :step="0.5" :precision="1" size="small" style="width: 100%" />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('config.platterMargin') }}</label>
-          <el-input-number v-model="c.platterMargin" :min="minMargin" :max="maxMargin" :step="0.5" :precision="1" size="small" style="width: 100%" />
-        </div>
-        <div class="field">
           <label class="field-label">{{ t('config.platterCorner') }}</label>
           <el-input-number v-model="c.platterCornerRadius" :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%" />
-        </div>
-      </div>
-      <div class="field">
-        <label class="field-label">{{ t('config.pocketClearance') }}</label>
-        <el-input-number v-model="c.pcbPocketClearance" :min="0" :max="2" :step="0.05" :precision="2" size="small" style="width: 100%" />
-      </div>
-      <div v-if="effectiveMargin > c.platterMargin + 0.01" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M8 7v4M8 5.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-        </svg>
-        <span>{{ t('config.platterHint', { m: effectiveMargin.toFixed(1) }) }}</span>
-      </div>
-      <div class="field-row field-row-3">
-        <div class="field">
-          <label class="field-label">{{ t('config.ejectSlot') }}</label>
-          <el-input-number v-model="c.ejectSlotWidth" :min="0" :max="40" :step="1" :precision="0" size="small" style="width: 100%" />
         </div>
         <div class="field">
           <label class="field-label">{{ t('config.outerCorner') }}</label>
           <el-input-number v-model="c.outerCornerRadius" :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%" />
         </div>
       </div>
+      <div class="field">
+        <label class="field-label">{{ t('config.ejectSlot') }}</label>
+        <el-input-number v-model="c.ejectSlotWidth" :min="0" :max="40" :step="1" :precision="0" size="small" style="width: 100%" />
+      </div>
 
-      <!-- 夹具 -->
-      <div class="section-label">{{ t('config.jig') }}</div>
+      <!-- 凸台 ↔ 唇宽(双向滑块):独立卡片突出,整行独占 -->
+      <div class="section-label">{{ t('config.platterLipGroup') }}</div>
+      <div class="platter-lip-card">
+        <div class="platter-lip-slider">
+          <label class="field-label">
+            <span class="lbl-l">{{ t('config.stencilLip') }}</span>
+            <span class="lbl-title">→</span>
+            <span class="lbl-r">{{ t('config.platterWidth') }}</span>
+          </label>
+          <el-slider
+            :model-value="platterSliderValue"
+            @update:model-value="onPlatterSliderChange"
+            :min="platterMinBound"
+            :max="platterMaxBound"
+            :step="0.1"
+            :show-tooltip="true"
+            :format-tooltip="(v: number) => `${t('config.platterWidth')} = ${v.toFixed(1)}mm`"
+            :disabled="platterMaxBound <= platterMinBound"
+          />
+          <div class="slider-readout">
+            <span class="rd-l">
+              <span class="rd-k">{{ t('config.stencilLip') }}</span>
+              <span class="rd-v">{{ c.stencilLip.toFixed(1) }} mm</span>
+            </span>
+            <span class="rd-eq">2 × {{ c.stencilLip.toFixed(1) }} + {{ c.platterWidth.toFixed(1) }} =</span>
+            <span class="rd-r">
+              <span class="rd-v">{{ c.stencilSize.toFixed(0) }} mm</span>
+              <span class="rd-k">{{ t('config.stencilSizeShort') }}</span>
+            </span>
+          </div>
+        </div>
+        <div v-if="effectiveMargin > (c.stencilLip ?? 0) + 0.01" class="auto-hint">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path d="M8 7v4M8 5.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+          </svg>
+          <span>{{ t('config.platterHint', { m: effectiveMargin.toFixed(1) }) }}</span>
+        </div>
+      </div>
+
+      <!-- 装配间隙 -->
+      <div class="section-label">{{ t('config.assemblyGap') }}</div>
+      <div class="field-row">
+        <div class="field">
+          <label class="field-label">{{ t('config.windowGap') }}</label>
+          <el-input-number v-model="c.windowGap" :min="0" :max="5" :step="0.1" :precision="2" size="small" style="width: 100%" />
+        </div>
+        <div class="field">
+          <label class="field-label">{{ t('config.pocketClearance') }}</label>
+          <el-input-number v-model="c.pcbPocketClearance" :min="0" :max="2" :step="0.05" :precision="2" size="small" style="width: 100%" />
+        </div>
+      </div>
+
+      <!-- 夹具外形 -->
+      <div class="section-label">{{ t('config.jigShape') }}</div>
       <div class="field">
         <label class="field-label">{{ t('config.jigSide') }}</label>
         <el-input-number
           v-model="c.jigSize"
-          :min="minJigSize"
+          :min="0"
           :max="500"
           :step="20"
           size="default"
@@ -284,7 +316,8 @@ function resetAll() {
         <span>{{ t('config.jigHint', { w: windowSize, j: c.jigSize }) }}</span>
       </div>
 
-      <!-- 螺母槽(B 面底座) -->
+      <!-- 螺母沉槽(B 面底座) -->
+      <div class="section-label">{{ t('config.hexNutPocket') }}</div>
       <div class="field checkbox-field">
         <el-checkbox v-model="c.useHexNut" size="default">
           <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
@@ -555,5 +588,103 @@ function resetAll() {
   background: var(--bg-overlay-l1);
   border-color: var(--border-neutral-l2);
   color: var(--text-default);
+}
+
+/* 双向滑块卡片:凸台宽 ⇄ 唇宽 —— 独立卡片突出,整行独占 */
+.platter-lip-card {
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  background: var(--bg-overlay-l1);
+  padding: 14px 14px 10px 14px;
+  margin-bottom: 12px;
+}
+
+.platter-lip-slider .field-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+
+.platter-lip-slider .lbl-l,
+.platter-lip-slider .lbl-r {
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.platter-lip-slider .lbl-title {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  margin: 0 8px;
+  font-weight: var(--font-weight-medium);
+}
+
+.platter-lip-slider :deep(.el-slider) {
+  margin: 10px 6px 4px 6px;
+}
+
+.platter-lip-slider :deep(.el-slider__runway) {
+  background: linear-gradient(
+    to right,
+    rgba(62, 125, 98, 0.06) 0%,
+    rgba(62, 125, 98, 0.22) 100%
+  );
+}
+
+.platter-lip-card .auto-hint {
+  margin: 8px 0 0 0;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.slider-readout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px 2px 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-family-metric);
+  gap: 4px;
+}
+
+.slider-readout .rd-l,
+.slider-readout .rd-r {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 64px;
+}
+
+.slider-readout .rd-l {
+  align-items: flex-start;
+}
+
+.slider-readout .rd-r {
+  align-items: flex-end;
+}
+
+.slider-readout .rd-k {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-family-default);
+}
+
+.slider-readout .rd-v {
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.slider-readout .rd-eq {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-family: var(--font-family-metric);
+  white-space: nowrap;
 }
 </style>

@@ -1,5 +1,17 @@
 # -*- coding: utf-8 -*-
-"""取放缺口深度限制验证:深台阶(钢网扩张)时缺口只伸入 10mm,不贯穿凸台"""
+"""取放缺口深度限制验证:缺口伸入 10mm,深度不能超过凸台壁深
+
+新语义(plater_radius 反向钳制):凸台顶面 ⊇ 钢网,
+margin = max(platter_margin, frame_half - slot_half) → 凸台反向扩张托住钢网外缘
+
+- 50 板 + margin=5:slot=25.15
+- stencil=150:margin_min = 75-25.15 = 49.85 >> 5 → 凸台反向扩张到半宽 75,
+  壁深 49.85,缺口 10mm 不能切穿 49.85mm 凸台壁 → 缺口深度 = 10mm(设计值)
+- stencil=70:margin_min = 35-25.15 = 9.85 > 5 → 凸台反向扩张到半宽 35.00,
+  壁深 9.85,缺口 10mm 切穿 9.85mm 凸台壁 → 缺口深度 = 9.85mm(壁深上限)
+
+不变量:缺口深度 ≤ 凸台壁深(不切穿凸台 → 不影响内部 PCB 槽结构)
+"""
 import struct
 import sys
 
@@ -12,7 +24,10 @@ import jig_generator as jg
 
 ck = Checker()
 
-for label, stencil in [("深台阶(钢网150,台阶≈52)", 150), ("正常台阶(钢网70,台阶≈12)", 70)]:
+for label, stencil, expected_depth in [
+    ("深台阶(钢网150 反向扩张,壁深 49.85,缺口 10mm 未切穿)", 150, 10.0),
+    ("正常台阶(钢网70 反向扩张,壁深 9.85,缺口 10mm 切穿凸台壁)", 70, 9.85),
+]:
     print(f"=== {label} ===")
     params = base_params(
         _tag=f"nd_{stencil}", pcb_size_x=50, pcb_size_y=50,
@@ -40,12 +55,13 @@ for label, stencil in [("深台阶(钢网150,台阶≈52)", 150), ("正常台阶
         out_y = -zs.max()  # 回到 build 坐标
         notch_depth = miny_slot - out_y
         print(f"  缺口实际深度: {notch_depth:.1f}mm (槽缘 y={miny_slot:.2f}, 最外 y={out_y:.2f})")
-        if stencil == 150:
-            ck.check("深台阶:缺口深度 ≈ 10mm(reach),不贯穿 52mm 台阶",
-                     9.0 <= notch_depth <= 11.0)
-        else:
-            ck.check("正常台阶:残留 <3mm → 切穿(深度 ≈ 壁深,切口干净)",
-                     abs(notch_depth - margin_actual) < 1.5)
+        # 不变量:缺口深度 ≤ 凸台壁深(不能切穿凸台)
+        # 实际缺口深度:
+        #   未切穿时 = 缺口设计伸入量(10mm)
+        #   切穿时 = 凸台壁深
+        ck.check(f"缺口深度 = min(10mm 缺口设计, {margin_actual:.1f}mm 壁深) = {expected_depth:.1f}mm",
+                 abs(notch_depth - expected_depth) < 1.0,
+                 f"notch_depth={notch_depth:.1f}, expected={expected_depth:.1f}, wall={margin_actual:.1f}")
     else:
         ck.check("找到缺口", False)
 

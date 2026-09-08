@@ -74,12 +74,26 @@ export interface AppConfig {
   pcbPocketClearance: number;
   /** PCB 插板总厚(默认 8mm,参考设计) */
   insertHeight: number;
-  /** 凸台高度(其余为底板) */
+  /** 凸台高度(其余为底板) —— 由 baseHeight 自动同步,字段保留作项目兼容 */
   platterHeight: number;
-  /** 凸台台阶宽(槽到凸台外缘) */
+  /** 凸台台阶宽(槽到凸台外缘) —— 派生值 = max(stencilLip, frame_half - slot_half)
+   * 由 stencilLip 接管,字段保留仅用于项目文件兼容 */
   platterMargin: number;
   /** 矩形板凸台圆角半径 */
   platterCornerRadius: number;
+  /** A/B 框窗口与凸台外缘之间的机械余量(mm,默认 0.5)—— 用户可调,
+   * 让 A/B 框窗口比凸台稍大,留装配间隙;不参与物理约束 */
+  windowGap: number;
+  /** 凸台宽度(mm) —— 用户调节(配合 stencilLip 双向滑动条):
+   *   凸台托住 PCB;下限不能小于 max(pcbSizeX, pcbSizeY)
+   *   上限不超过 stencilSize(再大唇宽就为负,钢网无唇)
+   *   与 stencilLip 总和 = stencilSize(钢网外缘) */
+  platterWidth: number;
+  /** 钢网外缘压在凸台上的唇宽(mm) —— 用户调节(配合 platterWidth 滑动条):
+   *   凸台外再扩出 lip mm 才到钢网外缘(凸台 = 槽 + lip 后取大)
+   *   即 stencilLip = stencilSize - platterWidth
+   *   与 platterWidth 双向联动(滑块两端),总和保持 stencilSize */
+  stencilLip: number;
   /** 底部圆形顶出孔开关(0 = 关闭;孔径随板尺寸自适应) */
   ejectSlotWidth: number;
   /** 取放缺口位置:up / down / left / right 任意组合(空数组 = 关闭) */
@@ -143,6 +157,12 @@ const DEFAULT: AppConfig = {
   platterHeight: 4,
   platterMargin: 5,
   platterCornerRadius: 4.5,
+  windowGap: 0.5,
+  /** 默认 lip 占 lipMax 上界 60%:stencilSize=100, pcbMax=50 → lipMax=25,
+   * 默认 lip=15(60%)→ platterWidth=70,凸台半宽 35mm,窗口=35+0.5=35.5mm。
+   * 视觉上凸台有明显"托架台阶",凸台外缘 vs 钢网外缘对比一目了然。*/
+  platterWidth: 70,
+  stencilLip: 15,
   ejectSlotWidth: 22,
   pryNotchSides: ['down'],
   pryNotchScale: 1.0,
@@ -175,15 +195,53 @@ export const SCREW_SPECS = {
 export type ScrewSpec = keyof typeof SCREW_SPECS;
 
 /** 派生窗口 x/y 半宽(与 Python get_polys 一致,bbox 近似异形板)
- * 凸台/窗口恒为正方形:边长 = 槽包围盒长边 + 2*margin(钢网是正方形,
- * 方形凸台四边支撑唇均匀) —— 与 Python get_polys 同步改 */
+ * 凸台/窗口恒为正方形 —— 与 Python get_polys 同步改
+ *
+ * 物理约束链(自上而下):
+ *   jig 螺丝带  ⊃  螺丝孔(jig/2 - 10 圆心) ——
+ *   A/B 框窗口(机械余量)  ⊃  凸台(盖住钢网外缘)  ⊃  PCB 槽
+ * 即:螺丝夹紧 A/B 框 —— A/B 框窗口比凸台稍大(windowGap,机械余量)
+ * 压在钢网外缘上,凸台宽 ≥ PCB 边长(platterWidth),再扩 stencilLip 托住钢网。
+ *
+ * 数学链:
+ *   slot_half_max = max(pcb/2 + clearance)
+ *   platter_half  = max(slot_half_max, platterWidth/2)   # 凸台宽度不能比 PCB 小
+ *   stencilLip    = stencilSize/2 - platterHalf (用户滑动条控制,
+ *                  与 platterWidth 总和 = stencilSize)
+ *   window_half   = max(platterHalf, stencilSize/2) + windowGap
+ *                  # 窗口要么压在凸台上、要么压在钢网外缘(取更外)
+ *
+ * 反向钳制:platterMargin(派生) = platterHalf - slotHalf
+ * —— 当钢网要求 lip > 实际 lip 时,platter 还得继续外扩才能托住钢网;
+ * 该派生值保留在 platterMargin 字段里,用于项目文件兼容 */
 export function windowHalfXY(c: AppConfig): { hx: number; hy: number } {
+  const windowGap = c.windowGap ?? 0.5;
+  const platterHalf = platterHalfFor(c);
+  // 窗口 = max(凸台外缘, 钢网外缘) + 机械余量
+  const stencilHalf = (c.stencilSize ?? 0) / 2;
+  const outerHalf = Math.max(platterHalf, stencilHalf);
+  const windowHalf = outerHalf + windowGap;
+  return { hx: windowHalf, hy: windowHalf };
+}
+
+/**
+ * 凸台半宽计算:
+ *   1) 优先 platterWidth/2(用户设的凸台宽度);
+ *   2) 但必须 ≥ slotHalfMax(凸台不能比 PCB 小,否则 PCB 悬空);
+ *   3) 反向钳制:lip 算出的实际凸台半宽 = stencilHalf 时,凸台已到钢网外缘,
+/**
+ * 凸台半宽(双向滑动条语义):
+ *   platter_half = max(platterWidth / 2, slotHalfMax)
+ * - 不再用 stencil/2 钳制 —— 那会让任何 ≤ stencilSize 的 platterWidth 都无效
+ * - 窗口(window)那边再用 stencil/2 兜底,保证 A/B 框能容纳钢网
+ * 与 Python `plater_radius` 完全同源。
+ */
+export function platterHalfFor(c: AppConfig): number {
   const slotHX = c.pcbSizeX / 2 + c.pcbPocketClearance;
   const slotHY = c.pcbSizeY / 2 + c.pcbPocketClearance;
   const slotHalfMax = Math.max(slotHX, slotHY);
-  const margin = Math.max(c.platterMargin, c.stencilSize / 2 - slotHalfMax + 2.0);
-  const half = slotHalfMax + margin + 0.4;
-  return { hx: half, hy: half };
+  const userPlatterHalf = (c.platterWidth ?? 0) / 2;
+  return Math.max(userPlatterHalf, slotHalfMax);
 }
 
 /** 窗口最大半宽(方形近似,用于 jig 尺寸推导/角螺丝钳位) */
@@ -193,26 +251,71 @@ export function windowHalf(c: AppConfig): number {
 }
 
 /**
- * 台阶宽自动值:钢网与板子尺寸的均衡——凸台面是钢网搭接承压面,
- * 取板子均边的 8%,夹在 6~12mm(小板 6 够压紧,大板 12 承压更稳,再大浪费面积)。
+ * 派生 platterMargin(项目文件兼容字段):等于有效台阶宽
+ *   = platterHalf - slotHalf
+ * 与 Python plater_radius 的 margin_eff 同源
+ * @deprecated platterMargin 已是派生展示字段,由 watch 自动写入;不再建议组件直接读
  */
-export function autoPlatterMargin(c: AppConfig): number {
-  const avg = (c.pcbSizeX + c.pcbSizeY) / 2;
-  return Math.min(12, Math.max(6, Math.round(avg * 0.08 * 2) / 2));
+export function effectivePlatterMargin(c: AppConfig): number {
+  const slot = Math.max(c.pcbSizeX / 2 + c.pcbPocketClearance,
+                        c.pcbSizeY / 2 + c.pcbPocketClearance);
+  return Math.max(0, platterHalfFor(c) - slot);
 }
 
 /**
  * 按 20mm 步进计算最小容纳尺寸
  * 输入:窗口 + 周圈孔带 + 边框(与 compute_perimeter_screw_positions 的 limit 一致)
  */
+/**
+ * 自动推荐夹具边长 —— 由两个独立约束取大,20mm 步进取整:
+ *
+ *   约束 A · 窗口容纳:
+ *     jig/2 ≥ win + 14
+ *     → jig ≥ 2*win + 28
+ *     (win 到螺丝圆心 4mm + 螺丝圆心到外缘 10mm + 螺丝外缘结构保护 14mm)
+ *     这是 screwPositions bandX = max(jig/2-10, win+4) 的临界点:
+ *     当 jig ≥ 2*win+28,螺丝靠外缘排列;小于则贴窗口 → 不可再小
+ *
+ *   约束 B · 结构边:
+ *     jig ≥ stencil + 20
+ *     (每边 10mm 留给 A/B 盖板完整压住钢网四边)
+ *
+ *   约束 C · 4 角定位柱不撞凸台:
+ *     凸台是圆角矩形 R=corner_radius,4 角定位柱圆心(s,s)沿对角线
+ *     必须落在凸台圆角面外(留 r_post 余量)且在窗口轴向壁外(留 r_hole)
+ *     —— 否则 insert 上的 post 圆柱面侵入凸台圆角面,base/cover 上的
+ *     孔与窗口壁相交(几何不可成形)。
+ *     推导(沿对角线方向最紧约束):
+ *       s_post ≥ platter_half + r_post/√2 - r_corner·(1 - 1/√2)
+ *       s_post ≤ jig/2 - (r_outer + r_post + 1)
+ *       s_post ≥ win + r_hole
+ *       → jig ≥ 2·(platter_half + r_post/√2 - r_corner·(1 - 1/√2)
+ *                  + r_outer + r_post + 1)
+ *       → jig ≥ 2·(win + r_hole + r_outer + r_post + 1)
+ *     取大
+ *
+ * 注:孔带末端内收 14mm(limit = jig/2-14)由 screwPositions 内部自动适配,
+ * 角定位柱让位(jig/2 - (r_outer+r_post+1))落在 jig/2-14 内,自动兼容。
+ */
 function computeJigSize(c: AppConfig): number {
   const win = windowHalf(c);
-  const minMargin = 24; // 周圈孔带 + 外缘 + 圆角
-  const raw = 2 * (win + minMargin);
-  // 夹具必须大于钢网:盖板/底座要完整压住钢网四边(每边 ≥10mm 结构边)
+  const winFloor = 2 * win + 28;
   const stencilFloor = c.stencilSize + 20;
-  // 20mm 步进取整
-  return Math.max(60, Math.ceil(Math.max(raw, stencilFloor) / 20) * 20);
+  // 约束 C:4 角定位柱不撞凸台/窗口
+  const rPost = (c.cornerScrewD ?? 5) / 2 + 2;
+  const rHole = (c.cornerScrewD ?? 5) / 2 + 2.2;
+  const rOut = c.outerCornerRadius ?? 5;
+  const rCorner = c.platterCornerRadius ?? 4.5;
+  // 凸台半宽直接用 platterHalfFor(新语义):platterWidth/2 与 slotHalfMax、stencilHalf 取大
+  const platterHalf = platterHalfFor(c);
+  // s_post ≥ platter_half + r_post/√2 - r_corner·(1 - 1/√2)
+  // (凸台对角线方向最紧约束,推导见 docstring)
+  const sPlatter = platterHalf + rPost / Math.sqrt(2) - rCorner * (1 - 1 / Math.sqrt(2));
+  const sOuter = rOut + rPost + 1;
+  const postFloor = 2 * (sPlatter + sOuter);
+  // s_post ≥ win + r_hole(窗口轴向壁约束,base/cover 上的孔不能与窗口壁相交)
+  const winHoleFloor = 2 * (win + rHole + sOuter);
+  return Math.max(60, Math.ceil(Math.max(winFloor, stencilFloor, postFloor, winHoleFloor) / 20) * 20);
 }
 
 export const useConfigStore = defineStore("config", () => {
@@ -255,15 +358,37 @@ export const useConfigStore = defineStore("config", () => {
     return positions;
   });
 
-  // 板子尺寸变化 → 台阶宽 + jig 尺寸联动自动适配(手动改 margin 只重算 jig,直到下次改板子)
+  // 板子尺寸变化 → 触发"自动钳制到下界"(反向钳制下界抬高):
+  //   - stencilSize < pcb_max+0.1 时,自动推荐 = pcb_max+20(10mm 步进)
+  //     —— 避免空值/默认值 0 让后续推导失真
+  //   - platterMargin:派生写入 = effectivePlatterMargin(项目兼容字段)
+  //   - jigSize:按 20mm 步进取整(窗口 + 螺丝带 + 外缘)
+  // 触发依赖:pcb/stencil/lip/windowGap 任一变化都重算(下界同步联动)
   watch(
-    () => [config.value.pcbSizeX, config.value.pcbSizeY],
+    () => [
+      config.value.pcbSizeX,
+      config.value.pcbSizeY,
+      config.value.stencilSize,
+      config.value.stencilLip,
+      config.value.platterWidth,
+      config.value.windowGap,
+    ],
     () => {
-      // 钢网自动推荐:板子最大边 + 20mm 边框,取 10mm 步进
-      const pcbMax = Math.max(config.value.pcbSizeX, config.value.pcbSizeY);
-      config.value.stencilSize = Math.ceil((pcbMax + 20) / 10) * 10;
-      config.value.platterMargin = autoPlatterMargin(config.value);
-      config.value.jigSize = computeJigSize(config.value);
+      const c = config.value;
+      const pcbMax = Math.max(c.pcbSizeX, c.pcbSizeY);
+      if (c.stencilSize < pcbMax + 0.1) {
+        c.stencilSize = Math.ceil((pcbMax + 20) / 10) * 10;
+      }
+      // 双向联动:platterWidth + 2*stencilLip = stencilSize
+      //   凸台宽 ≥ max(pcbMax, stencilSize/2);即 lip ≤ (stencilSize - pcbMax)/2
+      //   若 stencilSize < pcbMax 时(此时 lip = 0,凸台至少等于钢网外缘),也允许
+      const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
+      // 同步唇宽 = (stencilSize - platterWidth)/2,但保证 platterWidth ≥ pcbMax
+      const halfLip = (c.stencilSize - c.platterWidth) / 2;
+      c.stencilLip = Math.max(0, Math.min(lipMax, halfLip));
+      // platterMargin 派生写入(项目文件兼容)
+      c.platterMargin = effectivePlatterMargin(c);
+      c.jigSize = computeJigSize(c);
     },
     { immediate: true }
   );
@@ -273,8 +398,10 @@ export const useConfigStore = defineStore("config", () => {
     () => [
       config.value.pcbSizeX,
       config.value.pcbSizeY,
-      config.value.platterMargin,
       config.value.stencilSize,
+      config.value.stencilLip,
+      config.value.platterWidth,
+      config.value.windowGap,
     ],
     () => {
       config.value.jigSize = computeJigSize(config.value);
@@ -329,11 +456,16 @@ export const useConfigStore = defineStore("config", () => {
       });
     }
 
-    // PCB 必须放得进夹具(窗口 + 周圈孔带 + 外缘)
-    if (2 * (win + 24) > c.jigSize + 0.01) {
+    // PCB 必须放得进夹具(窗口 + 周圈孔带 + 外缘):
+    //   约束 band = max(jig/2 - 10, win_half + 4) —— 周圈孔带靠外时距外缘 10mm;
+    //   要让周圈孔带真正靠外(band = jig/2-10,不贴窗口),需 jig/2-10 ≥ win_half+4
+    //   → jig ≥ 2*win + 28(窗口到螺丝圆心 4mm + 螺丝圆心到外缘 10mm +
+    //     螺丝外缘结构保护 14mm = 4 + 10 + 14,与 Python
+    //     compute_perimeter_screw_positions 的 band/limit 同源)
+    if (2 * win + 28 > c.jigSize + 0.01) {
       list.push({
         key: "config.warnings.jigTooSmall",
-        params: { j: Math.ceil((2 * (win + 24)) / 20) * 20 },
+        params: { j: Math.ceil((2 * win + 28) / 20) * 20 },
       });
     }
     // 凸台高度:至少 2mm 台阶面压钢网,槽深后还要剩壁
@@ -379,11 +511,22 @@ export const useConfigStore = defineStore("config", () => {
     outlinePoints: Array<[number, number]> = [],
     holes: Array<Array<[number, number]>> = []
   ) {
-    config.value.pcbSizeX = width;
-    config.value.pcbSizeY = height;
-    config.value.gerberFilename = filename;
-    config.value.pcbOutlinePoints = outlinePoints;
-    config.value.pcbOutlineHoles = holes;
+    const c = config.value;
+    c.pcbSizeX = width;
+    c.pcbSizeY = height;
+    c.gerberFilename = filename;
+    c.pcbOutlinePoints = outlinePoints;
+    c.pcbOutlineHoles = holes;
+    // 导入新 Gerber:滑块自动落到 60% 位置(中间靠右),台阶有合理默认值
+    //   滑动条本身仍可调到偏移 0(lip = lipMax,台阶 = 0),由用户主动选择
+    //   stencilSize 下界 = ceil((pcbMax+20)/10)*10(与 watch 同式,只放大不缩小)
+    const pcbMax = Math.max(width, height);
+    const stencilFloor = Math.ceil((pcbMax + 20) / 10) * 10;
+    c.stencilSize = Math.max(c.stencilSize, stencilFloor);
+    const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
+    const lip = 0.6 * lipMax;
+    c.stencilLip = Math.round(lip * 10) / 10;
+    c.platterWidth = c.stencilSize - 2 * c.stencilLip;
   }
 
   /** 钢网模式:导入板框 + 双面锡膏层结果 */
@@ -394,11 +537,20 @@ export const useConfigStore = defineStore("config", () => {
     topPads: PadPolygon[],
     bottomPads: PadPolygon[]
   ) {
-    config.value.pcbSizeX = width;
-    config.value.pcbSizeY = height;
-    config.value.pcbOutlinePoints = outlinePoints;
-    config.value.stencilPadsTop = topPads;
-    config.value.stencilPadsBottom = bottomPads;
+    const c = config.value;
+    c.pcbSizeX = width;
+    c.pcbSizeY = height;
+    c.pcbOutlinePoints = outlinePoints;
+    c.stencilPadsTop = topPads;
+    c.stencilPadsBottom = bottomPads;
+    // 导入新 Gerber:滑块自动落到 60% 位置(同 applyGerberSize)
+    const pcbMax = Math.max(width, height);
+    const stencilFloor = Math.ceil((pcbMax + 20) / 10) * 10;
+    c.stencilSize = Math.max(c.stencilSize, stencilFloor);
+    const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
+    const lip = 0.6 * lipMax;
+    c.stencilLip = Math.round(lip * 10) / 10;
+    c.platterWidth = c.stencilSize - 2 * c.stencilLip;
   }
 
   function setMode(mode: AppMode) {
@@ -429,7 +581,7 @@ export const useConfigStore = defineStore("config", () => {
       nutHeight: DEFAULT.nutHeight,
     });
     // 派生参数重算(margin 影响窗口→jig 尺寸;platterHeight 随 baseHeight)
-    config.value.platterMargin = autoPlatterMargin(config.value);
+    config.value.platterMargin = effectivePlatterMargin(config.value);
     config.value.jigSize = computeJigSize(config.value);
   }
 

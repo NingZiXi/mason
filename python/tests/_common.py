@@ -113,6 +113,9 @@ def base_params(**over):
         "jig_size": 140, "insert_height": 8,
         "platter_height": 4, "platter_margin": 5,
         "platter_corner_radius": 4.5, "eject_slot_width": 22,
+        # 默认 100×100 PCB:platterWidth=100(刚好盖住),lip=1.5(钢网为 0 时)
+        "platter_width": 100,
+        "stencil_lip": 1.5, "window_gap": 0.5,
         "pry_notch_sides": [], "pry_notch_scale": 1.0,
         "corner_screw_d": 5, "peri_screw_d": 3.5,
         "outer_corner_radius": 5, "base_support_pips": True,

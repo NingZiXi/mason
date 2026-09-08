@@ -34,9 +34,16 @@ pub struct ScadParams {
     /// 凸台高度(其余为底板)
     #[serde(default = "default_platter_height")]
     pub platter_height: f64,
-    /// 凸台台阶宽(槽到凸台外缘)
+    /// 凸台阶宽(槽到凸台外缘)
     #[serde(default = "default_platter_margin")]
     pub platter_margin: f64,
+    /// 凸台宽度(mm) —— 与 stencil_lip 总和 = stencil_size(双向滑动条)
+    /// Python 端 plater_radius 用它做反向钳制,前端 lip 滑动条即时联动
+    #[serde(default = "default_platter_width")]
+    pub platter_width: f64,
+    /// 钢网外缘压在凸台上的唇宽(mm) —— 与 platter_width 联动
+    #[serde(default = "default_stencil_lip")]
+    pub stencil_lip: f64,
     /// 矩形板凸台圆角半径
     #[serde(default = "default_platter_corner_radius")]
     pub platter_corner_radius: f64,
@@ -121,6 +128,8 @@ pub struct ScadParams {
 fn default_insert_height() -> f64 { 8.0 }
 fn default_platter_height() -> f64 { 4.0 }
 fn default_platter_margin() -> f64 { 5.0 }
+fn default_platter_width() -> f64 { 70.0 }
+fn default_stencil_lip() -> f64 { 15.0 }
 fn default_platter_corner_radius() -> f64 { 4.5 }
 fn default_eject_slot_width() -> f64 { 22.0 }
 fn default_pry_notch_sides() -> Vec<String> { vec!["down".to_string()] }
