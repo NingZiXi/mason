@@ -30,6 +30,14 @@ const PART_TO_RUST: Record<PartName, string> = {
 
 const appMode = computed(() => store.config.appMode);
 
+// 数据就绪才渲染:治具模式需导入板框轮廓,钢网模式需导入焊盘;
+// 否则不生成默认 demo,预览区只显示引导卡片
+const hasData = computed(() =>
+  appMode.value === "stencil"
+    ? store.config.stencilPadsTop.length > 0 || store.config.stencilPadsBottom.length > 0
+    : store.config.pcbOutlinePoints.length > 0
+);
+
 // three.js 引用(shallowRef 避免响应式包装影响性能)
 const scene = shallowRef<THREE.Scene | null>(null);
 const camera = shallowRef<THREE.PerspectiveCamera | null>(null);
@@ -38,10 +46,11 @@ const controls = shallowRef<OrbitControls | null>(null);
 const currentMesh = shallowRef<THREE.Mesh | null>(null);
 const animationId = ref<number | null>(null);
 
-// STL 字节缓存:key 是 part 名称(insert/cover/base),value 是 {bytes, paramsHash}
+// STL 字节缓存:key 是 part 名称(insert/cover/base),value 是 {bytes, paramsHash, geometry?}
 // 切换 tab 时如果参数没变,直接用缓存的 bytes 跳过 Python 调用
 // bytes 是 ArrayBuffer(Rust 端 tauri::ipc::Response 二进制通道,避免 JSON 数字数组膨胀)
-const stlCache = ref<Record<string, { bytes: ArrayBuffer; paramsHash: string }>>({});
+// geometry 是解析后的 BufferGeometry(切 tab 复用,零解析开销);整体替换写入,用 shallowRef
+const stlCache = shallowRef<Record<string, { bytes: ArrayBuffer; paramsHash: string; geometry?: THREE.BufferGeometry }>>({});
 
 // 计算当前参数的 hash(用于判断是否需要重新生成)
 function paramsHash() {
@@ -165,6 +174,8 @@ function initThreeScene() {
   ctrl.dampingFactor = 0.08;
   ctrl.autoRotate = false;
   ctrl.autoRotateSpeed = 0.8;
+  // 相机变化(拖拽/惯性)时唤醒渲染循环
+  ctrl.addEventListener("change", invalidate);
 
   scene.value = s;
   camera.value = cam;
@@ -174,11 +185,13 @@ function initThreeScene() {
   animate();
 }
 
-// 按需渲染:静止时不画,场景变化(invalidate)或相机运动(update 返回 true)才渲染
+// 按需渲染:静止时不画也不跑 RAF(暂停动画循环,空闲零 CPU),
+// 场景变化(invalidate)或相机运动(update 返回 true)时再唤醒
 let needsRender = true;
 
 function invalidate() {
   needsRender = true;
+  if (animationId.value === null) animate();
 }
 
 function animate() {
@@ -189,12 +202,17 @@ function animate() {
     renderer.value.render(scene.value, camera.value);
     needsRender = false;
   }
+  // 完全静止 → 暂停循环,等待下一次 invalidate 唤醒
+  if (!moved && !needsRender && animationId.value !== null) {
+    cancelAnimationFrame(animationId.value);
+    animationId.value = null;
+  }
 }
 
 function disposeMesh() {
   if (currentMesh.value) {
     scene.value?.remove(currentMesh.value);
-    currentMesh.value.geometry.dispose();
+    // geometry 由 stlCache 持有(切 tab 时复用),不在此释放
     if (Array.isArray(currentMesh.value.material)) {
       currentMesh.value.material.forEach((m) => m.dispose());
     } else {
@@ -216,6 +234,15 @@ async function renderCurrent() {
     return;
   }
 
+  // 未导入数据:不渲染 demo,清掉旧模型让引导卡片显示
+  if (!hasData.value) {
+    ++renderSeq; // 让在途的旧渲染结果作废
+    disposeMesh();
+    loading.value = false;
+    errorMsg.value = null;
+    return;
+  }
+
   const seq = ++renderSeq;
   const partName = activePart.value; // 捕获请求发起时的部件,await 后不再读响应式值
 
@@ -223,7 +250,7 @@ async function renderCurrent() {
   const cached = stlCache.value[partName];
   const hash = paramsHash();
   if (cached && cached.paramsHash === hash) {
-    applyStlToMesh(cached.bytes);
+    applyStlToMesh(getOrParseGeometry(partName, cached.bytes, hash));
     // 接管 loading:本次渲染已同步完成,而在途的旧请求(seq 已过期)
     // 的 finally 不会清 loading —— 不接管会永久转圈
     loading.value = false;
@@ -241,15 +268,12 @@ async function renderCurrent() {
     const bytes = await invoke<ArrayBuffer>("generate_stl", { params, part });
 
     // 缓存 bytes:key 用捕获的 partName(结果属于发起请求的部件)
-    stlCache.value = {
-      ...stlCache.value,
-      [partName]: { bytes, paramsHash: hash },
-    };
+    cachePart(partName, bytes, hash);
 
     // 过期检查:期间用户已切 tab / 参数已变 → 不应用,由新的渲染负责
     if (seq !== renderSeq || activePart.value !== partName) return;
 
-    applyStlToMesh(bytes);
+    applyStlToMesh(getOrParseGeometry(partName, bytes, hash));
   } catch (e) {
     if (seq === renderSeq) {
       errorMsg.value = t("preview.renderFailed", { msg: e instanceof Error ? e.message : String(e) });
@@ -261,13 +285,28 @@ async function renderCurrent() {
   }
 }
 
-// 把 STL bytes 应用到 mesh(独立函数,缓存命中时直接用)
-function applyStlToMesh(bytes: ArrayBuffer) {
-  disposeMesh();
-  const loader = new STLLoader();
-  const geometry = loader.parse(bytes);
+// 解析 STL 为 BufferGeometry;同 hash 已解析过则直接复用(切 tab 零解析、瞬间上屏)
+function getOrParseGeometry(partName: string, bytes: ArrayBuffer, hash: string): THREE.BufferGeometry {
+  const entry = stlCache.value[partName];
+  if (entry && entry.paramsHash === hash && entry.geometry) return entry.geometry;
+  const geometry = new STLLoader().parse(bytes);
   geometry.center();
   geometry.computeVertexNormals();
+  if (entry && entry.paramsHash === hash) entry.geometry = geometry;
+  return geometry;
+}
+
+// 写入/覆盖部件缓存;hash 变化时释放旧 geometry 防显存泄漏
+function cachePart(partName: string, bytes: ArrayBuffer, hash: string) {
+  const old = stlCache.value[partName];
+  if (old && old.paramsHash !== hash) old.geometry?.dispose();
+  const geometry = old && old.paramsHash === hash ? old.geometry : undefined;
+  stlCache.value = { ...stlCache.value, [partName]: { bytes, paramsHash: hash, geometry } };
+}
+
+// 把 geometry 应用到 mesh(独立函数,缓存命中时直接用)
+function applyStlToMesh(geometry: THREE.BufferGeometry) {
+  disposeMesh();
 
   // 部件配色:insert=青瓷绿(品牌主部件)、base=石板蓝、cover=琥珀、
   // 钢网顶层=琥珀、底层=石板蓝(与 tab 色标一致)
@@ -308,12 +347,38 @@ function scheduleRender() {
 // 切换部件时立即渲染
 watch(activePart, () => renderCurrent());
 
-// 任意参数变化时防抖渲染
-watch(
-  () => store.config,
-  () => scheduleRender(),
-  { deep: true }
-);
+// 参数变化 → 防抖重渲染 + 防抖后台预热
+// 只跟踪 hash 相关的标量字段与数组引用(pads/outline 都是导入时整体替换,引用变化即内容变化),
+// 避免 deep watch 每次改动都遍历数千焊盘造成拖动掉帧
+const hashSource = computed(() => {
+  const c = store.config;
+  return [
+    appMode.value,
+    c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance,
+    c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSize,
+    c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight,
+    c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight,
+    c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD,
+    c.outerCornerRadius, c.platterWidth, c.stencilLip, c.windowGap,
+    c.pryNotchSides, c.pryNotchScale,
+    c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius,
+    c.stencilFrameShape, c.pocketClearance,
+    c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
+    c.stencilGrid, c.stencilGridSize, c.stencilGridBar,
+    c.stencilPadsTop, c.stencilPadsBottom,
+  ];
+});
+
+// 参数稳定 1.2s 后后台预热其它部件,之后切 tab 直接命中缓存
+let preloadTimer: number | null = null;
+watch(hashSource, () => {
+  scheduleRender();
+  if (preloadTimer !== null) window.clearTimeout(preloadTimer);
+  preloadTimer = window.setTimeout(() => {
+    preloadTimer = null;
+    if (store.pythonDetected) void preloadAllParts();
+  }, 1200);
+});
 
 // 监听 Python 检测状态
 watch(
@@ -359,6 +424,8 @@ const allParts = computed<PartName[]>(() =>
 );
 
 async function preloadAllParts() {
+  // 未导入数据不预热(不浪费 Python 调用,导入后 hashSource 变化会自动触发)
+  if (!hasData.value) return;
   const hash = paramsHash();
   // 并行生成各部件(spawn + build123d 导入开销重叠,总耗时约等于单件)
   await Promise.all(
@@ -422,22 +489,33 @@ function onResize() {
   const container = canvasEl.value.parentElement!;
   const w = container.clientWidth;
   const h = container.clientHeight;
+  if (w === 0 || h === 0) return;
   renderer.value.setSize(w, h);
   camera.value.aspect = w / h;
   camera.value.updateProjectionMatrix();
   invalidate();
 }
 
+// 容器尺寸观察:侧栏拖动只改变容器宽度,不触发 window resize,
+// 必须用 ResizeObserver 监听容器本身,否则 canvas 停留旧尺寸、右侧露背景
+let containerObserver: ResizeObserver | null = null;
+
 onMounted(() => {
   initThreeScene();
-  window.addEventListener("resize", onResize);
+  if (canvasEl.value?.parentElement) {
+    containerObserver = new ResizeObserver(() => onResize());
+    containerObserver.observe(canvasEl.value.parentElement);
+  }
   if (store.pythonDetected) renderCurrent();
 });
 
 onBeforeUnmount(() => {
-  window.removeEventListener("resize", onResize);
+  containerObserver?.disconnect();
+  containerObserver = null;
   if (animationId.value !== null) cancelAnimationFrame(animationId.value);
   disposeMesh();
+  for (const e of Object.values(stlCache.value)) e.geometry?.dispose();
+  if (preloadTimer !== null) window.clearTimeout(preloadTimer);
   controls.value?.dispose();
   renderer.value?.dispose();
   scene.value = null;
@@ -633,8 +711,8 @@ watch(partTabs, (tabs) => {
             <path d="M32 20v18M24 30l8 8 8-8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
             <rect x="24" y="46" width="16" height="4" rx="2" fill="currentColor" opacity="0.55" />
           </svg>
-          <p class="empty-line1">{{ t('preview.emptyLine1') }}</p>
-          <p class="empty-line2">{{ t('preview.emptyLine2') }}</p>
+          <p class="empty-line1">{{ appMode === 'stencil' ? t('preview.emptyLine1Stencil') : t('preview.emptyLine1') }}</p>
+          <p class="empty-line2">{{ appMode === 'stencil' ? t('preview.emptyLine2Stencil') : t('preview.emptyLine2') }}</p>
         </div>
       </div>
       <div v-if="loading" class="overlay">

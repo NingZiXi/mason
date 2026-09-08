@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeMount, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useConfigStore, windowHalf, effectivePlatterMargin } from "../stores/config";
+import { useConfigStore, windowHalf, effectivePlatterMargin, stencilClampFloor } from "../stores/config";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -15,12 +15,16 @@ const windowSize = computed(() => (windowHalf(store.config) * 2).toFixed(1));
 //   2. ElementPlus 的 watch 在 InputNumber 内部用 throw 报告错(uncaught),而非 return,会让
 //      整个 setup 失败 → 整个页面白屏。
 // 解决:在 setup 之前把所有数值钳到合法范围,InputNumber 后续只接收合法值。
+// 夹具边长硬下限(5mm 取整):钢网外缘须落在周圈螺丝孔内侧且不碰孔壁,
+// A/B 盖与底板同尺寸,绝不能小于该值
+const jigMin = computed(() => Math.ceil(stencilClampFloor(store.config) / 5) * 5);
+
 onBeforeMount(() => {
   const cfg = store.config;
   // windowGap ≥ 0(下界钳制由 store watch 完成)
   cfg.windowGap = Math.max(0, cfg.windowGap ?? 0.5);
-  // jigSize ≥ 60(InputNumber :min 是硬约束;下界钳制由 store watch 完成)
-  cfg.jigSize = Math.max(60, cfg.jigSize || 60);
+  // jigSize ≥ 夹紧下限(提前钳制持久化的旧值,防止低于动态 min 触发 InputNumber 渲染错误)
+  cfg.jigSize = Math.max(60, jigMin.value, cfg.jigSize || 60);
 });
 
 // 实际生效凸台外扩量 = max(stencilLip, 钢网要求的最小外扩量)
@@ -301,9 +305,9 @@ function resetAll() {
         <label class="field-label">{{ t('config.jigSide') }}</label>
         <el-input-number
           v-model="c.jigSize"
-          :min="0"
+          :min="jigMin"
           :max="500"
-          :step="20"
+          :step="5"
           size="default"
           style="width: 100%"
         />

@@ -172,7 +172,8 @@ const DEFAULT: AppConfig = {
   useHexNut: true,
   nutAcrossFlats: 5.5,
   nutHeight: 2.4,
-  jigSize: 140,
+  // 自动推导(computeJigSize,5mm 步进):钢网 100 → 角部孔位下限 131.4 → 135
+  jigSize: 135,
   gerberFilename: null,
   pcbOutlinePoints: [],
   pcbOutlineHoles: [],
@@ -297,10 +298,20 @@ export function effectivePlatterMargin(c: AppConfig): number {
  * 注:孔带末端内收 14mm(limit = jig/2-14)由 screwPositions 内部自动适配,
  * 角定位柱让位(jig/2 - (r_outer+r_post+1))落在 jig/2-14 内,自动兼容。
  */
+/** 钢网夹紧下限:A/B 盖(=底板,同 jigSize)要夹住钢网四边,
+ * 且钢网外缘必须落在周圈螺丝孔(圆心距外缘 10mm)的内侧、不碰孔壁:
+ *   jig/2 ≥ stencilHalf + 10(螺丝圆心) + periScrewD/2(孔半径) + 1.5(净距)
+ *   → jig ≥ stencilSize + 20 + periScrewD + 3
+ * 底板与 A/B 盖同尺寸,同一约束。
+ */
+export function stencilClampFloor(c: AppConfig): number {
+  return c.stencilSize + 20 + (c.periScrewD ?? 3.2) + 3;
+}
+
 function computeJigSize(c: AppConfig): number {
   const win = windowHalf(c);
   const winFloor = 2 * win + 28;
-  const stencilFloor = c.stencilSize + 20;
+  const stencilFloor = stencilClampFloor(c);
   // 约束 C:4 角定位柱不撞凸台/窗口
   const rPost = (c.cornerScrewD ?? 5) / 2 + 2;
   const rHole = (c.cornerScrewD ?? 5) / 2 + 2.2;
@@ -315,7 +326,8 @@ function computeJigSize(c: AppConfig): number {
   const postFloor = 2 * (sPlatter + sOuter);
   // s_post ≥ win + r_hole(窗口轴向壁约束,base/cover 上的孔不能与窗口壁相交)
   const winHoleFloor = 2 * (win + rHole + sOuter);
-  return Math.max(60, Math.ceil(Math.max(winFloor, stencilFloor, postFloor, winHoleFloor) / 20) * 20);
+  // 5mm 步进取整:贴近结构下限,避免 20mm 步进白多出一圈边料
+  return Math.max(60, Math.ceil(Math.max(winFloor, stencilFloor, postFloor, winHoleFloor) / 5) * 5);
 }
 
 export const useConfigStore = defineStore("config", () => {
@@ -372,6 +384,11 @@ export const useConfigStore = defineStore("config", () => {
       config.value.stencilLip,
       config.value.platterWidth,
       config.value.windowGap,
+      // 螺丝相关参数影响夹紧下限/角柱约束,变化时重算 jigSize
+      config.value.periScrewD,
+      config.value.cornerScrewD,
+      config.value.outerCornerRadius,
+      config.value.platterCornerRadius,
     ],
     () => {
       const c = config.value;
@@ -448,11 +465,12 @@ export const useConfigStore = defineStore("config", () => {
       });
     }
 
-    // 夹具必须大于钢网:A/B 面要完整压住钢网四边(每边 ≥10mm 结构边)
-    if (c.jigSize < c.stencilSize + 20) {
+    // 夹具必须能夹住钢网:钢网外缘落在周圈螺丝孔内侧且不碰孔壁
+    // (A/B 盖与底板同尺寸,同一约束)
+    if (c.jigSize < stencilClampFloor(c)) {
       list.push({
         key: "config.warnings.jigLTstencil",
-        params: { j: c.jigSize, s: c.stencilSize, n: Math.ceil((c.stencilSize + 20) / 20) * 20 },
+        params: { j: c.jigSize, s: c.stencilSize, n: Math.ceil(stencilClampFloor(c) / 5) * 5 },
       });
     }
 
@@ -465,7 +483,7 @@ export const useConfigStore = defineStore("config", () => {
     if (2 * win + 28 > c.jigSize + 0.01) {
       list.push({
         key: "config.warnings.jigTooSmall",
-        params: { j: Math.ceil((2 * win + 28) / 20) * 20 },
+        params: { j: Math.ceil((2 * win + 28) / 5) * 5 },
       });
     }
     // 凸台高度:至少 2mm 台阶面压钢网,槽深后还要剩壁
