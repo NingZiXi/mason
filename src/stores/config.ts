@@ -218,10 +218,10 @@ export type ScrewSpec = keyof typeof SCREW_SPECS;
 export function windowHalfXY(c: AppConfig): { hx: number; hy: number } {
   const windowGap = c.windowGap ?? 0.5;
   const platterHalf = platterHalfFor(c);
-  // 窗口 = max(凸台外缘, 钢网外缘) + 机械余量
-  const stencilHalf = (c.stencilSize ?? 0) / 2;
-  const outerHalf = Math.max(platterHalf, stencilHalf);
-  const windowHalf = outerHalf + windowGap;
+  // 窗口 = 凸台外缘 + 机械余量(与 Python get_polys 同源):
+  //   钢网坐在凸台顶面 + PCB 上方,唇向外延伸,不穿过 A/B 框中间,
+  //   所以窗口不需要跟随 stencilSize,只需要 ≥ 凸台外缘即可。
+  const windowHalf = platterHalf + windowGap;
   return { hx: windowHalf, hy: windowHalf };
 }
 
@@ -242,7 +242,10 @@ export function platterHalfFor(c: AppConfig): number {
   const slotHY = c.pcbSizeY / 2 + c.pcbPocketClearance;
   const slotHalfMax = Math.max(slotHX, slotHY);
   const userPlatterHalf = (c.platterWidth ?? 0) / 2;
-  return Math.max(userPlatterHalf, slotHalfMax);
+  // platterMargin 作为最低外扩量兜底(老项目文件兼容):
+  // platterWidth 不够大时自动补齐 margin
+  const marginMin = c.platterMargin ?? 0;
+  return Math.max(userPlatterHalf, slotHalfMax + marginMin);
 }
 
 /** 窗口最大半宽(方形近似,用于 jig 尺寸推导/角螺丝钳位) */

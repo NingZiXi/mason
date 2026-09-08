@@ -108,10 +108,10 @@ def base_params(**over):
         "pcb_size_x": 100, "pcb_size_y": 100, "pcb_thickness": 1.6,
         "pcb_pocket_clearance": 0.15,
         "pcb_outline_points": [], "pcb_outline_holes": [],
-        "stencil_size": 0, "screw_spacing": 25,
+        "stencil_size": 120, "screw_spacing": 25,
         "base_height": 4, "top_cover_height": 4,
         "jig_size": 140, "insert_height": 8,
-        "platter_height": 4, "platter_margin": 5,
+        "platter_height": 4, "platter_margin": 0,
         "platter_corner_radius": 4.5, "eject_slot_width": 22,
         # 默认 100×100 PCB:platterWidth=100(刚好盖住),lip=1.5(钢网为 0 时)
         "platter_width": 100,

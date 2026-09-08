@@ -211,9 +211,11 @@ def plater_radius(p, slot_poly, frame_poly=None):
     slot_half_max = max(maxx - minx, maxy - miny) / 2
     # 用户凸台宽度(默认 97mm):保证 ≥ slot_half_max(防 PCB 悬空)
     # 不再用 stencil/2 钳制 —— 那会让任何 ≤ stencil_size 的 platterWidth 都无效
-    # 也不叠加 platter_margin —— 旧字段已废弃(platter_width 是总半宽)
+    # platter_margin 作为"最低外扩量"兜底:platter_width 不够时自动补齐,
+    # 老项目文件(含 platter_margin 但无 platter_width)仍能正确外扩
     platter_width = float(p.get("platter_width", 0.0))
-    platter_half = max(platter_width / 2, slot_half_max)
+    margin_min = float(p.get("platter_margin", 0.0))
+    platter_half = max(platter_width / 2, slot_half_max + margin_min)
     # 凸台外扩量(相对槽半宽)
     margin_eff = max(0.0, platter_half - slot_half_max)
     # 兼容字段:把有效唇宽写回 stencil_lip(供项目文件回显)
