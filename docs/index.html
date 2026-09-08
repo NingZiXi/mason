@@ -1826,8 +1826,9 @@
       if (!data || !data.assets) return;
       var ver = data.tag_name || "";
       var map = {
-        windows: matchAsset(data.assets, /\.msi$/i) ||
+        windows: matchAsset(data.assets, /x64-setup.*\.exe$/i) ||
                  matchAsset(data.assets, /setup.*\.exe$/i) ||
+                 matchAsset(data.assets, /\.msi$/i) ||
                  matchAsset(data.assets, /\.exe$/i),
         mac: matchAsset(data.assets, /aarch64.*\.dmg$/i) ||
              matchAsset(data.assets, /\.dmg$/i),
