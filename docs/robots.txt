@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ningzixi.github.io/mason/sitemap.xml
