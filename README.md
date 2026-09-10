@@ -7,7 +7,7 @@
 **从 Gerber 到 3D 打印钢网 — 一键生成 PCB 锡膏印刷工具**
 *Gerber 解析 · 参数化 CAD · 实时 3D 预览 · 零云依赖*
 
-[English](README.en.md) · [📝 更新日志](https://github.com/NingZiXi/mason/releases) · [🐛 反馈问题](https://github.com/NingZiXi/mason/issues) · [👤 作者主页](https://github.com/NingZiXi)
+[🌐 官网](https://ningzixi.github.io/mason/) · [English](README.en.md) · [📝 更新日志](https://github.com/NingZiXi/mason/releases) · [🐛 反馈问题](https://github.com/NingZiXi/mason/issues) · [👤 作者主页](https://github.com/NingZiXi)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#快速开始)
 

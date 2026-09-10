@@ -7,7 +7,7 @@
 **From Gerber to 3D-printable stencil — generate PCB solder paste printing tools in one click**
 *Gerber parsing · Parametric CAD · Real-time 3D preview · Zero cloud dependency*
 
-[中文](README.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
+[🌐 Website](https://ningzixi.github.io/mason/) · [中文](README.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#getting-started)
 
