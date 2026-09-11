@@ -730,8 +730,8 @@ def build_base(p):
     #    配合机丝螺丝 + 螺母锁紧(替代自攻);六边形适配螺母外形,防转
     if p.get("use_hex_nut", True):
         nut_gap = 0.2                                      # 装配间隙 0.2mm
-        # 六边形顶点在外接圆上,半径 = 对边距 / 2;对边 = 2r_hex = nut_across
-        r_hex = nut_across / 2.0
+        # 六边形顶点在外接圆上,对边距 = r_hex * √3,故 r_hex = nut_across / √3
+        r_hex = nut_across / math.sqrt(3)
         hex_pts = [
             (r_hex * math.cos(i * math.pi / 3.0),
              r_hex * math.sin(i * math.pi / 3.0))
