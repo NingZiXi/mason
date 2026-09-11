@@ -32,6 +32,8 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: 安装几何依赖
-        run: pip install build123d shapely numpy
+        run: pip install build123d shapely numpy pytest
       - name: 运行几何验证测试
         run: python python/tests/run_all.py
+      - name: 运行几何回归测试(pytest)
+        run: python -m pytest python/test_jig_generator.py -q

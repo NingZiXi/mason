@@ -1054,7 +1054,10 @@ def _grid_pad_geom(geom, size_thr, bar_w):
     if max(w, h) <= size_thr:
         return geom
     cx, cy = geom.centroid.x, geom.centroid.y
-    min_cell = max(0.8, bar_w)  # 子开口最小保留宽度
+    # 子开口最小保留宽度:随 size_thr 动态调整,避免减小阈值后小焊盘仍无法网格化
+    # (原固定 0.8 导致门槛恒为 bar_w+1.6≈2.1mm,size_thr 减到 2 以下无效果)
+    # size_thr 大时保持 0.8 保证强度;size_thr 小时按比例缩小,最小 0.3mm
+    min_cell = max(0.3, min(0.8, size_thr * 0.4))
     bars = []
     if w >= bar_w + 2 * min_cell:
         bars.append(shapely_box(cx - bar_w / 2, miny - 0.5,
@@ -1673,6 +1676,12 @@ def serve():
                 out = Path(tempfile.gettempdir()) / f"jig-{_uuid.uuid4()}.{fmt}"
                 generate_to_file(req["params"], req["part"], out, fmt)
                 respond({"id": rid, "ok": True, "path": str(out)})
+            elif cmd == "stats":
+                # 体积/表面积(不写文件):供前端"打印信息卡"估算耗材克重
+                _part = build_part(req["params"], req["part"])
+                respond({"id": rid, "ok": True,
+                         "volume": float(_part.volume),
+                         "area": float(_part.area)})
             elif cmd == "shutdown":
                 respond({"id": rid, "ok": True})
                 break

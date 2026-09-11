@@ -122,6 +122,12 @@ export default {
     exportedStep: "Exported {n} STEP files to {dir}",
     exportFailed: "Export failed: {msg}",
     renderFailed: "Render failed: {msg}",
+    printInfo: "Print info",
+    metricsTitle: "Material estimate",
+    metricsClose: "Close",
+    metricsLoading: "Calculating…",
+    total: "Total",
+    metricsDensity: "Estimated at PLA density 1.24 g/cm³; volume is exact from geometry"
   },
   gerber: {
     drop: "Click or drop a Gerber ZIP",
@@ -140,6 +146,11 @@ export default {
     reimport: "Re-import",
   },
   config: {
+    preset: "Structure preset",
+    presetHint: "One-click common screw + structure-height combination; PCB, stencil, and pads are unaffected",
+    presetStandard: "Standard (M3)",
+    presetLight: "Light (M2.5)",
+    presetHeavy: "Heavy (M4)",
     pcb: "PCB",
     length: "Length (mm)",
     width: "Width (mm)",
@@ -206,6 +217,8 @@ export default {
       coverTooThin: "Cover height {h}mm is thin — the 2mm-deep countersink may break through",
       marginTooSmall: "Rim width {m}mm is narrow — not enough land to clamp the stencil on the platter",
       cornerScrewOutside: "Corner screws fall outside the jig — increase the jig side",
+      frameTooThin: "Stencil frame {w}mm is too thin for FDM — it may snap; use ≥1mm",
+      gridBarTooThin: "Grid bar {b}mm is below the FDM minimum line width (~0.4mm); use ≥0.5mm",
     },
   },
   python: {

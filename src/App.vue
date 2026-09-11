@@ -841,7 +841,7 @@ onBeforeUnmount(() => {
 }
 
 .slot-step-dot[data-step] {
-  background: var(--bg-brand);
+  background: var(--status-success-default);
   color: var(--text-onbrand);
 }
 

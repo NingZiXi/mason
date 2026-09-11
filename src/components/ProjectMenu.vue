@@ -165,7 +165,7 @@ async function loadProject() {
     store.config.stencilStaggerGap = cfg.stencil_stagger_gap ?? 0.55;
     store.config.stencilStaggerOffset = cfg.stencil_stagger_offset ?? 0.15;
     store.config.stencilFilterTestPoints = cfg.stencil_filter_test_points ?? true;
-    store.config.stencilTestPointMaxDia = cfg.stencil_test_point_max_dia ?? 1.2;
+    store.config.stencilTestPointMaxDia = cfg.stencil_test_point_max_dia ?? 1.9;
     store.config.stencilTestPointIsolation = cfg.stencil_test_point_isolation ?? 1.5;
     store.config.stencilGrid = cfg.stencil_grid ?? false;
     store.config.stencilGridSize = cfg.stencil_grid_size ?? 2.0;

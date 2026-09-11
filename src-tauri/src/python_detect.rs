@@ -1,7 +1,6 @@
-//! 多策略探测 Python 和 OpenSCAD 可执行文件
+//! 多策略探测 Python 可执行文件
 //!
 //! Python 是夹具生成的 CAD 引擎(通过 python/jig_generator.py)
-//! OpenSCAD 是历史遗留的备选引擎
 use std::path::Path;
 use std::process::Command;
 

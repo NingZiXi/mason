@@ -3,14 +3,14 @@ use serde::{Serialize, Serializer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("未找到 OpenSCAD: {0}")]
-    OpenScadNotFound(String),
+    #[error("未找到 Python: {0}")]
+    PythonNotFound(String),
 
     #[error("IO 错误: {0}")]
     Io(String),
 
-    #[error("OpenSCAD 渲染失败: {0}")]
-    ScadFailed(String),
+    #[error("渲染失败: {0}")]
+    RenderFailed(String),
 
     #[error("操作超时: {0}")]
     Timeout(String),
@@ -36,6 +36,6 @@ impl From<std::io::Error> for AppError {
 
 impl From<tokio::time::error::Elapsed> for AppError {
     fn from(_: tokio::time::error::Elapsed) -> Self {
-        AppError::Timeout("OpenSCAD 渲染超时(180s)".into())
+        AppError::Timeout("渲染超时(180s)".into())
     }
 }

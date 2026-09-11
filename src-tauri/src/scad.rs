@@ -9,7 +9,7 @@
 //! 相比每次 spawn 的旧方案,省掉 Python + build123d 重复导入(~0.5-1s/次)。
 use crate::commands::{Part, ScadParams};
 use crate::error::AppError;
-use crate::openscad_detect;
+use crate::python_detect;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,6 +47,12 @@ struct ServerResponse {
     path: Option<String>,
     #[serde(default)]
     error: Option<String>,
+    /// stats 命令返回:实体体积(mm³)
+    #[serde(default)]
+    volume: Option<f64>,
+    /// stats 命令返回:实体表面积(mm²)
+    #[serde(default)]
+    area: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -69,19 +75,31 @@ fn server_cell() -> &'static Mutex<Option<Server>> {
     SERVER.get_or_init(|| Mutex::new(None))
 }
 
-async fn spawn_server(python_path: &str, script_path: &std::path::Path) -> Result<Server, AppError> {
+async fn spawn_server(
+    python_path: &str,
+    script_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> Result<Server, AppError> {
+    // Python 的 stderr(含 traceback)重定向到日志文件:渲染失败时可直接定位根因
+    // (此前是 Stdio::null(),错误被吞,用户只能看到"生成失败"这种无信息文案)
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .map_err(|e| AppError::Other(format!("打开日志文件失败 {}: {}", log_path.display(), e)))?;
+
     let mut cmd = Command::new(python_path);
     cmd.arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
         .arg(script_path)
         .arg("--server")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null()); // stderr 只写日志;null 防止管道缓冲塞满阻塞 Python
+        .stderr(Stdio::from(log_file));
 
     // Windows: 隐藏控制台黑窗口
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
@@ -168,7 +186,7 @@ impl Server {
 
         match timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), rx).await {
             Ok(Ok(resp)) => Ok(resp),
-            Ok(Err(_)) => Err(AppError::ScadFailed(
+            Ok(Err(_)) => Err(AppError::RenderFailed(
                 "Python CAD 引擎已退出(进程崩溃或依赖缺失,请确认已 pip install build123d shapely numpy)".into(),
             )),
             Err(_) => Err(AppError::Timeout("Python 生成超时(120s)".into())),
@@ -229,7 +247,7 @@ fn resolve_python(app: Option<&AppHandle>, configured: Option<&str>) -> Option<S
             return Some(p.to_string());
         }
     }
-    bundled_python(app).or_else(openscad_detect::detect_python)
+    bundled_python(app).or_else(python_detect::detect_python)
 }
 
 /// 查找 Python 脚本路径
@@ -267,16 +285,40 @@ fn find_script(app: &AppHandle) -> PathBuf {
     dev
 }
 
-/// 发送 generate 请求(必要时拉起 server);传输失败时杀掉 server,下次请求重新拉起
-async fn request_generate(
+/// 诊断日志路径:app 日志目录(权限/隔离优于临时目录),回落 temp
+fn log_path_for(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_log_dir()
+        .map(|d| d.join("mason-python.log"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("mason-python.log"))
+}
+
+/// 惰性拉起常驻 server(必要时);返回后 guard 内必有可用 server
+async fn ensure_server(
+    guard: &mut Option<Server>,
+    python: &str,
+    script_path: &std::path::Path,
+    log_path: &std::path::Path,
+) -> Result<(), AppError> {
+    if guard.is_none() {
+        let mut server = spawn_server(python, script_path, log_path).await?;
+        // 启动 ping:快速暴露依赖缺失(import 失败 → 进程退出 → 响应通道关闭)
+        if let Err(e) = server.request("ping", None, None, None).await {
+            let _ = server.child.start_kill();
+            return Err(e);
+        }
+        *guard = Some(server);
+    }
+    Ok(())
+}
+
+/// 解析 Python 可执行文件、脚本路径与诊断日志路径(生成类命令共用)
+fn resolve_runtime(
     app: &AppHandle,
     configured_python: Option<&str>,
-    params: &ScadParams,
-    part: Part,
-    format: &str,
-) -> Result<ServerResponse, AppError> {
+) -> Result<(String, PathBuf, PathBuf), AppError> {
     let python = resolve_python(Some(app), configured_python).ok_or_else(|| {
-        AppError::OpenScadNotFound(
+        AppError::PythonNotFound(
             "未找到 Python。请先安装 Python 3.10+ 并 `pip install build123d shapely numpy`".into(),
         )
     })?;
@@ -289,19 +331,23 @@ async fn request_generate(
         )));
     }
 
+    let log_path = log_path_for(app);
+    Ok((python, script_path, log_path))
+}
+
+/// 发送 generate 请求(必要时拉起 server);传输失败时杀掉 server,下次请求重新拉起
+async fn request_generate(
+    app: &AppHandle,
+    configured_python: Option<&str>,
+    params: &ScadParams,
+    part: Part,
+    format: &str,
+) -> Result<ServerResponse, AppError> {
+    let (python, script_path, log_path) = resolve_runtime(app, configured_python)?;
+
     let cell = server_cell();
     let mut guard = cell.lock().await;
-
-    // 惰性拉起 + 健壮性:server 掉线后自动重启
-    if guard.is_none() {
-        let mut server = spawn_server(&python, &script_path).await?;
-        // 启动 ping:快速暴露依赖缺失(import 失败 → 进程退出 → 响应通道关闭)
-        if let Err(e) = server.request("ping", None, None, None).await {
-            let _ = server.child.start_kill();
-            return Err(e);
-        }
-        *guard = Some(server);
-    }
+    ensure_server(&mut guard, &python, &script_path, &log_path).await?;
 
     let server = guard.as_mut().unwrap();
     match server
@@ -319,6 +365,38 @@ async fn request_generate(
     }
 }
 
+/// 计算单个部件体积(mm³)与表面积(mm²),供前端"打印信息卡"估算耗材
+pub async fn part_metrics(
+    app: &AppHandle,
+    configured_python: Option<&str>,
+    params: &ScadParams,
+    part: Part,
+) -> Result<(f64, f64), AppError> {
+    let (python, script_path, log_path) = resolve_runtime(app, configured_python)?;
+
+    let cell = server_cell();
+    let mut guard = cell.lock().await;
+    ensure_server(&mut guard, &python, &script_path, &log_path).await?;
+
+    let server = guard.as_mut().unwrap();
+    match server
+        .request("stats", Some(part.to_str()), None, Some(params))
+        .await
+    {
+        Ok(resp) if resp.ok => Ok((resp.volume.unwrap_or(0.0), resp.area.unwrap_or(0.0))),
+        Ok(resp) => Err(AppError::RenderFailed(format!(
+            "Python 计算体积失败: {}",
+            resp.error.unwrap_or_default()
+        ))),
+        Err(e) => {
+            if let Some(mut s) = guard.take() {
+                let _ = s.child.start_kill();
+            }
+            Err(e)
+        }
+    }
+}
+
 /// 渲染单个部件为 STL 字节(供前端预览)
 pub async fn render_to_stl(
     app: &AppHandle,
@@ -328,7 +406,7 @@ pub async fn render_to_stl(
 ) -> Result<Vec<u8>, AppError> {
     let resp = request_generate(app, configured_python, params, part, "stl").await?;
     if !resp.ok {
-        return Err(AppError::ScadFailed(format!(
+        return Err(AppError::RenderFailed(format!(
             "Python 生成失败: {}",
             resp.error.unwrap_or_default()
         )));
@@ -359,7 +437,7 @@ pub async fn render_to_file(
 
     let resp = request_generate(app, configured_python, params, part, ext).await?;
     if !resp.ok {
-        return Err(AppError::ScadFailed(format!(
+        return Err(AppError::RenderFailed(format!(
             "Python 生成失败: {}",
             resp.error.unwrap_or_default()
         )));

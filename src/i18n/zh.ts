@@ -122,6 +122,12 @@ export default {
     exportedStep: "已导出 {n} 个 STEP 到 {dir}",
     exportFailed: "导出失败: {msg}",
     renderFailed: "渲染失败: {msg}",
+    printInfo: "打印信息",
+    metricsTitle: "用料估算",
+    metricsClose: "关闭",
+    metricsLoading: "计算中…",
+    total: "合计",
+    metricsDensity: "按 PLA 密度 1.24 g/cm³ 估算,体积由几何精确计算"
   },
   gerber: {
     drop: "点击或拖入 Gerber ZIP",
@@ -140,6 +146,11 @@ export default {
     reimport: "重新导入",
   },
   config: {
+    preset: "结构预设",
+    presetHint: "一键套用常用螺丝 + 结构高度组合;PCB、钢网、焊盘不受影响",
+    presetStandard: "标准 (M3)",
+    presetLight: "轻型 (M2.5)",
+    presetHeavy: "重型 (M4)",
     pcb: "PCB",
     length: "长 (mm)",
     width: "宽 (mm)",
@@ -206,6 +217,8 @@ export default {
       coverTooThin: "顶盖厚 {h}mm 偏薄,沉头孔(深 2mm)可能穿透",
       marginTooSmall: "台阶宽 {m}mm 偏窄,凸台上压钢网的边不够",
       cornerScrewOutside: "角螺丝位置超出夹具可容纳范围,请增大夹具边长",
+      frameTooThin: "钢网边框宽 {w}mm 太薄,FDM 打印脆弱易断,建议 ≥1mm",
+      gridBarTooThin: "网格条宽 {b}mm 低于 FDM 最小线宽(约 0.4mm),细条可能打不出,建议 ≥0.5mm",
     },
   },
   python: {

@@ -3,7 +3,7 @@
 
 mod commands;
 mod error;
-mod openscad_detect;
+mod python_detect;
 mod scad;
 
 pub fn run() {
@@ -18,6 +18,7 @@ pub fn run() {
             commands::install_python,
             commands::set_python_path,
             commands::generate_stl,
+            commands::part_metrics,
             commands::export_stl,
             commands::save_project,
             commands::load_project,

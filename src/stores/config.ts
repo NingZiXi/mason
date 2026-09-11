@@ -141,7 +141,7 @@ const DEFAULT: AppConfig = {
   stencilStaggerGap: 0.55,
   stencilStaggerOffset: 0.15,
   stencilFilterTestPoints: true,
-  stencilTestPointMaxDia: 1.2,
+  stencilTestPointMaxDia: 1.9,
   stencilTestPointIsolation: 1.5,
   stencilGrid: false,
   stencilGridSize: 2.0,
@@ -194,6 +194,41 @@ export const SCREW_SPECS = {
 } as const;
 
 export type ScrewSpec = keyof typeof SCREW_SPECS;
+
+/** 结构预设:常用组装方案,一键套用。仅覆盖螺丝/结构高度类参数,
+ * 不碰 PCB 尺寸、钢网尺寸、焊盘、板框(这些由 Gerber 导入决定),
+ * 派生值(jigSize / platterHeight / 螺母尺寸)由现有 watch 自动联动。 */
+export interface StructurePreset {
+  id: string;
+  /** i18n 键(短标签) */
+  label: string;
+  apply: {
+    screwSpec: ScrewSpec;
+    screwSpacing: number;
+    baseHeight: number;
+    topCoverHeight: number;
+    insertHeight: number;
+    useHexNut: boolean;
+  };
+}
+
+export const STRUCTURE_PRESETS: StructurePreset[] = [
+  {
+    id: "standard",
+    label: "config.presetStandard",
+    apply: { screwSpec: "M3", screwSpacing: 40, baseHeight: 4, topCoverHeight: 4, insertHeight: 8, useHexNut: true },
+  },
+  {
+    id: "light",
+    label: "config.presetLight",
+    apply: { screwSpec: "M2.5", screwSpacing: 30, baseHeight: 3, topCoverHeight: 3, insertHeight: 6, useHexNut: true },
+  },
+  {
+    id: "heavy",
+    label: "config.presetHeavy",
+    apply: { screwSpec: "M4", screwSpacing: 50, baseHeight: 5, topCoverHeight: 5, insertHeight: 10, useHexNut: true },
+  },
+];
 
 /** 派生窗口 x/y 半宽(与 Python get_polys 一致,bbox 近似异形板)
  * 凸台/窗口恒为正方形 —— 与 Python get_polys 同步改
@@ -521,6 +556,21 @@ export const useConfigStore = defineStore("config", () => {
     if (win + 3.5 > c.jigSize / 2 - 7) {
       list.push({ key: "config.warnings.cornerScrewOutside" });
     }
+    // —— 打印可行性(FDM 物理极限,stencil 模式专属) ——
+    // 钢网外框太薄:FDM 薄壁(<1mm)打印脆弱易断
+    if (c.appMode === "stencil" && c.stencilFrameWidth < 1.0) {
+      list.push({
+        key: "config.warnings.frameTooThin",
+        params: { w: c.stencilFrameWidth },
+      });
+    }
+    // 网格条太细:低于 FDM 最小线宽(0.4 喷嘴约 0.4mm)
+    if (c.appMode === "stencil" && c.stencilGrid && c.stencilGridBar < 0.5) {
+      list.push({
+        key: "config.warnings.gridBarTooThin",
+        params: { b: c.stencilGridBar },
+      });
+    }
     return list;
   });
 
@@ -576,6 +626,21 @@ export const useConfigStore = defineStore("config", () => {
 
   function setMode(mode: AppMode) {
     config.value.appMode = mode;
+  }
+
+  /** 套用结构预设:一键写入螺丝/结构高度类参数。
+   *  派生值(孔径/螺母尺寸由 screwSpec watch、platterHeight 由 baseHeight watch、
+   *  jigSize 由尺寸 watch)自动联动,无需手动重算。 */
+  function applyPreset(id: string) {
+    const preset = STRUCTURE_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    const c = config.value;
+    c.screwSpec = preset.apply.screwSpec;
+    c.screwSpacing = preset.apply.screwSpacing;
+    c.baseHeight = preset.apply.baseHeight;
+    c.topCoverHeight = preset.apply.topCoverHeight;
+    c.insertHeight = preset.apply.insertHeight;
+    c.useHexNut = preset.apply.useHexNut;
   }
 
   /** 重置高级参数为默认值;基础区(PCB 尺寸/厚度/钢网/缺口位置/
@@ -653,6 +718,7 @@ export const useConfigStore = defineStore("config", () => {
     applyGerberSize,
     applyStencilGerber,
     setMode,
+    applyPreset,
     reset,
     detectPython,
   };

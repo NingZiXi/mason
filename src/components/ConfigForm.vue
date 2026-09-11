@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeMount, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useConfigStore, windowHalf, effectivePlatterMargin, stencilClampFloor } from "../stores/config";
+import { useConfigStore, windowHalf, effectivePlatterMargin, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -74,6 +74,13 @@ const showAdvanced = ref(false);
 function resetAll() {
   store.reset();
 }
+
+// 结构预设:一键套用(仅螺丝 + 结构高度,派生值由 store watch 联动)
+const appliedPreset = ref<string | null>(null);
+function applyPreset(id: string) {
+  store.applyPreset(id);
+  appliedPreset.value = id;
+}
 </script>
 
 <template>
@@ -89,6 +96,25 @@ function resetAll() {
       <ul class="warnings-list">
         <li v-for="(w, i) in warnings" :key="i">{{ t(w.key, w.params ?? {}) }}</li>
       </ul>
+    </div>
+
+    <!-- 结构预设:一键套用常用螺丝 + 结构高度组合 -->
+    <div class="section-label">{{ t('config.preset') }}</div>
+    <div class="preset-group">
+      <button
+        v-for="p in STRUCTURE_PRESETS"
+        :key="p.id"
+        class="preset-btn"
+        :class="{ active: appliedPreset === p.id }"
+        @click="applyPreset(p.id)"
+      >{{ t(p.label) }}</button>
+    </div>
+    <div class="auto-hint preset-hint">
+      <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+        <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+        <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <span>{{ t('config.presetHint') }}</span>
     </div>
 
     <!-- PCB(基本:拖入 Gerber 自动填,板厚需用户确认) -->
@@ -592,6 +618,37 @@ function resetAll() {
   background: var(--bg-overlay-l1);
   border-color: var(--border-neutral-l2);
   color: var(--text-default);
+}
+
+/* 结构预设按钮组:横向三段式,active 高亮 */
+.preset-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.preset-btn {
+  flex: 1;
+  padding: 7px 8px;
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-6);
+  background: var(--bg-secondary, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+}
+
+.preset-btn:hover {
+  border-color: var(--border-neutral-l3);
+  color: var(--text-default);
+}
+
+.preset-btn.active {
+  border-color: #3E7D62;
+  background: #E8F1EC;
+  color: #3E7D62;
 }
 
 /* 双向滑块卡片:凸台宽 ⇄ 唇宽 —— 独立卡片突出,整行独占 */

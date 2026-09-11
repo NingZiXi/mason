@@ -20,6 +20,9 @@ src-tauri/gen
 src-tauri/resources/python-env/*
 !src-tauri/resources/python-env/.gitkeep
 
+# 构建时从 python/ 自动同步的脚本副本(build.rs 生成,不入库)
+src-tauri/resources/scripts/jig_generator.py
+
 # Python
 __pycache__/
 *.pyc

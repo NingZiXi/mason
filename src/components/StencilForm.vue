@@ -149,37 +149,39 @@ const showAdvanced = ref(false);
           :format-tooltip="(v: number) => v + '%'"
         />
       </div>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('stencil.padShrinkHint') }}</span>
-      </div>
     </div>
 
-    <!-- 焊盘数量(双面) -->
+    <!-- 钢网信息卡片(合并提示) -->
     <div class="field">
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('stencil.padCountTop', { n: topPadCount }) }}</span>
-      </div>
-      <div v-if="bottomPadCount > 0" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('stencil.padCountBottom', { n: bottomPadCount }) }}</span>
-      </div>
-      <div v-if="isDoubleSided" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-        </svg>
-        <span>{{ t('stencil.doubleSidedHint') }}</span>
+      <div class="info-card">
+        <div class="info-row">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ t('stencil.padShrinkHint') }}</span>
+        </div>
+        <div class="info-row">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ t('stencil.padCountTop', { n: topPadCount }) }}</span>
+        </div>
+        <div v-if="bottomPadCount > 0" class="info-row">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ t('stencil.padCountBottom', { n: bottomPadCount }) }}</span>
+        </div>
+        <div v-if="isDoubleSided" class="info-row">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+          </svg>
+          <span>{{ t('stencil.doubleSidedHint') }}</span>
+        </div>
       </div>
     </div>
 
@@ -452,12 +454,35 @@ const showAdvanced = ref(false);
   font-size: 12px;
   line-height: 18px;
 }
-.auto-hint .hint-icon {
+/* 合并信息卡片:多条提示共享一个背景框,行间细线分隔 */
+.info-card {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0 0 0;
+  padding: 0 12px;
+  background: var(--bg-brand-popup);
+  border-radius: var(--radius-6);
+}
+.info-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.info-row + .info-row {
+  border-top: 1px solid var(--el-border-color-light, rgba(115, 115, 115, 0.12));
+}
+.auto-hint .hint-icon,
+.info-row .hint-icon {
   color: var(--bg-brand);
   flex-shrink: 0;
   margin-top: 2px;
 }
-.auto-hint .hint-icon.ok { color: var(--brand-500); }
+.auto-hint .hint-icon.ok,
+.info-row .hint-icon.ok { color: var(--brand-500); }
 .auto-hint strong {
   color: var(--text-brand);
   font-weight: var(--font-weight-strong);

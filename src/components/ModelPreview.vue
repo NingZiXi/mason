@@ -364,6 +364,7 @@ const hashSource = computed(() => {
     c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius,
     c.stencilFrameShape, c.pocketClearance,
     c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
+    c.stencilFilterTestPoints, c.stencilTestPointMaxDia, c.stencilTestPointIsolation,
     c.stencilGrid, c.stencilGridSize, c.stencilGridBar,
     c.stencilPadsTop, c.stencilPadsBottom,
   ];
@@ -463,6 +464,61 @@ async function refreshAll() {
   await renderCurrent();
   refreshing.value = false;
 }
+
+// —— 打印信息(体积/用料估算) ——
+// 体积由 Python 端 build123d 精确计算;克重按 PLA 密度 1.24 g/cm³ 估算
+const PLA_DENSITY_G_CM3 = 1.24;
+const showMetrics = ref(false);
+const metricsLoading = ref(false);
+const metricsHash = ref<string | null>(null);
+const metrics = shallowRef<Record<string, { volume_mm3: number; area_mm2: number }>>({});
+
+function massGrams(volMm3: number): number {
+  return (volMm3 / 1000) * PLA_DENSITY_G_CM3;
+}
+
+async function loadMetrics() {
+  const hash = paramsHash();
+  // 同参数已算过就复用(切 tab / 重新打开不重复 build)
+  if (metricsHash.value === hash && Object.keys(metrics.value).length > 0) return;
+  metricsHash.value = hash;
+  metricsLoading.value = true;
+  try {
+    const params = buildScadParams();
+    const entries = await Promise.all(
+      allParts.value.map(async (pn) => {
+        const m = await invoke<{ volume_mm3: number; area_mm2: number }>(
+          "part_metrics",
+          { params, part: PART_TO_RUST[pn] }
+        );
+        return [pn, m] as const;
+      })
+    );
+    metrics.value = Object.fromEntries(entries);
+  } catch (e) {
+    console.warn("[metrics] failed:", e);
+  } finally {
+    metricsLoading.value = false;
+  }
+}
+
+function toggleMetrics() {
+  showMetrics.value = !showMetrics.value;
+  if (showMetrics.value) void loadMetrics();
+}
+
+const metricsRows = computed(() =>
+  allParts.value.map((pn) => ({
+    name: pn,
+    label: partTabs.value.find((t) => t.name === pn)?.label ?? pn,
+    color: partTabs.value.find((t) => t.name === pn)?.color ?? "#5A9B7F",
+    m: metrics.value[pn],
+  }))
+);
+
+const totalMass = computed(() =>
+  metricsRows.value.reduce((s, r) => s + (r.m ? massGrams(r.m.volume_mm3) : 0), 0)
+);
 
 // 视图快捷切换:front 正视 / top 俯视 / iso 等轴(保持当前缩放距离)
 function setView(view: "front" | "top" | "iso") {
@@ -674,6 +730,13 @@ watch(partTabs, (tabs) => {
           </svg>
           {{ t('preview.refresh') }}
         </button>
+        <button class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" :title="t('preview.printInfo')">
+          <svg viewBox="0 0 16 16" width="14" height="14">
+            <path d="M8 1.5l5.5 3.1v6.8L8 14.5l-5.5-3.1V4.6zM8 8l5.5-3.1M8 8v6.5M8 8L2.5 4.9"
+              fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+          </svg>
+          {{ t('preview.printInfo') }}
+        </button>
         <el-dropdown
           trigger="click"
           @command="(f: string | number | object) => exportAll(f as 'stl' | 'step')"
@@ -729,6 +792,34 @@ watch(partTabs, (tabs) => {
       </div>
       <div v-if="errorMsg && !loading" class="overlay error">
         <span>{{ errorMsg }}</span>
+      </div>
+      <!-- 打印信息卡:体积/用料估算(懒加载,按当前参数缓存) -->
+      <div v-if="showMetrics" class="metrics-card">
+        <div class="metrics-head">
+          <span>{{ t('preview.metricsTitle') }}</span>
+          <button class="metrics-close" :title="t('preview.metricsClose')" @click="showMetrics = false">
+            <svg viewBox="0 0 16 16" width="12" height="12">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div v-if="metricsLoading" class="metrics-loading">{{ t('preview.metricsLoading') }}</div>
+        <template v-else>
+          <ul class="metrics-list">
+            <li v-for="row in metricsRows" :key="row.name" class="metrics-row">
+              <span class="metrics-dot" :style="{ background: row.color }" />
+              <span class="metrics-label">{{ row.label }}</span>
+              <span class="metrics-val">
+                {{ row.m ? (row.m.volume_mm3 / 1000).toFixed(2) + ' cm³ · ' + massGrams(row.m.volume_mm3).toFixed(1) + ' g' : '—' }}
+              </span>
+            </li>
+          </ul>
+          <div class="metrics-foot">
+            <span>{{ t('preview.total') }}</span>
+            <span class="metrics-total">{{ totalMass.toFixed(1) }} g</span>
+          </div>
+        </template>
+        <div class="metrics-note">{{ t('preview.metricsDensity') }}</div>
       </div>
       <div class="viewport-hint">
         {{ t('preview.hint') }}
@@ -1003,5 +1094,122 @@ html.dark .empty-card {
   pointer-events: none;
   font-family: var(--font-family-default);
   backdrop-filter: blur(4px);
+}
+
+/* 打印信息按钮激活态:与导出主 CTA 一致的橙色 */
+.action-btn.active {
+  background: var(--brand-accent);
+  border-color: var(--brand-accent);
+  color: var(--text-onbrand);
+}
+
+.action-btn.active:hover {
+  background: var(--brand-accent-hover);
+  border-color: var(--brand-accent-hover);
+}
+
+/* 打印信息卡(浮层):体积 / 用料估算 */
+.metrics-card {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 224px;
+  background: var(--bg-base-default);
+  border: 1px solid var(--border-neutral-l2);
+  border-radius: var(--radius-8);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  padding: 12px 14px;
+  z-index: 10;
+  font-family: var(--font-family-default);
+}
+
+.metrics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: var(--font-weight-strong);
+  color: var(--text-default);
+  margin-bottom: 8px;
+}
+
+.metrics-close {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--radius-4);
+}
+
+.metrics-close:hover {
+  color: var(--text-default);
+  background: var(--bg-overlay-l1);
+}
+
+.metrics-loading {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 6px 0;
+}
+
+.metrics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metrics-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.metrics-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.metrics-label {
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+.metrics-val {
+  color: var(--text-secondary);
+  font-family: var(--font-family-metric);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.metrics-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-neutral-l1);
+  font-size: 12px;
+}
+
+.metrics-total {
+  font-weight: var(--font-weight-strong);
+  color: var(--text-brand);
+  font-family: var(--font-family-metric);
+}
+
+.metrics-note {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-disabled);
+  line-height: 1.4;
 }
 </style>

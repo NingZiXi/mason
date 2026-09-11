@@ -1,6 +1,6 @@
 //! Tauri IPC 命令入口
 use crate::error::AppError;
-use crate::openscad_detect;
+use crate::python_detect;
 use crate::scad;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -148,7 +148,7 @@ fn default_stencil_stagger() -> bool { false }
 fn default_stencil_stagger_gap() -> f64 { 0.55 }
 fn default_stencil_stagger_offset() -> f64 { 0.15 }
 fn default_stencil_filter_test_points() -> bool { true }
-fn default_stencil_test_point_max_dia() -> f64 { 1.2 }
+fn default_stencil_test_point_max_dia() -> f64 { 1.9 }
 fn default_stencil_test_point_isolation() -> f64 { 1.5 }
 fn default_stencil_grid() -> bool { false }
 fn default_stencil_grid_size() -> f64 { 2.0 }
@@ -247,7 +247,7 @@ pub async fn get_engine_status(app: AppHandle) -> Result<EngineStatus, AppError>
     let python = configured
         .clone()
         .or_else(|| bundled.clone())
-        .or_else(openscad_detect::detect_python);
+        .or_else(python_detect::detect_python);
     let using_bundled = configured.is_none() && python == bundled && bundled.is_some();
 
     match python {
@@ -325,7 +325,7 @@ async fn run_with_log(app: &AppHandle, mut cmd: std::process::Command) -> Result
     if status.success() {
         Ok(())
     } else {
-        Err(AppError::ScadFailed(format!(
+        Err(AppError::RenderFailed(format!(
             "安装进程退出码 {:?},详见日志输出",
             status.code()
         )))
@@ -380,8 +380,8 @@ pub async fn install_python(app: AppHandle) -> Result<String, AppError> {
 
     // winget 装完 PATH 不一定对当前进程刷新:直接扫安装目录
     tokio::time::sleep(std::time::Duration::from_secs(2)).await; // 等文件落盘
-    let found = openscad_detect::find_python_in_localappdata()
-        .or_else(openscad_detect::find_python_in_path)
+    let found = python_detect::find_python_in_localappdata()
+        .or_else(python_detect::find_python_in_path)
         .ok_or_else(|| {
             AppError::Other(
                 "winget 安装完成但未找到 python.exe,请手动选择安装位置".into(),
@@ -403,10 +403,10 @@ pub async fn install_python(_app: AppHandle) -> Result<String, AppError> {
 /// 自动把 Git Bash 风格路径(/c/...)转成 Windows 原生路径
 #[tauri::command]
 pub async fn set_python_path(app: AppHandle, path: String) -> Result<String, AppError> {
-    use crate::openscad_detect;
+    use crate::python_detect;
 
     // 路径归化(Git Bash → Windows)
-    let normalized = openscad_detect::normalize_path(&path);
+    let normalized = python_detect::normalize_path(&path);
 
     // 验证文件存在(尝试多个变体)
     let candidates = [
@@ -451,6 +451,31 @@ pub async fn generate_stl(
     // 数 MB 的 STL 膨胀成几十 MB 文本,序列化/传输/解析全部变慢
     let bytes = scad::render_to_stl(&app, configured.as_deref(), &params, part).await?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// 单个部件体积(mm³)/表面积(mm²),供前端"打印信息卡"估算耗材克重
+#[derive(Debug, Clone, Serialize)]
+pub struct PartMetrics {
+    pub volume_mm3: f64,
+    pub area_mm2: f64,
+}
+
+#[tauri::command]
+pub async fn part_metrics(
+    app: AppHandle,
+    params: ScadParams,
+    part: Part,
+) -> Result<PartMetrics, AppError> {
+    let configured = app
+        .store(STORE_FILE)
+        .ok()
+        .and_then(|s| s.get(KEY_PYTHON_PATH))
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
+
+    let (volume_mm3, area_mm2) =
+        scad::part_metrics(&app, configured.as_deref(), &params, part).await?;
+    Ok(PartMetrics { volume_mm3, area_mm2 })
 }
 
 /// 把单个部件渲染到指定路径(供前端导出 STL 文件)
