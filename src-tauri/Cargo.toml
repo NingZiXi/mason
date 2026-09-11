@@ -1,6 +1,6 @@
 [package]
 name = "mason"
-version = "0.1.0"
+version = "0.1.1"
 description = "Mason - Generate 3D-printable solder-paste stencil jigs from Gerber"
 authors = ["you"]
 edition = "2021"
