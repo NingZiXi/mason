@@ -82,6 +82,15 @@ async fn spawn_server(
 ) -> Result<Server, AppError> {
     // Python 的 stderr(含 traceback)重定向到日志文件:渲染失败时可直接定位根因
     // (此前是 Stdio::null(),错误被吞,用户只能看到"生成失败"这种无信息文案)
+    // 日志目录(app_log_dir 的 logs/)首次可能不存在,先确保目录已创建,
+    // 否则 OpenOptions 会在缺失目录下创建文件时报"系统找不到指定的路径"
+    if let Some(dir) = log_path.parent() {
+        if !dir.as_os_str().is_empty() {
+            std::fs::create_dir_all(dir).map_err(|e| {
+                AppError::Other(format!("创建日志目录失败 {}: {}", dir.display(), e))
+            })?;
+        }
+    }
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
