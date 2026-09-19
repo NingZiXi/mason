@@ -671,7 +671,7 @@ def build_cover(p):
     # 3. 4 角定位柱过孔(与 insert 定位柱同心):Ø9.4 全厚贯穿,
     #    柱穿过后与盖板顶面齐平(免螺丝,柱/孔配合固定三层)
     positions = corner_screw_positions(window_poly, jig, p)
-    r_post_hole = corner_d / 2 + 2.2  # 柱 Ø9 + 0.2 径向间隙
+    r_post_hole = corner_d / 2 + 2.0 + p.get("post_clearance", 0.4)  # 柱 Ø9 + 可配置径向间隙
     for (x, y) in positions:
         hole = Cylinder(r_post_hole, cover_h + 0.2)
         cover = cover - hole.moved(bd.Location((x, y, cover_h / 2)))
@@ -723,7 +723,7 @@ def build_base(p):
     #    翻面/换面装配时收定位柱
     corner_d = p.get("corner_screw_d", 5.0)
     for (x, y) in corner_screw_positions(window_poly, jig, p):
-        hole = Cylinder(corner_d / 2 + 2.2, base_h + 0.2)
+        hole = Cylinder(corner_d / 2 + 2.0 + p.get("post_clearance", 0.4), base_h + 0.2)
         base = base - hole.moved(bd.Location((x, y, base_h / 2)))
 
     # 5. 周圈螺母反沉孔(可选):从底面开口,深 = nut_h + 0.2,

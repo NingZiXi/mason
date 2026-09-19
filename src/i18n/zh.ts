@@ -167,6 +167,8 @@ export default {
     trayGeometry: "托盘几何",
     platterLipGroup: "凸台 ↔ 唇宽",
     assemblyGap: "装配间隙",
+    postClearance: "定位柱间隙 (mm)",
+    postClearanceHint: "4 角定位柱与 A/B 面孔的径向间隙,FDM 建议 0.3~0.5mm;光固化/CNC 可减小到 0.1~0.2mm",
     jigShape: "夹具外形",
     hexNutPocket: "螺母沉槽 (B 面底座)",
     insertHeight: "总厚 (mm)",

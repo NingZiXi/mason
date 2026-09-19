@@ -59,6 +59,9 @@ pub struct ScadParams {
     /// 4 角压钢网螺丝直径(M5)
     #[serde(default = "default_corner_screw_d")]
     pub corner_screw_d: f64,
+    /// 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.4)
+    #[serde(default = "default_post_clearance")]
+    pub post_clearance: f64,
     /// 周圈螺丝直径(M3.5)
     #[serde(default = "default_peri_screw_d")]
     pub peri_screw_d: f64,
@@ -135,6 +138,7 @@ fn default_eject_slot_width() -> f64 { 22.0 }
 fn default_pry_notch_sides() -> Vec<String> { vec!["down".to_string()] }
 fn default_pry_notch_scale() -> f64 { 1.0 }
 fn default_corner_screw_d() -> f64 { 5.0 }
+fn default_post_clearance() -> f64 { 0.4 }
 fn default_peri_screw_d() -> f64 { 3.5 }
 fn default_outer_corner_radius() -> f64 { 5.0 }
 fn default_stencil_thickness() -> f64 { 0.3 }
@@ -142,7 +146,7 @@ fn default_pad_shrink() -> f64 { 0.0 }
 fn default_stencil_frame_width() -> f64 { 12.0 }
 fn default_stencil_corner_radius() -> f64 { 3.0 }
 fn default_stencil_frame_shape() -> String { "outline".to_string() }
-fn default_pocket_clearance() -> f64 { 0.1 }
+fn default_pocket_clearance() -> f64 { 0.3 }
 fn default_stencil_taper() -> f64 { 105.0 }
 fn default_stencil_stagger() -> bool { false }
 fn default_stencil_stagger_gap() -> f64 { 0.55 }

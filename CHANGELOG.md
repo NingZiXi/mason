@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3] - 2026-09-19
+
+### Features
+
+- **4 角定位柱间隙可配置**：新增 `post_clearance` 参数（默认 0.4mm），控制 4 角定位柱与 A/B 面顶盖/底座孔之间的径向间隙，适配 FDM 打印收缩；新增 `postClearance` UI 控件位于「装配间隙」区，并新增回归测试 `test_post_clearance_geometry_change` 验证参数确实生效。
+
 ## [0.1.2] - 2026-09-19
 
 ### Improvements

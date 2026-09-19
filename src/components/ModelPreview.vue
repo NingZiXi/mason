@@ -99,6 +99,7 @@ function buildScadParams() {
     pry_notch_sides: c.pryNotchSides,
     pry_notch_scale: c.pryNotchScale,
     corner_screw_d: c.cornerScrewD,
+    post_clearance: c.postClearance,
     peri_screw_d: c.periScrewD,
     outer_corner_radius: c.outerCornerRadius,
     use_hex_nut: c.useHexNut,

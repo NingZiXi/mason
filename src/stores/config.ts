@@ -102,6 +102,9 @@ export interface AppConfig {
   pryNotchScale: number;
   /** 4 角压钢网螺丝直径(M5) */
   cornerScrewD: number;
+  /** 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.4)
+   *  FDM 打印需要较大间隙吸收打印误差;光固化/CNC 可减小到 0.1~0.2mm */
+  postClearance: number;
   /** 周圈螺丝直径(M3.5) */
   periScrewD: number;
   /** 外缘圆角半径 */
@@ -167,6 +170,7 @@ const DEFAULT: AppConfig = {
   pryNotchSides: ['down'],
   pryNotchScale: 1.0,
   cornerScrewD: 5,
+  postClearance: 0.4,
   periScrewD: 3.2,
   outerCornerRadius: 5,
   useHexNut: true,

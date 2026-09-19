@@ -91,3 +91,22 @@ def test_generate_part_smoke(part, tmp_path):
     jg.generate_to_file(dict(BASE_PARAMS), part, out, "stl")
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+def test_post_clearance_geometry_change(tmp_path):
+    """回归:post_clearance 越大,4 角定位孔越大 → STL 体积越小。
+
+    该参数控制 cover/base 上 4 角柱孔半径 = corner_d/2 + 2.0 + post_clearance,
+    insert 上定位柱半径固定 = corner_d/2 + 2.0。柱/孔间隙增大,
+    cover/base 上减去的体积更多 → 净 STL 体积更小。
+    """
+    import os
+    params_tight = dict(BASE_PARAMS, post_clearance=0.1)
+    params_loose = dict(BASE_PARAMS, post_clearance=0.6)
+    sizes = {}
+    for tag, params in [("tight", params_tight), ("loose", params_loose)]:
+        out = tmp_path / f"{tag}.stl"
+        jg.generate_to_file(params, "cover", out, "stl")
+        sizes[tag] = os.path.getsize(out)
+    # 间隙越大,cover 上的 4 角孔越大 → STL 越小(孔里 0.5mm 的差距放大到 ~4πmm³ 体积差)
+    assert sizes["loose"] < sizes["tight"]
