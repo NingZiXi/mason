@@ -57,12 +57,12 @@ function paramsHash() {
   const c = store.config;
   // 只 hash 跟几何相关的参数(避免无关改动触发重渲染)
   // pcbOutlinePoints 用完整点列表:同点数的异形板框也要正确失效
-  // mode 必须入 hash:钢网/治具模式下同一 stencilSize 生成不同外框
+  // mode 必须入 hash:钢网/治具模式下同一钢网尺寸生成不同外框
   return JSON.stringify({
     mode: appMode.value,
-    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSize],
+    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY],
     screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight],
-    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD, c.outerCornerRadius, c.platterWidth, c.stencilLip, c.windowGap],
+    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap],
     notch: [c.pryNotchSides, c.pryNotchScale],
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
       c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
@@ -80,10 +80,11 @@ function buildScadParams() {
     pcb_pocket_clearance: c.pcbPocketClearance,
     pcb_outline_points: c.pcbOutlinePoints,
     pcb_outline_holes: c.pcbOutlineHoles,
-    // 治具模式:stencil_size 是夹具装配用的钢网外径(正方形);
-    // 钢网模式:独立钢网外框由 板框+边框宽/外框形状 推导,stencil_size 置 0
-    // (compute_frame_poly 里 stencil_size>0 会短路,忽略 frame_shape/frame_width)
-    stencil_size: appMode.value === "stencil" ? 0 : c.stencilSize,
+    // 治具模式:钢网外缘由 X/Y 两轴给定(可为矩形),凸台/窗口逐轴推导;
+    // 钢网模式:独立钢网外框由 板框+边框宽/外框形状 推导,两轴置 0
+    // (compute_frame_poly 里 stencil_size_x/y > 0 会短路,忽略 frame_shape/frame_width)
+    stencil_size_x: appMode.value === "stencil" ? 0 : c.stencilSizeX,
+    stencil_size_y: appMode.value === "stencil" ? 0 : c.stencilSizeY,
     screw_spacing: c.screwSpacing,
     screw_spec: c.screwSpec,
     base_height: c.baseHeight,
@@ -91,7 +92,6 @@ function buildScadParams() {
     jig_size: c.jigSize,
     insert_height: c.insertHeight,
     platter_height: c.platterHeight,
-    platter_width: c.platterWidth,
     stencil_lip: c.stencilLip,
     window_gap: c.windowGap,
     platter_corner_radius: c.platterCornerRadius,
@@ -356,11 +356,11 @@ const hashSource = computed(() => {
   return [
     appMode.value,
     c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance,
-    c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSize,
+    c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY,
     c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight,
     c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight,
     c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.periScrewD,
-    c.outerCornerRadius, c.platterWidth, c.stencilLip, c.windowGap,
+    c.outerCornerRadius, c.stencilLip, c.windowGap,
     c.pryNotchSides, c.pryNotchScale,
     c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius,
     c.stencilFrameShape, c.pocketClearance,

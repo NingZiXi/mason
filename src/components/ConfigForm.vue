@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeMount, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useConfigStore, windowHalf, effectivePlatterMargin, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
+import { useConfigStore, windowHalf, platterHalfXY, windowHalfXY, stencilLipMax, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 
 const store = useConfigStore();
@@ -28,27 +28,25 @@ onBeforeMount(() => {
   cfg.jigSize = Math.max(60, jigMin.value, cfg.jigSize || 60);
 });
 
-// 实际生效凸台外扩量 = max(stencilLip, 钢网要求的最小外扩量)
-//   与 Python get_polys / plater_radius 同式:
-//   凸台 = PCB 槽 + stencilLip;钢网反向钳制下凸台还得继续外扩到 frame_half
-//   (A/B 框压在凸台四周的边缘 → 凸台托住钢网外缘,钢网不悬空)
-const effectiveMargin = computed(() => effectivePlatterMargin(c.value));
-
-// 双向滑块:绑 platterWidth(凸台宽度),向右拖 = 凸台变大、唇宽变小(符合直觉)
-//   滑块范围 [pcbMax, stencilSize]:左端=凸台最小(=板子边长,唇宽最大),
-//   右端=凸台最大(=钢网外缘,唇宽=0)
-//   与 store watch 中 lipMax 同源:lMax = (stencilSize - pcbMax)/2
-const pcbMaxSide = computed(() => Math.max(c.value.pcbSizeX, c.value.pcbSizeY));
-const platterMinBound = computed(() => pcbMaxSide.value);
-const platterMaxBound = computed(() => c.value.stencilSize);
-const platterSliderValue = computed(() => c.value.platterWidth ?? pcbMaxSide.value);
-function onPlatterSliderChange(v: number | number[]) {
-  const pw = Array.isArray(v) ? v[0] : v;
-  // 由 platterWidth 反推 lip(保持 sum = stencilSize)
-  const clamped = Math.max(platterMinBound.value, Math.min(platterMaxBound.value, Number(pw) || 0));
-  c.value.platterWidth = clamped;
-  c.value.stencilLip = Math.max(0, (c.value.stencilSize - clamped) / 2);
+// 唇宽滑块(单条,四边一致):范围 [0, lipMax]
+//   lipMax = min(钢网半长 - 槽半长, 钢网半宽 - 槽半宽) —— 保证凸台每轴
+//   都不小于 PCB 槽,否则 PCB 边缘悬空。与 store / Python 同源。
+const lipMax = computed(() => Math.max(0, Math.floor(stencilLipMax(c.value) * 10) / 10));
+const lipValue = computed(() => Math.min(Math.max(0, c.value.stencilLip ?? 0), lipMax.value));
+function onLipChange(v: number | number[]) {
+  const n = Array.isArray(v) ? v[0] : v;
+  c.value.stencilLip = Math.max(0, Math.min(lipMax.value, Number(n) || 0));
 }
+
+// 派生读数:凸台 / 窗口逐轴尺寸(矩形钢网下长宽可不等)
+const platterSize = computed(() => {
+  const p = platterHalfXY(c.value);
+  return `${(p.hx * 2).toFixed(0)} × ${(p.hy * 2).toFixed(0)}`;
+});
+const windowSizeXY = computed(() => {
+  const w = windowHalfXY(c.value);
+  return `${(w.hx * 2).toFixed(1)} × ${(w.hy * 2).toFixed(1)}`;
+});
 
 // 夹具边长输入下限:与 store computeJigSize 同源(两个独立约束取大):
 //   A · 2*win + 28(窗口+螺丝带+外缘)
@@ -170,19 +168,33 @@ function applyPreset(id: string) {
       <span>{{ t('config.gerberApplied', { f: c.gerberFilename }) }}</span>
     </div>
 
-    <!-- 钢网(基本:按板子自动推荐,可改成实际购买的钢网尺寸) -->
+    <!-- 钢网(基本:按板子自动推荐,可改成实际购买的钢网尺寸;长宽独立可矩形) -->
     <div class="section-label">{{ t('config.stencil') }}</div>
-    <div class="field">
-      <label class="field-label">{{ t('config.stencilSize') }}</label>
-      <el-input-number
-        v-model="c.stencilSize"
-        :min="10"
-        :max="290"
-        :step="5"
-        :precision="0"
-        size="default"
-        style="width: 100%"
-      />
+    <div class="field-row">
+      <div class="field">
+        <label class="field-label">{{ t('config.stencilSizeX') }}</label>
+        <el-input-number
+          v-model="c.stencilSizeX"
+          :min="10"
+          :max="290"
+          :step="5"
+          :precision="0"
+          size="default"
+          style="width: 100%"
+        />
+      </div>
+      <div class="field">
+        <label class="field-label">{{ t('config.stencilSizeY') }}</label>
+        <el-input-number
+          v-model="c.stencilSizeY"
+          :min="10"
+          :max="290"
+          :step="5"
+          :precision="0"
+          size="default"
+          style="width: 100%"
+        />
+      </div>
     </div>
     <div class="field">
       <label class="field-label">{{ t('config.pryNotch') }}</label>
@@ -276,43 +288,46 @@ function applyPreset(id: string) {
         <el-input-number v-model="c.ejectSlotWidth" :min="0" :max="40" :step="1" :precision="0" size="small" style="width: 100%" />
       </div>
 
-      <!-- 凸台 ↔ 唇宽(双向滑块):独立卡片突出,整行独占 -->
+      <!-- 唇宽滑块(单条):四边一致,凸台/窗口逐轴随之变化 -->
       <div class="section-label">{{ t('config.platterLipGroup') }}</div>
       <div class="platter-lip-card">
         <div class="platter-lip-slider">
           <label class="field-label">
             <span class="lbl-l">{{ t('config.stencilLip') }}</span>
-            <span class="lbl-title">→</span>
-            <span class="lbl-r">{{ t('config.platterWidth') }}</span>
           </label>
           <el-slider
-            :model-value="platterSliderValue"
-            @update:model-value="onPlatterSliderChange"
-            :min="platterMinBound"
-            :max="platterMaxBound"
+            :model-value="lipValue"
+            @update:model-value="onLipChange"
+            :min="0"
+            :max="Math.max(lipMax, 0.1)"
             :step="0.1"
             :show-tooltip="true"
-            :format-tooltip="(v: number) => `${t('config.platterWidth')} = ${v.toFixed(1)}mm`"
-            :disabled="platterMaxBound <= platterMinBound"
+            :format-tooltip="(v: number) => `${t('config.stencilLip')} = ${v.toFixed(1)}mm`"
+            :disabled="lipMax <= 0"
           />
           <div class="slider-readout">
             <span class="rd-l">
               <span class="rd-k">{{ t('config.stencilLip') }}</span>
-              <span class="rd-v">{{ c.stencilLip.toFixed(1) }} mm</span>
+              <span class="rd-v">{{ lipValue.toFixed(1) }} mm</span>
             </span>
-            <span class="rd-eq">2 × {{ c.stencilLip.toFixed(1) }} + {{ c.platterWidth.toFixed(1) }} =</span>
+            <span class="rd-eq">→</span>
             <span class="rd-r">
-              <span class="rd-v">{{ c.stencilSize.toFixed(0) }} mm</span>
-              <span class="rd-k">{{ t('config.stencilSizeShort') }}</span>
+              <span class="rd-v">{{ platterSize }}</span>
+              <span class="rd-k">{{ t('config.platterSizeShort') }}</span>
+            </span>
+            <span class="rd-eq">→</span>
+            <span class="rd-r">
+              <span class="rd-v">{{ windowSizeXY }}</span>
+              <span class="rd-k">{{ t('config.windowSizeShort') }}</span>
             </span>
           </div>
         </div>
-        <div v-if="effectiveMargin > (c.stencilLip ?? 0) + 0.01" class="auto-hint">
+        <div v-if="lipMax <= 0" class="auto-hint">
           <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
             <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
             <path d="M8 7v4M8 5.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
           </svg>
-          <span>{{ t('config.platterHint', { m: effectiveMargin.toFixed(1) }) }}</span>
+          <span>{{ t('config.lipNoRoom') }}</span>
         </div>
       </div>
 

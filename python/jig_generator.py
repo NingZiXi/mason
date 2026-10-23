@@ -143,24 +143,36 @@ def loft_cone(coords_bot, coords_top, z_bot, z_top):
 RES = 6  # buffer 圆弧每象限段数(模块级:rounded_rect_poly 与 get_polys 共用)
 
 
+def stencil_half_xy(p):
+    """钢网外缘半长 / 半宽(mm),居中坐标系。
+
+    优先读 stencil_size_x / stencil_size_y(矩形钢网,长宽可不等);
+    旧参数 stencil_size(单值正方形)两轴兜底,保证老项目文件仍可用。
+    两轴都取不到时返回 (0, 0) —— 表示『非独立模式』,外框改由
+    板框 + 边框宽推导(见 compute_frame_poly 的分支 2)。
+    """
+    legacy = float(p.get("stencil_size", 0.0) or 0.0)
+    sx = float(p.get("stencil_size_x", 0.0) or 0.0) or legacy
+    sy = float(p.get("stencil_size_y", 0.0) or 0.0) or legacy
+    return sx / 2.0, sy / 2.0
+
+
 def compute_frame_poly(p):
     """PCB 钢网外框多边形 —— build_stencil 实体构造 + get_polys 反向
     钳制凸台共用 —— 物理约束『platter ≤ frame - 唇』的单一来源。
 
     钢网外缘来源:
-      1) stencil_size > 0(独立模式):用户直接给钢网外径 —— 构建一个直径 =
-         stencil_size 的圆角矩形作为 frame,不再用 frame_width 推导
+      1) stencil_size_x/y > 0(独立模式):用户直接给钢网长宽 —— 构建一个
+         圆角矩形(长宽可不等)作为 frame,不再用 frame_width 推导
       2) 否则(frame_width 路径):板框 + pocket_clearance + stencil_frame_width,
          外角圆角 stencil_corner_radius;形状选项 stencil_frame_shape
          (outline/rect)生效
     """
-    stencil_size = float(p.get("stencil_size", 0.0))
-    if stencil_size > 0:
-        # 独立模式:frame = 直径 stencil_size 的圆角矩形(用板框圆角半径或
-        # 兜底值),用户给定的尺寸作为夹具装配用的真实钢网外缘
+    hx, hy = stencil_half_xy(p)
+    if hx > 0 and hy > 0:
+        # 独立模式:frame = 用户给定长宽的圆角矩形,作为夹具装配真实钢网外缘
         r_frame = max(0.0, min(float(p.get("stencil_corner_radius", 3.0)), 20.0))
-        h = stencil_size / 2
-        return rounded_rect_poly(-h, -h, h, h, r_frame)
+        return rounded_rect_poly(-hx, -hy, hx, hy, r_frame)
     pocket_clr = float(p.get("pocket_clearance", 0.1))
     frame_w = float(p.get("stencil_frame_width", 12.0))
     outline_pts = p.get("pcb_outline_points", [])
@@ -188,40 +200,47 @@ def compute_frame_poly(p):
 
 
 def plater_radius(p, slot_poly, frame_poly=None):
-    """凸台外扩量与圆角半径 —— get_polys / build_cover 共用,
-    物理约束『凸台顶面 ⊇ 钢网外框』的单一来源。
-    凸台恒为正方形:边长 = 槽包围盒长边 + 2*margin —— 钢网是正方形,
-    方形凸台保证钢网四边支撑均匀一致(窄长板短边不再多出一圈台阶)。
+    """凸台逐轴外扩量与圆角半径 —— get_polys / build_cover 共用,
+    物理约束『凸台顶面 ⊇ PCB 槽』且『钢网外缘 - 唇 = 凸台外缘』的单一来源。
 
-    新语义(配合双向滑动条):
-      - 用户凸台宽 platter_width(默认 97mm):凸台本身的边长(mm);
-        必须 ≥ max(pcb_size_x, pcb_size_y),保证 PCB 不悬空
-      - 唇宽 stencil_lip(默认 1.5mm)= (stencil_size - platter_width)/2,
-        由 platter_width 滑动条联动,总和保持 stencil_size
-      - 凸台外扩量 margin_eff = platter_width/2 - slot_half_max
-        (反向钳制:platter 宽度由用户决定,只对槽最小包围盒做钳制,
-         不用 stencil/2 钳 —— 否则 stencil 永远是上限、滑动条无效)
-      - A/B 框窗口 = max(platter_half, stencil_size/2) + window_gap
-        (在 get_polys 中取钢网外缘兜底,保证窗口能容纳钢网)
+    凸台为矩形(跟随钢网长宽),半宽逐轴推导:
+      - 独立模式(用户给了钢网长宽):
+          platter_half = max(stencil_half - lip, slot_half)
+        即从钢网外缘向内缩一个唇宽(单条滑块,四边一致),同时不得小于
+        PCB 槽半宽 —— 否则 PCB 边缘悬空、无法被托住。
+      - 非独立模式(无用户钢网尺寸):退回 platter_margin 作为最低外扩量兜底。
 
-    关键修复(此前 bug):platter_half 不应被 frame_half_max (stencil/2) 钳制,
-    否则 platter_width ≤ stencil_size 时永远走 stencil/2 上限,滑动条完全失效。
+    返回 (margin_x, margin_y, r):逐轴外扩量(相对槽半宽)与凸台圆角半径。
     """
     minx, miny, maxx, maxy = slot_poly.bounds
-    slot_half_max = max(maxx - minx, maxy - miny) / 2
-    # 用户凸台宽度(默认 97mm):保证 ≥ slot_half_max(防 PCB 悬空)
-    # 不再用 stencil/2 钳制 —— 那会让任何 ≤ stencil_size 的 platterWidth 都无效
-    # platter_margin 作为"最低外扩量"兜底:platter_width 不够时自动补齐,
-    # 老项目文件(含 platter_margin 但无 platter_width)仍能正确外扩
-    platter_width = float(p.get("platter_width", 0.0))
-    margin_min = float(p.get("platter_margin", 0.0))
-    platter_half = max(platter_width / 2, slot_half_max + margin_min)
-    # 凸台外扩量(相对槽半宽)
-    margin_eff = max(0.0, platter_half - slot_half_max)
-    # 兼容字段:把有效唇宽写回 stencil_lip(供项目文件回显)
-    p["stencil_lip"] = max(0.0, float(p.get("stencil_size", 0.0)) / 2 - platter_half)
-    r = min(p.get("platter_corner_radius", 4.5), platter_half - 0.5)
-    return margin_eff, r
+    slot_hx = (maxx - minx) / 2
+    slot_hy = (maxy - miny) / 2
+    lip = float(p.get("stencil_lip", 0.0) or 0.0)
+    margin_min = float(p.get("platter_margin", 0.0) or 0.0)
+    shx, shy = stencil_half_xy(p)
+    if shx > 0 and shy > 0:
+        platter_hx = max(shx - lip, slot_hx)
+        platter_hy = max(shy - lip, slot_hy)
+    else:
+        # 无用户钢网尺寸(钢网模式 / 旧数据)→ platter_margin 兜底外扩
+        platter_hx = slot_hx + margin_min
+        platter_hy = slot_hy + margin_min
+    margin_x = max(0.0, platter_hx - slot_hx)
+    margin_y = max(0.0, platter_hy - slot_hy)
+    # 兼容字段:有效唇宽 / 有效台阶宽写回(项目文件回显);
+    # 唇宽取两轴更紧的一侧,保证任何一轴都不出现负唇
+    if shx > 0 and shy > 0:
+        p["stencil_lip"] = max(0.0, min(shx - platter_hx, shy - platter_hy))
+    else:
+        p["stencil_lip"] = lip
+    p["platter_margin"] = min(margin_x, margin_y)
+    # 4 角定位柱用:沿对角线取两轴较大半宽(保守,不与凸台角部相撞)
+    p["platter_half_for_post"] = max(platter_hx, platter_hy)
+    r = min(
+        float(p.get("platter_corner_radius", 4.5) or 4.5),
+        min(platter_hx, platter_hy) - 0.5,
+    )
+    return margin_x, margin_y, max(0.0, r)
 
 
 def rounded_rect_poly(minx, miny, maxx, maxy, r):
@@ -270,32 +289,38 @@ def get_polys(p):
     # 会自动扩张或收缩,保证『platter + 唇 ⊂ frame』
     frame_poly = compute_frame_poly(p)
 
-    # 凸台 = 恒为正方形,边长受钢网反向钳制
-    # —— 不跟随板框形状:异形板(圆/异形轮廓)的托盘面仍是规整方形,
-    # 且钢网是正方形,方形凸台四边支撑唇均匀一致。
-    margin, r = plater_radius(p, slot_poly, frame_poly=frame_poly)
+    # 凸台 = 矩形(跟随钢网长宽),半宽逐轴 = max(stencil_half - lip, slot_half)
+    # —— 不跟随板框形状:异形板(圆/异形轮廓)的托盘面仍是规整矩形,
+    # 且钢网是矩形,矩形凸台四边支撑唇均匀一致。
+    margin_x, margin_y, r = plater_radius(p, slot_poly, frame_poly=frame_poly)
     minx, miny, maxx, maxy = slot_poly.bounds
     cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
-    half = max(maxx - minx, maxy - miny) / 2 + margin  # = platter_half
-    platter_poly = rounded_rect_poly(cx - half, cy - half, cx + half, cy + half, r)
+    slot_hx, slot_hy = (maxx - minx) / 2, (maxy - miny) / 2
+    half_x = slot_hx + margin_x  # = platter_half_x
+    half_y = slot_hy + margin_y  # = platter_half_y
+    platter_poly = rounded_rect_poly(
+        cx - half_x, cy - half_y, cx + half_x, cy + half_y, r
+    )
 
-    # A/B 框窗口 = 凸台外缘 + window_gap(默认 0.5mm,机械余量):
+    # A/B 框窗口 = 凸台外缘逐轴 + window_gap(默认 0.5mm,机械余量):
     #   物理上 A/B 框中间的开孔是『漏出钢网/PCB 的工作窗口』,
     #   A/B 框四周压在凸台外缘的台阶上 → 窗口必须 ≥ 凸台外缘;
     #   钢网是放在凸台顶面 + PCB 上方的薄片,不穿过 A/B 框中间,
     #   所以 A/B 框窗口不需要跟随 stencil_size(否则会出现"凸台缩窗口
     #   不缩"的台阶,视觉割裂)。
     window_gap = float(p.get("window_gap", 0.5))
-    win_half = half + window_gap
+    win_hx = half_x + window_gap
+    win_hy = half_y + window_gap
     window_poly = rounded_rect_poly(
-        cx - win_half, cy - win_half, cx + win_half, cy + win_half,
+        cx - win_hx, cy - win_hy, cx + win_hx, cy + win_hy,
         min(r, window_gap + 0.5),
     )
 
-    # 兼容字段:把有效外扩量回写到 platter_margin(项目文件兼容)
-    p["platter_margin"] = margin
-    # 给 corner_screw_positions 提供凸台半宽(沿对角线,platter 是圆角矩形,半宽 = half)
-    p["platter_half_for_post"] = half
+    # 兼容字段:有效外扩量 / 槽半宽回写(项目文件兼容 + 角柱兜底路径)
+    p["platter_margin"] = min(margin_x, margin_y)
+    p["slot_half_max"] = max(slot_hx, slot_hy)
+    # 给 corner_screw_positions 提供凸台半宽(沿对角线,取两轴较大值)
+    p["platter_half_for_post"] = max(half_x, half_y)
 
     return slot_poly, platter_poly, window_poly, is_shaped
 
@@ -328,8 +353,9 @@ def corner_screw_positions(window_poly, jig, p=None):
         if slot_half is None or slot_half <= 0:
             plater_half = win_half  # 不可得时用窗口兜底(略保守)
         else:
-            stencil = (p or {}).get("stencil_size", 0.0)
-            frame_half = stencil / 2 if stencil > 0 else slot_half + (p or {}).get("stencil_frame_width", 5.0)
+            shx, shy = stencil_half_xy(p or {})
+            stencil_half = max(shx, shy)
+            frame_half = stencil_half if stencil_half > 0 else slot_half + (p or {}).get("stencil_frame_width", 5.0)
             margin = max(lip, frame_half - slot_half)
             plater_half = slot_half + margin
     r_platter_corner = (p or {}).get("platter_corner_radius", 4.5)
@@ -656,7 +682,7 @@ def build_cover(p):
     #    - 直边壁 45°(bevel = cover_h-0.4 近全高),压紧面仍全程有效
     cover = rounded_square_solid(jig, cover_h, r_out)
     bevel = cover_h - 0.4
-    _m, pl_r = plater_radius(p, slot_poly)
+    _mx, _my, pl_r = plater_radius(p, slot_poly)
     win_r = (pl_r + 0.4) if pl_r > 0.05 else 0.4
     minx, miny, maxx, maxy = window_poly.bounds
     pad = 0.2  # 锥体两端各伸出 pad,避免与盖板上下表面共面布尔

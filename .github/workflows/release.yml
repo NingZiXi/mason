@@ -128,7 +128,27 @@ jobs:
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
 
-      - name: Create Release
+      - name: Resolve curated release notes
+        id: notes
+        run: |
+          f="release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$f" ]; then
+            echo "path=$f" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Release (curated notes)
+        if: steps.notes.outputs.path != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: false
+          prerelease: false
+
+      - name: Create Release (auto notes)
+        if: steps.notes.outputs.path == ''
         uses: softprops/action-gh-release@v2
         with:
           files: release/*

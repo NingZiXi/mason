@@ -22,6 +22,14 @@ pub struct ScadParams {
     /// 空数组 = 无内孔
     #[serde(default)]
     pub pcb_outline_holes: Vec<Vec<[f64; 2]>>,
+    /// 钢网外缘长/宽(mm,可为矩形)—— 独立模式;旧项目文件只有单值
+    /// stencil_size 时两轴同取。0 = 非独立模式(钢网外框由板框+边框宽推导)
+    #[serde(default)]
+    pub stencil_size_x: f64,
+    #[serde(default)]
+    pub stencil_size_y: f64,
+    /// 旧单值钢网尺寸(正方形),仅用于旧项目文件兼容
+    #[serde(default)]
     pub stencil_size: f64,
     /// 周圈螺丝间距(B 面配置;0 = 关闭周圈孔)
     pub screw_spacing: f64,
@@ -34,14 +42,11 @@ pub struct ScadParams {
     /// 凸台高度(其余为底板)
     #[serde(default = "default_platter_height")]
     pub platter_height: f64,
-    /// 凸台阶宽(槽到凸台外缘)
+    /// 凸台阶宽(槽到凸台外缘)—— 派生回显字段
     #[serde(default = "default_platter_margin")]
     pub platter_margin: f64,
-    /// 凸台宽度(mm) —— 与 stencil_lip 总和 = stencil_size(双向滑动条)
-    /// Python 端 plater_radius 用它做反向钳制,前端 lip 滑动条即时联动
-    #[serde(default = "default_platter_width")]
-    pub platter_width: f64,
-    /// 钢网外缘压在凸台上的唇宽(mm) —— 与 platter_width 联动
+    /// 钢网外缘压在凸台上的唇宽(mm) —— 单条滑块,四边一致;
+    /// 凸台半宽逐轴 = max(stencil_half - lip, slot_half)
     #[serde(default = "default_stencil_lip")]
     pub stencil_lip: f64,
     /// 矩形板凸台圆角半径
@@ -131,7 +136,6 @@ pub struct ScadParams {
 fn default_insert_height() -> f64 { 8.0 }
 fn default_platter_height() -> f64 { 4.0 }
 fn default_platter_margin() -> f64 { 5.0 }
-fn default_platter_width() -> f64 { 70.0 }
 fn default_stencil_lip() -> f64 { 15.0 }
 fn default_platter_corner_radius() -> f64 { 4.5 }
 fn default_eject_slot_width() -> f64 { 22.0 }

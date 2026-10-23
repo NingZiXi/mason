@@ -22,7 +22,10 @@ export interface AppConfig {
   pcbThickness: number;
 
   // 钢网参数(夹具模式用:展示用;窗口由凸台推导)
-  stencilSize: number;
+  /** 钢网外缘长(X 向,mm)—— 与 stencilSizeY 一起决定矩形钢网外形 */
+  stencilSizeX: number;
+  /** 钢网外缘宽(Y 向,mm) */
+  stencilSizeY: number;
 
   // PCB 钢网(一体式)参数
   /** 槽底钢网层厚度(mm,默认 0.3 / FDM) */
@@ -77,23 +80,19 @@ export interface AppConfig {
   insertHeight: number;
   /** 凸台高度(其余为底板) —— 由 baseHeight 自动同步,字段保留作项目兼容 */
   platterHeight: number;
-  /** 凸台台阶宽(槽到凸台外缘) —— 派生值 = max(stencilLip, frame_half - slot_half)
-   * 由 stencilLip 接管,字段保留仅用于项目文件兼容 */
+  /** 凸台台阶宽(槽到凸台外缘) —— 派生值(两轴取小),由 stencilLip 决定,
+   * 字段保留仅用于项目文件兼容 */
   platterMargin: number;
   /** 矩形板凸台圆角半径 */
   platterCornerRadius: number;
   /** A/B 框窗口与凸台外缘之间的机械余量(mm,默认 0.5)—— 用户可调,
    * 让 A/B 框窗口比凸台稍大,留装配间隙;不参与物理约束 */
   windowGap: number;
-  /** 凸台宽度(mm) —— 用户调节(配合 stencilLip 双向滑动条):
-   *   凸台托住 PCB;下限不能小于 max(pcbSizeX, pcbSizeY)
-   *   上限不超过 stencilSize(再大唇宽就为负,钢网无唇)
-   *   与 stencilLip 总和 = stencilSize(钢网外缘) */
-  platterWidth: number;
-  /** 钢网外缘压在凸台上的唇宽(mm) —— 用户调节(配合 platterWidth 滑动条):
-   *   凸台外再扩出 lip mm 才到钢网外缘(凸台 = 槽 + lip 后取大)
-   *   即 stencilLip = stencilSize - platterWidth
-   *   与 platterWidth 双向联动(滑块两端),总和保持 stencilSize */
+  /** 钢网外缘压在凸台上的唇宽(mm) —— 用户调节(单条滑块,四边一致):
+   *   凸台外再扩出 lip mm 才到钢网外缘,逐轴生效:
+   *     platterHalfX = stencilSizeX/2 - lip,platterHalfY = stencilSizeY/2 - lip
+   *   上限 = min(stencilSizeX/2 - slotHalfX, stencilSizeY/2 - slotHalfY),
+   *   保证凸台不小于 PCB 槽(否则 PCB 悬空) */
   stencilLip: number;
   /** 底部圆形顶出孔开关(0 = 关闭;孔径随板尺寸自适应) */
   ejectSlotWidth: number;
@@ -141,7 +140,8 @@ const DEFAULT: AppConfig = {
   pcbSizeX: 50,
   pcbSizeY: 50,
   pcbThickness: 1.6,
-  stencilSize: 100,
+  stencilSizeX: 100,
+  stencilSizeY: 100,
   stencilThickness: 0.3,
   padShrink: 0,
   stencilFrameWidth: 12,
@@ -170,10 +170,9 @@ const DEFAULT: AppConfig = {
   platterMargin: 5,
   platterCornerRadius: 4.5,
   windowGap: 0.5,
-  /** 默认 lip 占 lipMax 上界 60%:stencilSize=100, pcbMax=50 → lipMax=25,
-   * 默认 lip=15(60%)→ platterWidth=70,凸台半宽 35mm,窗口=35+0.5=35.5mm。
+  /** 默认 lip 占 lipMax 上界 60%:钢网 100×100、板 50×50 → lipMax=25,
+   * 默认 lip=15(60%)→ 凸台半宽 35mm,窗口=35+0.5=35.5mm。
    * 视觉上凸台有明显"托架台阶",凸台外缘 vs 钢网外缘对比一目了然。*/
-  platterWidth: 70,
   stencilLip: 15,
   ejectSlotWidth: 22,
   pryNotchSides: ['down'],
@@ -246,57 +245,60 @@ export const STRUCTURE_PRESETS: StructurePreset[] = [
   },
 ];
 
+/** PCB 槽半宽(X/Y 两轴,与 Python get_polys 同源) */
+export function slotHalfXY(c: AppConfig): { hx: number; hy: number } {
+  return {
+    hx: c.pcbSizeX / 2 + c.pcbPocketClearance,
+    hy: c.pcbSizeY / 2 + c.pcbPocketClearance,
+  };
+}
+
+/** 唇宽上限:凸台每轴都不能小于 PCB 槽(否则 PCB 悬空)
+ *   唇宽对四边一致 → 上限取两轴中更紧的一侧 */
+export function stencilLipMax(c: AppConfig): number {
+  const { hx, hy } = slotHalfXY(c);
+  return Math.max(
+    0,
+    Math.min(c.stencilSizeX / 2 - hx, c.stencilSizeY / 2 - hy)
+  );
+}
+
+/** 凸台半宽(X/Y 两轴):钢网外缘内缩一个唇宽,且不得小于 PCB 槽 */
+export function platterHalfXY(c: AppConfig): { hx: number; hy: number } {
+  const { hx, hy } = slotHalfXY(c);
+  const lip = c.stencilLip ?? 0;
+  return {
+    hx: Math.max(c.stencilSizeX / 2 - lip, hx),
+    hy: Math.max(c.stencilSizeY / 2 - lip, hy),
+  };
+}
+
 /** 派生窗口 x/y 半宽(与 Python get_polys 一致,bbox 近似异形板)
- * 凸台/窗口恒为正方形 —— 与 Python get_polys 同步改
  *
  * 物理约束链(自上而下):
  *   jig 螺丝带  ⊃  螺丝孔(jig/2 - 10 圆心) ——
  *   A/B 框窗口(机械余量)  ⊃  凸台(盖住钢网外缘)  ⊃  PCB 槽
  * 即:螺丝夹紧 A/B 框 —— A/B 框窗口比凸台稍大(windowGap,机械余量)
- * 压在钢网外缘上,凸台宽 ≥ PCB 边长(platterWidth),再扩 stencilLip 托住钢网。
+ * 压在钢网外缘上,凸台比 PCB 每边宽出一个唇宽(stencilLip),再托住钢网。
  *
- * 数学链:
- *   slot_half_max = max(pcb/2 + clearance)
- *   platter_half  = max(slot_half_max, platterWidth/2)   # 凸台宽度不能比 PCB 小
- *   stencilLip    = stencilSize/2 - platterHalf (用户滑动条控制,
- *                  与 platterWidth 总和 = stencilSize)
- *   window_half   = max(platterHalf, stencilSize/2) + windowGap
- *                  # 窗口要么压在凸台上、要么压在钢网外缘(取更外)
- *
- * 反向钳制:platterMargin(派生) = platterHalf - slotHalf
- * —— 当钢网要求 lip > 实际 lip 时,platter 还得继续外扩才能托住钢网;
- * 该派生值保留在 platterMargin 字段里,用于项目文件兼容 */
+ * 数学链(逐轴):
+ *   slot_half   = pcb/2 + clearance
+ *   platter_half = max(stencil_half - lip, slot_half)   # 唇宽四边一致
+ *   window_half  = platter_half + windowGap
+ * 钢网/凸台/窗口均为矩形,底板(jigSize)仍为正方形(按两轴取大)。 */
 export function windowHalfXY(c: AppConfig): { hx: number; hy: number } {
   const windowGap = c.windowGap ?? 0.5;
-  const platterHalf = platterHalfFor(c);
-  // 窗口 = 凸台外缘 + 机械余量(与 Python get_polys 同源):
-  //   钢网坐在凸台顶面 + PCB 上方,唇向外延伸,不穿过 A/B 框中间,
-  //   所以窗口不需要跟随 stencilSize,只需要 ≥ 凸台外缘即可。
-  const windowHalf = platterHalf + windowGap;
-  return { hx: windowHalf, hy: windowHalf };
+  const p = platterHalfXY(c);
+  return { hx: p.hx + windowGap, hy: p.hy + windowGap };
 }
 
 /**
- * 凸台半宽计算:
- *   1) 优先 platterWidth/2(用户设的凸台宽度);
- *   2) 但必须 ≥ slotHalfMax(凸台不能比 PCB 小,否则 PCB 悬空);
- *   3) 反向钳制:lip 算出的实际凸台半宽 = stencilHalf 时,凸台已到钢网外缘,
-/**
- * 凸台半宽(双向滑动条语义):
- *   platter_half = max(platterWidth / 2, slotHalfMax)
- * - 不再用 stencil/2 钳制 —— 那会让任何 ≤ stencilSize 的 platterWidth 都无效
- * - 窗口(window)那边再用 stencil/2 兜底,保证 A/B 框能容纳钢网
+ * 凸台半宽(取两轴较大值,用于夹具边长/角柱约束这类正方形判据)
  * 与 Python `plater_radius` 完全同源。
  */
 export function platterHalfFor(c: AppConfig): number {
-  const slotHX = c.pcbSizeX / 2 + c.pcbPocketClearance;
-  const slotHY = c.pcbSizeY / 2 + c.pcbPocketClearance;
-  const slotHalfMax = Math.max(slotHX, slotHY);
-  const userPlatterHalf = (c.platterWidth ?? 0) / 2;
-  // platterMargin 作为最低外扩量兜底(老项目文件兼容):
-  // platterWidth 不够大时自动补齐 margin
-  const marginMin = c.platterMargin ?? 0;
-  return Math.max(userPlatterHalf, slotHalfMax + marginMin);
+  const { hx, hy } = platterHalfXY(c);
+  return Math.max(hx, hy);
 }
 
 /** 窗口最大半宽(方形近似,用于 jig 尺寸推导/角螺丝钳位) */
@@ -307,14 +309,14 @@ export function windowHalf(c: AppConfig): number {
 
 /**
  * 派生 platterMargin(项目文件兼容字段):等于有效台阶宽
- *   = platterHalf - slotHalf
+ *   = 两轴凸台半宽 - 对应槽半宽 的较小值
  * 与 Python plater_radius 的 margin_eff 同源
  * @deprecated platterMargin 已是派生展示字段,由 watch 自动写入;不再建议组件直接读
  */
 export function effectivePlatterMargin(c: AppConfig): number {
-  const slot = Math.max(c.pcbSizeX / 2 + c.pcbPocketClearance,
-                        c.pcbSizeY / 2 + c.pcbPocketClearance);
-  return Math.max(0, platterHalfFor(c) - slot);
+  const slot = slotHalfXY(c);
+  const p = platterHalfXY(c);
+  return Math.max(0, Math.min(p.hx - slot.hx, p.hy - slot.hy));
 }
 
 /**
@@ -356,10 +358,15 @@ export function effectivePlatterMargin(c: AppConfig): number {
  * 且钢网外缘必须落在周圈螺丝孔(圆心距外缘 10mm)的内侧、不碰孔壁:
  *   jig/2 ≥ stencilHalf + 10(螺丝圆心) + periScrewD/2(孔半径) + 1.5(净距)
  *   → jig ≥ stencilSize + 20 + periScrewD + 3
- * 底板与 A/B 盖同尺寸,同一约束。
+ * 矩形钢网取长边;底板与 A/B 盖同尺寸,同一约束。
  */
 export function stencilClampFloor(c: AppConfig): number {
-  return c.stencilSize + 20 + (c.periScrewD ?? 3.2) + 3;
+  return (
+    Math.max(c.stencilSizeX, c.stencilSizeY) +
+    20 +
+    (c.periScrewD ?? 3.2) +
+    3
+  );
 }
 
 function computeJigSize(c: AppConfig): number {
@@ -371,7 +378,7 @@ function computeJigSize(c: AppConfig): number {
   const rHole = (c.cornerScrewD ?? 5) / 2 + 2.2;
   const rOut = c.outerCornerRadius ?? 5;
   const rCorner = c.platterCornerRadius ?? 4.5;
-  // 凸台半宽直接用 platterHalfFor(新语义):platterWidth/2 与 slotHalfMax、stencilHalf 取大
+  // 凸台半宽直接用 platterHalfFor:逐轴 = max(stencilHalf - lip, slotHalf),取两轴较大值
   const platterHalf = platterHalfFor(c);
   // s_post ≥ platter_half + r_post/√2 - r_corner·(1 - 1/√2)
   // (凸台对角线方向最紧约束,推导见 docstring)
@@ -424,19 +431,20 @@ export const useConfigStore = defineStore("config", () => {
     return positions;
   });
 
-  // 板子尺寸变化 → 触发"自动钳制到下界"(反向钳制下界抬高):
-  //   - stencilSize < pcb_max+0.1 时,自动推荐 = pcb_max+20(10mm 步进)
+  // 板子/钢网尺寸变化 → 自动钳制到下界:
+  //   - 钢网任一轴 < 该轴板边 + 0.1 时,自动推荐 = 该轴板边 + 20(10mm 步进)
   //     —— 避免空值/默认值 0 让后续推导失真
+  //   - stencilLip:钳到 [0, stencilLipMax](唇宽四边一致,上限取更紧的一轴)
   //   - platterMargin:派生写入 = effectivePlatterMargin(项目兼容字段)
-  //   - jigSize:按 20mm 步进取整(窗口 + 螺丝带 + 外缘)
+  //   - jigSize:按 5mm 步进取整(窗口 + 螺丝带 + 外缘)
   // 触发依赖:pcb/stencil/lip/windowGap 任一变化都重算(下界同步联动)
   watch(
     () => [
       config.value.pcbSizeX,
       config.value.pcbSizeY,
-      config.value.stencilSize,
+      config.value.stencilSizeX,
+      config.value.stencilSizeY,
       config.value.stencilLip,
-      config.value.platterWidth,
       config.value.windowGap,
       // 螺丝相关参数影响夹紧下限/角柱约束,变化时重算 jigSize
       config.value.periScrewD,
@@ -446,17 +454,14 @@ export const useConfigStore = defineStore("config", () => {
     ],
     () => {
       const c = config.value;
-      const pcbMax = Math.max(c.pcbSizeX, c.pcbSizeY);
-      if (c.stencilSize < pcbMax + 0.1) {
-        c.stencilSize = Math.ceil((pcbMax + 20) / 10) * 10;
+      if (c.stencilSizeX < c.pcbSizeX + 0.1) {
+        c.stencilSizeX = Math.ceil((c.pcbSizeX + 20) / 10) * 10;
       }
-      // 双向联动:platterWidth + 2*stencilLip = stencilSize
-      //   凸台宽 ≥ max(pcbMax, stencilSize/2);即 lip ≤ (stencilSize - pcbMax)/2
-      //   若 stencilSize < pcbMax 时(此时 lip = 0,凸台至少等于钢网外缘),也允许
-      const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
-      // 同步唇宽 = (stencilSize - platterWidth)/2,但保证 platterWidth ≥ pcbMax
-      const halfLip = (c.stencilSize - c.platterWidth) / 2;
-      c.stencilLip = Math.max(0, Math.min(lipMax, halfLip));
+      if (c.stencilSizeY < c.pcbSizeY + 0.1) {
+        c.stencilSizeY = Math.ceil((c.pcbSizeY + 20) / 10) * 10;
+      }
+      // 唇宽四边一致:上限由更紧的一轴决定(凸台每轴都不能小于 PCB 槽)
+      c.stencilLip = Math.max(0, Math.min(stencilLipMax(c), c.stencilLip ?? 0));
       // platterMargin 派生写入(项目文件兼容)
       c.platterMargin = effectivePlatterMargin(c);
       c.jigSize = computeJigSize(c);
@@ -469,9 +474,9 @@ export const useConfigStore = defineStore("config", () => {
     () => [
       config.value.pcbSizeX,
       config.value.pcbSizeY,
-      config.value.stencilSize,
+      config.value.stencilSizeX,
+      config.value.stencilSizeY,
       config.value.stencilLip,
-      config.value.platterWidth,
       config.value.windowGap,
     ],
     () => {
@@ -511,11 +516,16 @@ export const useConfigStore = defineStore("config", () => {
 
     // 钢网必须盖住整块板子,且窗口外留出盖板压紧边
     // (盖板窗口 = 板 + 4mm,钢网每边至少再宽 2mm 才压得住 → 板 + 8mm)
-    const pcbMax = Math.max(c.pcbSizeX, c.pcbSizeY);
-    if (c.stencilSize < pcbMax + 8) {
+    // 矩形钢网逐轴判定,报出缺口最大的那一轴
+    const stencilShortX = c.pcbSizeX + 8 - c.stencilSizeX;
+    const stencilShortY = c.pcbSizeY + 8 - c.stencilSizeY;
+    if (stencilShortX > 0.01 || stencilShortY > 0.01) {
+      const shortSide = stencilShortX >= stencilShortY ? "X" : "Y";
+      const shortVal = shortSide === "X" ? c.stencilSizeX : c.stencilSizeY;
+      const shortNeed = (shortSide === "X" ? c.pcbSizeX : c.pcbSizeY) + 8;
       list.push({
         key: "config.warnings.stencilTooSmall",
-        params: { s: c.stencilSize, n: pcbMax + 8 },
+        params: { s: shortVal, n: shortNeed, axis: shortSide },
       });
     }
 
@@ -524,7 +534,11 @@ export const useConfigStore = defineStore("config", () => {
     if (c.jigSize < stencilClampFloor(c)) {
       list.push({
         key: "config.warnings.jigLTstencil",
-        params: { j: c.jigSize, s: c.stencilSize, n: Math.ceil(stencilClampFloor(c) / 5) * 5 },
+        params: {
+          j: c.jigSize,
+          s: Math.max(c.stencilSizeX, c.stencilSizeY),
+          n: Math.ceil(stencilClampFloor(c) / 5) * 5,
+        },
       });
     }
 
@@ -615,15 +629,16 @@ export const useConfigStore = defineStore("config", () => {
       c.stencilPadsBottom = v.bottomPads ?? [];
     }
 
-    // 钢网尺寸:口径切换会改变板子长边,只放大不缩小
-    //   stencilSize 下界 = ceil((pcbMax+20)/10)*10(与 watch 同式)
-    //   唇宽同步回到 60% 默认位(板子尺寸变了,旧唇宽不再对应同一台阶)
-    const pcbMax = Math.max(c.pcbSizeX, c.pcbSizeY);
-    const stencilFloor = Math.ceil((pcbMax + 20) / 10) * 10;
-    c.stencilSize = Math.max(c.stencilSize, stencilFloor);
-    const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
-    c.stencilLip = Math.round(0.6 * lipMax * 10) / 10;
-    c.platterWidth = c.stencilSize - 2 * c.stencilLip;
+    // 钢网尺寸:口径切换会改变板子长宽,逐轴只放大不缩小
+    //   下界 = ceil((板边+20)/10)*10(与 watch 同式)
+    //   唇宽同步回到上限的 60%(板子尺寸变了,旧唇宽不再对应同一台阶)
+    if (c.stencilSizeX < Math.ceil((c.pcbSizeX + 20) / 10) * 10) {
+      c.stencilSizeX = Math.ceil((c.pcbSizeX + 20) / 10) * 10;
+    }
+    if (c.stencilSizeY < Math.ceil((c.pcbSizeY + 20) / 10) * 10) {
+      c.stencilSizeY = Math.ceil((c.pcbSizeY + 20) / 10) * 10;
+    }
+    c.stencilLip = Math.round(0.6 * stencilLipMax(c) * 10) / 10;
 
     c.panelMode = mode;
   }

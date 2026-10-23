@@ -20,7 +20,8 @@ function buildScadParams() {
     pcb_pocket_clearance: c.pcbPocketClearance,
     pcb_outline_points: c.pcbOutlinePoints,
     pcb_outline_holes: c.pcbOutlineHoles,
-    stencil_size: c.stencilSize,
+    stencil_size_x: c.stencilSizeX,
+    stencil_size_y: c.stencilSizeY,
     screw_spacing: c.screwSpacing,
     screw_spec: c.screwSpec,
     base_height: c.baseHeight,
@@ -28,7 +29,6 @@ function buildScadParams() {
     jig_size: c.jigSize,
     insert_height: c.insertHeight,
     platter_height: c.platterHeight,
-    platter_width: c.platterWidth,
     stencil_lip: c.stencilLip,
     window_gap: c.windowGap,
     platter_corner_radius: c.platterCornerRadius,
@@ -105,7 +105,10 @@ async function loadProject() {
     store.config.pcbSizeY = cfg.pcb_size_y;
     store.config.pcbThickness = cfg.pcb_thickness;
     store.config.pcbPocketClearance = cfg.pcb_pocket_clearance ?? 0.15;
-    store.config.stencilSize = cfg.stencil_size;
+    // 钢网尺寸:新项目文件存 X/Y 两轴;旧文件只有单值 stencil_size,两轴同取
+    const legacyStencil = cfg.stencil_size;
+    store.config.stencilSizeX = cfg.stencil_size_x ?? legacyStencil ?? 100;
+    store.config.stencilSizeY = cfg.stencil_size_y ?? legacyStencil ?? 100;
     store.config.screwSpacing = cfg.screw_spacing;
     store.config.screwSpec = cfg.screw_spec ?? "M3";
     store.config.baseHeight = cfg.base_height;
@@ -113,16 +116,34 @@ async function loadProject() {
     store.config.jigSize = cfg.jig_size;
     store.config.insertHeight = cfg.insert_height ?? 8;
     store.config.platterHeight = cfg.platter_height ?? 4;
-    // 优先读 stencil_lip(新字段);旧项目文件仅有 platter_margin 时把它当作 lip 兜底
+    // 唇宽优先读新字段 stencil_lip;旧项目文件按老语义反推:
+    //   a) 双向滑动条版本:platter_width + 2*lip = stencil_size
+    //   b) 更早版本:platter_margin = 凸台半宽 - 槽半宽,lip = 钢网半宽 - 凸台半宽
     if (cfg.stencil_lip !== undefined) {
       store.config.stencilLip = cfg.stencil_lip;
+    } else if (cfg.platter_width > 0) {
+      const legacyHalf = Math.max(
+        store.config.stencilSizeX,
+        store.config.stencilSizeY
+      ) / 2;
+      store.config.stencilLip = Math.max(0, legacyHalf - cfg.platter_width / 2);
     } else if (cfg.platter_margin !== undefined) {
-      store.config.stencilLip = cfg.platter_margin;
+      const legacyHalf = Math.max(
+        store.config.stencilSizeX,
+        store.config.stencilSizeY
+      ) / 2;
+      const slotHalfMax = Math.max(
+        store.config.pcbSizeX / 2 + store.config.pcbPocketClearance,
+        store.config.pcbSizeY / 2 + store.config.pcbPocketClearance
+      );
+      store.config.stencilLip = Math.max(
+        0,
+        legacyHalf - slotHalfMax - cfg.platter_margin
+      );
     } else {
       // 默认 lip 占 lipMax 上界 60%:与 store 默认值保持一致
       store.config.stencilLip = 15;
     }
-    store.config.platterWidth = cfg.platter_width ?? Math.max(cfg.pcb_size_x, cfg.pcb_size_y);
     store.config.windowGap = cfg.window_gap ?? 0.5;
     store.config.platterCornerRadius = cfg.platter_corner_radius ?? 4.5;
     store.config.ejectSlotWidth = cfg.eject_slot_width ?? 22;

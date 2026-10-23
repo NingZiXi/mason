@@ -108,17 +108,22 @@ def base_params(**over):
         "pcb_size_x": 100, "pcb_size_y": 100, "pcb_thickness": 1.6,
         "pcb_pocket_clearance": 0.15,
         "pcb_outline_points": [], "pcb_outline_holes": [],
-        "stencil_size": 120, "screw_spacing": 25,
+        # 钢网长宽两轴(矩形);未显式给 x/y 时由 stencil_size 同步两轴
+        "stencil_size": 120,
+        "screw_spacing": 25,
         "base_height": 4, "top_cover_height": 4,
         "jig_size": 140, "insert_height": 8,
         "platter_height": 4, "platter_margin": 0,
         "platter_corner_radius": 4.5, "eject_slot_width": 22,
-        # 默认 100×100 PCB:platterWidth=100(刚好盖住),lip=1.5(钢网为 0 时)
-        "platter_width": 100,
         "stencil_lip": 1.5, "window_gap": 0.5,
         "pry_notch_sides": [], "pry_notch_scale": 1.0,
         "corner_screw_d": 5, "peri_screw_d": 3.5,
         "outer_corner_radius": 5, "base_support_pips": True,
     }
     p.update(over)
+    # 旧式单值 stencil_size → 同步两轴(不覆盖显式给的矩形尺寸)
+    if "stencil_size_x" not in over:
+        p["stencil_size_x"] = p["stencil_size"]
+    if "stencil_size_y" not in over:
+        p["stencil_size_y"] = p["stencil_size"]
     return p

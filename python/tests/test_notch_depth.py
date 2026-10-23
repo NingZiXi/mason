@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """取放缺口深度限制验证:缺口伸入 10mm,深度不能超过凸台壁深
 
-新语义(plater_radius 反向钳制):凸台顶面 ⊇ 钢网,
-margin = max(platter_margin, frame_half - slot_half) → 凸台反向扩张托住钢网外缘
+新语义(plater_radius 唇宽驱动,逐轴):凸台顶面 = 钢网外缘内缩一个唇宽,
+且不小于 PCB 槽 —— platter_half = max(stencil_half - lip, slot_half)
 
-- 50 板 + margin=5:slot=25.15
-- stencil=150:margin_min = 75-25.15 = 49.85 >> 5 → 凸台反向扩张到半宽 75,
-  壁深 49.85,缺口 10mm 不能切穿 49.85mm 凸台壁 → 缺口深度 = 10mm(设计值)
-- stencil=70:margin_min = 35-25.15 = 9.85 > 5 → 凸台反向扩张到半宽 35.00,
-  壁深 9.85,缺口 10mm 切穿 9.85mm 凸台壁 → 缺口深度 = 9.85mm(壁深上限)
+- 50 板 + lip=1.5(默认):slot_half=25.15
+- stencil=150:platter_half = max(75-1.5, 25.15) = 73.5 → 壁深 48.35,
+  缺口 10mm 不能切穿 48.35mm 凸台壁 → 缺口深度 = 10mm(设计值)
+- stencil=70:platter_half = max(35-1.5, 25.15) = 33.5 → 壁深 8.35,
+  缺口 10mm 切穿 8.35mm 凸台壁 → 缺口深度 = 8.35mm(壁深上限)
 
+期望值由实测壁深推导:expected = min(10mm 设计, 壁深)。
 不变量:缺口深度 ≤ 凸台壁深(不切穿凸台 → 不影响内部 PCB 槽结构)
 """
 import struct
@@ -24,21 +25,23 @@ import jig_generator as jg
 
 ck = Checker()
 
-for label, stencil, expected_depth in [
-    ("深台阶(钢网150 反向扩张,壁深 49.85,缺口 10mm 未切穿)", 150, 10.0),
-    ("正常台阶(钢网70 反向扩张,壁深 9.85,缺口 10mm 切穿凸台壁)", 70, 9.85),
+for label, stencil in [
+    ("深台阶(钢网150:壁深≈48.4mm,缺口 10mm 未切穿)", 150),
+    ("正常台阶(钢网70:壁深≈8.4mm,缺口 10mm 切穿凸台壁)", 70),
 ]:
     print(f"=== {label} ===")
     params = base_params(
         _tag=f"nd_{stencil}", pcb_size_x=50, pcb_size_y=50,
         jig_size=220 if stencil == 150 else 200, stencil_size=stencil,
-        platter_margin=5.0, pry_notch_sides=["down"])
+        pry_notch_sides=["down"])
 
     slot_poly, platter_poly, _win, _s = jg.get_polys(params)
     pb = platter_poly.bounds
     miny_slot = slot_poly.bounds[1]
     margin_actual = miny_slot - pb[1]
     print(f"  凸台壁深(槽缘→外缘): {margin_actual:.1f}mm")
+    # 期望缺口深度 = min(缺口设计伸入量 10mm, 凸台壁深) —— 不切穿凸台
+    expected_depth = min(10.0, margin_actual)
 
     out = gen_part(params, "insert")
     raw = out.read_bytes()

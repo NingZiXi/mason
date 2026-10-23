@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """钢网扩张后取放缺口行为验证:
-新语义(plater_radius 钳制):platter_half = slot_half_max + min(platter_margin, margin_max)
-- 100 板 + margin=8:slot=50.15,platter 保留用户给的 margin → 半宽 58.15,壁深 8
-- stencil=140:margin_max = 70-50.15-2 = 17.85 >> 8 → margin 保留 8(钢网再大
-  凸台也不会跟着扩张到超出用户偏好),壁深仍 8
-- 无钢网回归:frame_width=12,frame_half=62.10,margin_max=9.95,8 < 9.95 → 保留 8
+
+新语义(plater_radius 唇宽驱动,逐轴):platter_half = max(stencil_half - lip, slot_half)
+本测试把凸台半宽固定为 58.15mm(壁深 8mm),即 100 板(slot_half=50.15)外扩 8mm:
+- 有钢网:stencil_half - lip = 58.15 → stencil_size = 2*(58.15+1.5) = 119.3
+- 无钢网:platter_margin = 8.0 兜底外扩到 58.15
+两种途径得到同一凸台几何,便于对比。
+
 - 缺口穿透判定:壁深 8 < 10(reach)+3 → 缺口完全切穿 8mm 壁,落到 base 底板
   → (0, y=7, z=57.5) 空,(0, y=7, z=60) 仍是底板本体(10mm 深,在 z=58-60 区间)
 
@@ -17,16 +19,25 @@ from _common import Checker, base_params, gen_part, load_tris, solid
 
 ck = Checker()
 
+# 100 板 + 0.15 间隙 → 槽半宽 50.15;目标凸台半宽 58.15(壁深 8mm)
+SLOT_HALF = 50.15
+WALL = 8.0
+LIP = 1.5
 
-def gen_insert(stencil):
+
+def gen_insert(with_stencil=True):
+    over = dict(jig_size=200, pry_notch_sides=["down"])
+    if with_stencil:
+        over["stencil_size"] = 2 * (SLOT_HALF + WALL + LIP)  # → platter_half 58.15
+    else:
+        over["stencil_size"] = 0
+        over["platter_margin"] = WALL  # → platter_half 50.15+8 = 58.15
     return load_tris(gen_part(base_params(
-        _tag=f"ns_{stencil or 's0'}", stencil_size=stencil,
-        platter_width=116.3, jig_size=200,
-        pry_notch_sides=["down"]), "insert"))
+        _tag=f"ns_{'s' if with_stencil else 's0'}", **over), "insert"))
 
 
-print("=== 100 板 + stencil 140(platter 钳制后半宽 58.15,壁深 8 < 10+3)===")
-tris = gen_insert(140)
+print("=== 100 板 + 钢网(platter 半宽 58.15,壁深 8 < 10+3)===")
+tris = gen_insert(True)
 # 浅壁 → 10mm 缺口切穿 8mm 凸台壁,继续探入底板(直到底板本体边界):
 # 槽缘 build y=-50.15 → 缺口区 build y∈[-60.15, -47.65] → STL z∈[47.65, 60.15]
 # 凸台壁 z=58.15(已切穿),底板本体延伸到 z=70(jig/2=70)。壁深=8mm
@@ -40,8 +51,8 @@ ck.check("板下探入 (0, y=6, z=49) 空", not solid(tris, 0, 6, 49))
 ck.check("外口加宽 (±10, y=7, z=59.5) 空(窄口会实体)",
          (not solid(tris, 10, 7, 59.5)) and (not solid(tris, -10, 7, 59.5)))
 
-print("=== 无钢网回归(platter 钳制后半宽 58.15,壁浅 → 切穿)===")
-tris = gen_insert(0)
+print("=== 无钢网回归(platter_margin 兜底半宽 58.15,壁浅 → 切穿)===")
+tris = gen_insert(False)
 ck.check("缺口贯穿 (0, y=7, z=57.5) 空", not solid(tris, 0, 7, 57.5))
 ck.check("缺口外实体 (±12, y=7, z=57.5) 实体",
          solid(tris, 12, 7, 57.5) and solid(tris, -12, 7, 57.5))

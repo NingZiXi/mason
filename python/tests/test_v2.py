@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
-"""v2 三部件全几何验证(新语义:双向滑动条,窗口 = 凸台 + gap,不再用 stencil/2 钳)
+"""v2 三部件全几何验证(新语义:唇宽驱动,窗口 = 凸台 + gap)
 
-参数:pcb=100, t=1.6, clr=0.15, lip=1.5, gap=0.5, jig=140, platterWidth=100, stencilSize=120
+参数:pcb=100, t=1.6, clr=0.15, lip=1.5, gap=0.5, jig=140, stencil=120(两轴同值)
 推导(尺寸链 —— 全部从 Python get_polys 动态取值,不硬编码):
-    slot ±50.15 → platter_half = max(100/2, 50.15) = 50.15
-    → window = 50.15 + 0.5 = 50.65
-    → 角螺丝:window 50.65 → corner ≈ 59.5(沿 jig 内收)
-    → 周圈带:band = max(70-10, 50.65+4) = 60.0
+    slot ±50.15 → platter_half = max(120/2 - 1.5, 50.15) = 58.5
+    → window = 58.5 + 0.5 = 59.0
+    → 角螺丝 / 周圈带 / 4 角柱孔径 均按几何动态推导
 """
 import math
 import sys
@@ -29,6 +28,8 @@ jig = p["jig_size"]
 corner_positions = jg.corner_screw_positions(window_poly, jig, p)
 CORNER = corner_positions[0][0]                                  # 角螺丝半宽(沿对角线)
 BAND = max(jig / 2 - 10, WIN_H + 4)                              # 周圈螺丝带
+# 4 角定位柱孔径 = corner_d/2 + 2.0 + post_clearance(与 jig_generator.build_base 同源)
+R_POST_HOLE = p["corner_screw_d"] / 2 + 2.0 + p.get("post_clearance", 0.4)
 
 # ===== insert(PCB 托盘) =====
 print("=== insert(PCB 托盘)===")
@@ -93,7 +94,7 @@ wbot_ok = all(not solid(cover_tris, x, 0.05, 0.0) and not solid(cover_tris, 0.0,
 ck.check(f"窗口底缘 Y=0.05 内部空(钢网塞得进,|x|∈[{WIN_H-2.0:.1f},{WIN_H-0.15:.1f}])",
          wbot_ok)
 
-# 4 角定位柱过孔 Ø9.4 全厚贯穿
+# 4 角定位柱过孔(Ø=2*R_POST_HOLE)全厚贯穿
 for cx, cz in CORNERS:
     thru = all(not solid(cover_tris, cx, y, cz) for y in (0.05, 1.0, 2.0, 3.0, 3.95))
     ck.check(f"4角柱孔@({cx:.1f},{cz:.1f}) 贯通(圆心 Y∈[0,4] 全空)", thru)
@@ -122,9 +123,9 @@ ck.check(f"窗口拔模斜面顶边 |x|≈{draft_x:.1f}({len(draft_edge)} 顶点
 found = sum(1 for (x, z) in peri if ring(v, x, z, 1.75, 0.15))
 ck.check(f"周圈底孔 {found}/{len(peri)}(与 cover 同心,Ø3.5 clearance)", found == len(peri))
 
-# 4 角定位柱孔 r=4.7 全厚贯穿(拔模斜面切到 Y≈3.60)
+# 4 角定位柱孔 r=R_POST_HOLE 全厚贯穿(拔模斜面切到 Y≈3.60)
 for cx, cz in CORNERS:
-    hole = ring(v, cx, cz, 4.7, 0.15)
+    hole = ring(v, cx, cz, R_POST_HOLE, 0.15)
     yh = (min((pv[1] for pv in hole), default=99),
           max((pv[1] for pv in hole), default=-99))
     ck.check(f"4角柱孔@({cx:.1f},{cz:.1f}) 壁Y∈[{yh[0]:.1f},{yh[1]:.1f}]",

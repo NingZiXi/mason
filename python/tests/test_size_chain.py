@@ -1,22 +1,15 @@
 # -*- coding: utf-8 -*-
-"""尺寸链约束验证:凸台 / 唇 / 钢网 三者的物理关系
+"""尺寸链约束验证:钢网 / 凸台 / 窗口 三者的物理关系(逐轴矩形语义)
 
-新物理约束链(双向滑动条语义):
-  A/B 框窗口 = 凸台外缘 + window_gap(机械余量,默认 0.5mm,用户可调)
-  凸台  =  max(platterWidth/2, slotHalfMax)
-            —— platterWidth 是用户设的凸台宽度(滑动条左)
-            —— 不再用 stencil/2 钳制,否则滑动条完全无效
-  唇宽 stencilLip = (stencilSize - platterWidth) / 2  (滑动条右)
-  双向联动:platterWidth + 2 * stencilLip = stencilSize  (总和恒等)
+物理约束链(自上而下,逐轴):
+  slot_half    = pcb_half + pcb_pocket_clearance
+  platter_half = max(stencil_half - lip, slot_half)     # 唇宽四边一致
+  window_half  = platter_half + window_gap              # 机械余量
 
-物理上:A/B 框中间的开孔是『漏出钢网/PCB 的工作窗口』,
-A/B 框四周压在凸台四周的台阶上 → 窗口必须 ≥ 凸台外缘 + 余量;
-钢网放在凸台顶面 + PCB 上方,不穿过 A/B 框中间,所以窗口不跟 stencil 走。
+钢网长宽由用户给定(stencil_size_x / stencil_size_y),可为矩形;
+凸台与窗口跟随钢网变矩形,底板(jigSize)仍为正方形。
 """
-import math
 import sys
-
-import numpy as np
 
 sys.stdout.reconfigure(encoding="utf-8")
 from _common import Checker, base_params, gen_part  # noqa: E402
@@ -26,168 +19,123 @@ import jig_generator as jg  # noqa: E402
 ck = Checker()
 
 
-def bbox_half(poly):
+def bounds_xy(poly):
+    """返回 (宽, 高) —— 逐轴尺寸,矩形/异形板都适用"""
     minx, miny, maxx, maxy = poly.bounds
-    return max(maxx - minx, maxy - miny) / 2
+    return maxx - minx, maxy - miny
 
 
 def chain_check(p, label, gap=0.5):
-    """验证 p 三件 bbox 关系,并打印关键尺寸
-
-    新物理约束:
-      - 凸台 = max(platterWidth/2, slotHalfMax) —— 不再被 stencil/frame 钳制
-      - 窗口 = 凸台 + gap
-      - 凸台 ≥ slotHalfMax(PCB 不悬空)
-    """
+    """逐轴验证 槽 ⊂ 凸台 ⊂ 窗口,并核对钢网内缩关系"""
     slot, platter, window, _shaped = jg.get_polys(p)
     frame = jg.compute_frame_poly(p)
-    slot_h = bbox_half(slot)
-    platter_h = bbox_half(platter)
-    window_h = bbox_half(window)
-    frame_h = bbox_half(frame)
-    margin_eff = platter_h - slot_h
-    pw = p.get("platter_width", 0)
+    slot_w, slot_h = bounds_xy(slot)
+    plat_w, plat_h = bounds_xy(platter)
+    win_w, win_h = bounds_xy(window)
+    frame_w, frame_h = bounds_xy(frame)
     lip = p.get("stencil_lip", 0)
-    stencil_size = p.get("stencil_size", 0)
-    print(f"  [{label}] slot_h={slot_h:.2f}  "
-          f"platter_h={platter_h:.2f}  window_h={window_h:.2f}  "
-          f"frame_h={frame_h:.2f}  win-platter={window_h-platter_h:.2f}mm  "
-          f"pw={pw}  lip={lip}  stencil={stencil_size}  margin={margin_eff:.2f}mm")
-    # 约束 1:窗口 ≥ 凸台(A/B 框窗口必须 ≥ 凸台外缘,凸台才能塞入)
-    ck.check(f"{label} 窗口 ≥ 凸台",
-             window_h + 1e-6 >= platter_h, f"差={window_h - platter_h:.2f}mm")
-    # 约束 2:窗口 - 凸台 == window_gap(机械余量)
-    ck.check(f"{label} 窗口 - 凸台 == window_gap(机械余量)",
-             abs(window_h - platter_h - gap) < 0.05,
-             f"差={window_h - platter_h - gap:.3f}mm (期望 {gap}mm)")
-    # 约束 3:凸台 ≥ slotHalfMax(PCB 不悬空)
-    pw_half = pw / 2
-    expected_min = max(pw_half, slot_h)
-    ck.check(f"{label} 凸台 ≥ max(pw/2, slotHalfMax)",
-             platter_h + 1e-6 >= expected_min - 0.01,
-             f"差={platter_h - expected_min:.3f}mm (期望 ≥ {expected_min:.2f}mm)")
-    return platter_h, window_h, frame_h
+    shx, shy = jg.stencil_half_xy(p)
+    print(f"  [{label}] slot={slot_w:.2f}x{slot_h:.2f}  "
+          f"platter={plat_w:.2f}x{plat_h:.2f}  window={win_w:.2f}x{win_h:.2f}  "
+          f"frame={frame_w:.2f}x{frame_h:.2f}  lip={lip}  margin={p['platter_margin']:.2f}")
+
+    # 约束 1:凸台 ⊇ PCB 槽(每轴,否则 PCB 边缘悬空)
+    ck.check(f"{label} 凸台 ≥ 槽(X)", plat_w + 1e-6 >= slot_w,
+             f"{plat_w:.2f} vs {slot_w:.2f}")
+    ck.check(f"{label} 凸台 ≥ 槽(Y)", plat_h + 1e-6 >= slot_h,
+             f"{plat_h:.2f} vs {slot_h:.2f}")
+
+    # 约束 2:窗口半宽 = 凸台半宽 + window_gap(每轴 → 全宽差 2·gap)
+    ck.check(f"{label} 窗口 - 凸台 == 2·gap(X)",
+             abs(win_w - plat_w - 2 * gap) < 0.05, f"差={win_w - plat_w - 2 * gap:.3f}")
+    ck.check(f"{label} 窗口 - 凸台 == 2·gap(Y)",
+             abs(win_h - plat_h - 2 * gap) < 0.05, f"差={win_h - plat_h - 2 * gap:.3f}")
+
+    # 约束 3:独立模式下 凸台 = 钢网外缘内缩一个唇宽(每轴)
+    if shx > 0 and shy > 0:
+        ck.check(f"{label} 凸台 = 钢网 - 2·lip(X)",
+                 abs(plat_w - (2 * shx - 2 * lip)) < 0.05,
+                 f"凸台 {plat_w:.2f} vs 期望 {2 * shx - 2 * lip:.2f}")
+        ck.check(f"{label} 凸台 = 钢网 - 2·lip(Y)",
+                 abs(plat_h - (2 * shy - 2 * lip)) < 0.05,
+                 f"凸台 {plat_h:.2f} vs 期望 {2 * shy - 2 * lip:.2f}")
+        # 约束 4:窗口 ⊇ 钢网?—— 窗口只跟凸台走,不需要覆盖钢网
+        ck.check(f"{label} 凸台 ⊆ 钢网外缘(X)", plat_w <= 2 * shx + 1e-6,
+                 f"{plat_w:.2f} vs {2 * shx:.2f}")
+    return plat_w, plat_h, win_w, win_h
 
 
-# --- 1. 矩形板默认参数(80x60 板 + frame_width=12) ---
-p1 = base_params(_tag="sz1", pcb_size_x=80, pcb_size_y=60,
-                 stencil_size=0, stencil_frame_width=12,
-                 stencil_frame_shape="outline",
-                 platter_width=80, stencil_lip=0)
-chain_check(p1, "矩形 80x60 frame_w=12")
+# --- 1. 方形钢网 100×100,板 60×40,唇 15 ---
+# 凸台 = 70×70(短边被槽钳制:40.6/2 < 50-15 → 60.6/2 = 30.3 → 70)
+p1 = base_params(_tag="sz1", pcb_size_x=60, pcb_size_y=40,
+                 stencil_size_x=100, stencil_size_y=100, stencil_lip=15)
+w1, h1, _ww1, _wh1 = chain_check(p1, "方形钢网 100 lip15")
 
+# --- 2. 矩形钢网 120×90,板 60×40,唇 15 ---
+# 凸台 = 90×60;窗口 = 91×61
+p2 = base_params(_tag="sz2", pcb_size_x=60, pcb_size_y=40,
+                 stencil_size_x=120, stencil_size_y=90, stencil_lip=15)
+w2, h2, _ww2, _wh2 = chain_check(p2, "矩形钢网 120x90 lip15")
+ck.check("矩形钢网 → 凸台也是矩形 90x60",
+         abs(w2 - 90) < 0.05 and abs(h2 - 60) < 0.05,
+         f"实际 {w2:.2f}x{h2:.2f}")
 
-# --- 2. 异形板 + frame_shape=rect:凸台被 PCB 短边钳制(slot 大) ---
-p2 = base_params(_tag="sz2", pcb_size_x=100, pcb_size_y=80,
-                 stencil_size=0, stencil_frame_width=12,
-                 stencil_frame_shape="rect",
-                 platter_width=100, stencil_lip=0,
-                 pcb_outline_points=[[-50, -40], [50, -40], [50, 10], [20, 10],
-                                     [20, 40], [-50, 40], [-50, -40]])
-chain_check(p2, "异形 + frame=rect")
+# --- 3. 长条钢网 200×80,板 100×40 ---
+p3 = base_params(_tag="sz3", pcb_size_x=100, pcb_size_y=40,
+                 stencil_size_x=200, stencil_size_y=80, stencil_lip=10)
+w3, h3, _ww3, _wh3 = chain_check(p3, "长条钢网 200x80 lip10")
+ck.check("长条钢网 → 凸台 180x60",
+         abs(w3 - 180) < 0.05 and abs(h3 - 60) < 0.05,
+         f"实际 {w3:.2f}x{h3:.2f}")
 
+# --- 4. 唇宽过大:凸台被槽钳制,不出现负唇 ---
+p4 = base_params(_tag="sz4", pcb_size_x=60, pcb_size_y=40,
+                 stencil_size_x=120, stencil_size_y=90, stencil_lip=40)
+_slot4, plat4, _win4, _ = jg.get_polys(p4)
+pw4, ph4 = bounds_xy(plat4)
+sw4, sh4 = bounds_xy(_slot4)
+ck.check("唇过大 → 凸台钳到槽尺寸",
+         abs(pw4 - sw4) < 0.05 and abs(ph4 - sh4) < 0.05,
+         f"凸台 {pw4:.2f}x{ph4:.2f} vs 槽 {sw4:.2f}x{sh4:.2f}")
+ck.check("唇过大 → 有效唇宽回写为正且被钳小",
+         0 <= p4["stencil_lip"] < 40, f"回写 lip={p4['stencil_lip']:.2f}")
 
-# --- 3. 极限边界:platterWidth = PCB 短边 60,唇 = 0 ---
-p3 = base_params(_tag="sz3", pcb_size_x=60, pcb_size_y=40,
-                 stencil_size=0, stencil_frame_width=12,
-                 stencil_frame_shape="rect",
-                 platter_width=60, stencil_lip=0)
-chain_check(p3, "platterWidth=pcbMax  lip=0")
-
-
-# --- 4. stencil_size 独立模式:platterWidth 用户调节 ---
-# stencil_size=70,plate_w=70 → 凸台 = 70,窗口 = 70 + 0.5 = 70.5
-p4 = base_params(_tag="sz4", pcb_size_x=50, pcb_size_y=30,
-                 stencil_size=70,
-                 stencil_frame_width=0,
-                 stencil_frame_shape="outline",
-                 platter_width=70, stencil_lip=0)
-chain_check(p4, "stencil_size=70 + plate_w=70")
-
-
-# --- 5. STL 实体验证:plate_w=PCB lip=0 时,凸台仍能盖住 PCB ---
+# --- 5. 旧项目文件:只有单值 stencil_size → 两轴同取 ---
 p5 = base_params(_tag="sz5", pcb_size_x=60, pcb_size_y=40,
-                 stencil_size=100,
-                 stencil_frame_width=0,
-                 stencil_frame_shape="outline",
-                 platter_width=60, stencil_lip=20)
-chain_check(p5, "plate_w=pcb lip=20")
+                 stencil_size=120, stencil_lip=15)
+shx5, shy5 = jg.stencil_half_xy(p5)
+ck.check("旧单值 stencil_size 兼容为正方形",
+         abs(shx5 - 60) < 1e-6 and abs(shy5 - 60) < 1e-6,
+         f"半长宽 = {shx5}, {shy5}")
+_slot5, plat5, _win5, _ = jg.get_polys(p5)
+pw5, ph5 = bounds_xy(plat5)
+ck.check("旧单值 → 凸台 90x90",
+         abs(pw5 - 90) < 0.05 and abs(ph5 - 90) < 0.05,
+         f"实际 {pw5:.2f}x{ph5:.2f}")
 
-for part in ["insert", "cover", "base"]:
-    gen_part(p5, part)
-    print(f"[OK] {part} STL 几何生成通过(plate_w=pcb lip=20)")
-
-
-# --- 6. platterWidth 用户调节:凸台跟着变 ---
-p6 = base_params(_tag="sz6", pcb_size_x=80, pcb_size_y=60,
-                 stencil_size=0, stencil_frame_width=12,
-                 stencil_frame_shape="rect",
-                 platter_width=100, stencil_lip=15)
-_slot6, platter6, window6, _shaped6 = jg.get_polys(p6)
-p6_w150 = dict(p6, platter_width=150, stencil_lip=0)
-_slot6b, platter6b, window6b, _ = jg.get_polys(p6_w150)
-insert_path = gen_part(p6, "insert")
-print(f"[OK] insert STL 几何生成通过(platterWidth 默认 100, 改 150 凸台跟着变)")
-ck.check("platterWidth=150 凸台 ≈ 75(用户设 150/2)",
-         abs(bbox_half(platter6b) - 75) < 0.1,
-         f"platter6b={bbox_half(platter6b):.2f}, 期望 75")
-ck.check("platterWidth=150 窗口 - 凸台 == window_gap",
-         abs(bbox_half(window6b) - bbox_half(platter6b) - 0.5) < 0.05,
-         f"差={bbox_half(window6b) - bbox_half(platter6b) - 0.5:.2f}")
-
-
-# --- 7. window_gap 用户调节:窗口跟着余量变 ---
-p7 = base_params(_tag="sz7", pcb_size_x=80, pcb_size_y=60,
-                 stencil_size=120,
-                 stencil_frame_width=0,
-                 stencil_frame_shape="outline",
-                 platter_width=100, stencil_lip=10,
+# --- 6. window_gap 用户调节:窗口逐轴跟随 ---
+p6 = base_params(_tag="sz6", pcb_size_x=60, pcb_size_y=40,
+                 stencil_size_x=120, stencil_size_y=90, stencil_lip=10,
                  window_gap=1.5)
-_slot7, _platter7, window7, _ = jg.get_polys(p7)
-frame7 = bbox_half(jg.compute_frame_poly(p7))
-ck.check("window_gap=1.5 窗口 = 凸台 + 1.5",
-         abs(bbox_half(window7) - bbox_half(_platter7) - 1.5) < 0.05,
-         f"window7 - platter7 = {bbox_half(window7) - bbox_half(_platter7):.2f}, 期望 1.5")
+_slot6, plat6, win6, _ = jg.get_polys(p6)
+pw6, ph6 = bounds_xy(plat6)
+ww6, wh6 = bounds_xy(win6)
+ck.check("window_gap=1.5 窗口 X = 凸台 + 2×1.5", abs(ww6 - pw6 - 3.0) < 0.05,
+         f"差={ww6 - pw6:.2f}")
+ck.check("window_gap=1.5 窗口 Y = 凸台 + 2×1.5", abs(wh6 - ph6 - 3.0) < 0.05,
+         f"差={wh6 - ph6:.2f}")
 
-
-# --- 8. 双向联动总和恒等:platterWidth + 2*stencilLip = stencilSize ---
-p8 = base_params(_tag="sz8", pcb_size_x=80, pcb_size_y=60,
-                 stencil_size=120, stencil_frame_width=0,
-                 stencil_frame_shape="outline",
-                 platter_width=100, stencil_lip=10)
-_stencil8 = p8["stencil_size"]
-_pw8 = p8["platter_width"]
-_lip8 = p8["stencil_lip"]
-ck.check("双向联动:platterWidth + 2*stencilLip = stencilSize(默认)",
-         abs(_pw8 + 2 * _lip8 - _stencil8) < 0.01,
-         f"pw={_pw8} 2*lip={2*_lip8} sum={_pw8 + 2*_lip8} stencilSize={_stencil8}")
-
-
-# --- 9. 关键场景:platterWidth < stencilSize 时,唇托住钢网外缘 ---
-# (platterWidth=80, stencilSize=100 → 唇=10,钢网外缘超出凸台 10mm)
-p9 = base_params(_tag="sz9", pcb_size_x=60, pcb_size_y=40,
-                 stencil_size=100,
-                 stencil_frame_width=0,
-                 stencil_frame_shape="outline",
-                 platter_width=80, stencil_lip=10)
-_slot9, platter9, window9, _ = jg.get_polys(p9)
-frame9 = bbox_half(jg.compute_frame_poly(p9))
-ck.check("唇场景:凸台半宽 = 40(platterWidth/2,不被 stencil 钳制)",
-         abs(bbox_half(platter9) - 40) < 0.1,
-         f"platter9={bbox_half(platter9):.2f}, 期望 40")
-ck.check("唇场景:窗口 = 凸台40 + 0.5 = 40.5(不跟 stencil 走)",
-         abs(bbox_half(window9) - 40.5) < 0.05,
-         f"window9={bbox_half(window9):.2f}, 期望 40.5")
-
+# --- 7. 实体生成:矩形钢网下三件都能正常出模 ---
+p7 = base_params(_tag="sz7", pcb_size_x=60, pcb_size_y=40,
+                 stencil_size_x=120, stencil_size_y=90, stencil_lip=15,
+                 jig_size=150)
+for part in ["insert", "cover", "base"]:
+    gen_part(p7, part)
+    print(f"[OK] {part} STL 几何生成通过(矩形钢网 120x90)")
 
 print("\n=== 总结 ===")
-print("尺寸链(新语义 —— 双向滑动条):")
-print("  A/B 框窗口 = 凸台外缘 + window_gap  ← 不跟 stencil 走")
-print("  凸台 = max(platterWidth/2, slotHalfMax)  ← 不再用 stencil/2 钳制")
-print("  唇宽 stencilLip = (stencilSize - platterWidth) / 2  (双向联动)")
-print("  凸台 ≥ PCB 槽(防悬空)")
-print("  双向联动:platterWidth + 2*stencilLip = stencilSize")
-print()
-print("platterWidth 决定凸台多宽(用户滑动条左),stencilLip 决定唇多厚(右),")
-print("总和保持 stencilSize —— 钢网外缘 = 凸台 + 唇,唇托住钢网外缘。")
-print("A/B 框中间的开孔是『漏出钢网/PCB 的工作窗口』,只跟凸台走。")
+print("尺寸链(逐轴矩形语义):")
+print("  slot_half    = pcb_half + pcb_pocket_clearance")
+print("  platter_half = max(stencil_half - lip, slot_half)   ← 唇宽四边一致")
+print("  window_half  = platter_half + window_gap            ← 机械余量")
+print("  钢网长宽独立可矩形 → 凸台/窗口跟随变矩形;底板 jigSize 仍为正方形")
