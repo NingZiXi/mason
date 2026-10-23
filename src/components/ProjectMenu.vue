@@ -171,6 +171,8 @@ async function loadProject() {
     store.config.stencilGridSize = cfg.stencil_grid_size ?? 2.0;
     store.config.stencilGridBar = cfg.stencil_grid_bar ?? 0.5;
     store.config.gerberFilename = project.gerber_filename;
+    // 工程文件不落盘拼版双口径,清掉上一个文件的拼版状态避免选择器空转
+    store.clearPanelScope();
 
     ElMessage.success(t("project.loaded"));
   } catch (e) {

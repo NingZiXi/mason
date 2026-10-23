@@ -4,30 +4,28 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useGerberOutline } from "../composables/useGerberOutline";
-import { useGerberStencil } from "../composables/useGerberStencil";
-import type { PadPolygon } from "../lib/gerber/pads";
+import { useGerberStencil, type GerberStencilResult } from "../composables/useGerberStencil";
+import type { PanelMode, PanelVariant } from "../lib/gerber/panel";
+import { useConfigStore } from "../stores/config";
 
 const props = withDefaults(defineProps<{
   mode?: "jig" | "stencil";
 }>(), { mode: "jig" });
 
 const { t } = useI18n();
+const configStore = useConfigStore();
+
+/** 一次导入的完整结果:整版 / 单板两套口径一起交给 store */
+export interface GerberImportPayload {
+  filename: string;
+  isPanel: boolean;
+  panelGrid?: { nx: number; ny: number };
+  hasPads: boolean;
+  variants: { panel: PanelVariant; single: PanelVariant };
+}
 
 const emit = defineEmits<{
-  (e: "sizeDetected", payload: {
-    width: number;
-    height: number;
-    filename: string;
-    outlinePoints: Array<[number, number]>;
-    holes: Array<Array<[number, number]>>;
-  }): void;
-  (e: "stencilDetected", payload: {
-    width: number;
-    height: number;
-    outlinePoints: Array<[number, number]>;
-    topPads: PadPolygon[];
-    bottomPads: PadPolygon[];
-  }): void;
+  (e: "gerberLoaded", payload: GerberImportPayload & { mode: PanelMode }): void;
 }>();
 
 const outline = useGerberOutline();
@@ -38,75 +36,49 @@ const error = computed(() => (props.mode === "stencil" ? stencil.error.value : o
 const hasResult = computed(() => (props.mode === "stencil" ? stencil.hasResult.value : outline.hasResult.value));
 const candidates = computed(() => (props.mode === "stencil" ? [] : outline.candidates.value));
 
-// 统一显示用的结果
+// ===== 拼版口径选择 =====
+/** 最近一次解析出的结果(用于预览按当前口径渲染) */
+const payload = ref<GerberImportPayload | null>(null);
+/** 当前生效口径:以 store 为唯一来源,设置面板切换后这里同步跟随 */
+const activeMode = computed(() => configStore.config.panelMode);
+/** 拼版文件导入时弹窗,让用户先选整版还是单板 */
+const showPanelDialog = ref(false);
+
+/** 统一显示用的结果 */
 interface DisplayResult {
   width: number;
   height: number;
   filename: string;
   outlinePoints: Array<[number, number]>;
   holes: Array<Array<[number, number]>>;
-  padCount?: number;
   topPadCount?: number;
   bottomPadCount?: number;
   skipped?: number;
-  bbox?: { units: string | null };
-  parse?: { arcsLinearized: number };
+  isPanel?: boolean;
+  panelGrid?: { nx: number; ny: number };
+  units?: string | null;
+  arcs?: number;
 }
 const display = computed<DisplayResult | null>(() => {
-  if (props.mode === "stencil") {
-    const r = stencil.result.value;
-    if (r) {
-      return {
-        width: r.width,
-        height: r.height,
-        filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
-        outlinePoints: r.outlinePoints,
-        holes: r.outlineHoles,
-        padCount: r.padCount,
-        topPadCount: r.topPads.length,
-        bottomPadCount: r.bottomPads.length,
-        skipped: r.skipped,
-      };
-    }
-    // fallback: stencil 没有结果时,回退到 outline 的板框预览
-    const o = outline.result.value;
-    if (o) {
-      return {
-        width: o.width,
-        height: o.height,
-        filename: o.filename,
-        outlinePoints: o.outlinePoints,
-        holes: o.holes,
-        bbox: { units: o.bbox.units },
-        parse: { arcsLinearized: o.parse.arcsLinearized },
-      };
-    }
-    return null;
-  }
-  const r = outline.result.value;
-  if (r) {
-    return {
-      width: r.width,
-      height: r.height,
-      filename: r.filename,
-      outlinePoints: r.outlinePoints,
-      holes: r.holes,
-      bbox: { units: r.bbox.units },
-      parse: { arcsLinearized: r.parse.arcsLinearized },
-    };
-  }
-  // fallback: jig 模式没有 outline 结果时,回退到 stencil 的板框
+  const p = payload.value;
+  if (!p) return null;
+  const v = p.variants[activeMode.value];
+  const o = outline.result.value;
   const s = stencil.result.value;
-  if (s) {
-    return {
-      width: s.width,
-      height: s.height,
-      filename: [s.topPasteFile, s.bottomPasteFile].filter(Boolean).join(" + "),
-      outlinePoints: s.outlinePoints,
-      holes: s.outlineHoles,
-    };
-  }
-  return null;
+  return {
+    width: v.width,
+    height: v.height,
+    filename: p.filename,
+    outlinePoints: v.outlinePoints,
+    holes: v.outlineHoles,
+    topPadCount: v.topPads?.length,
+    bottomPadCount: v.bottomPads?.length,
+    skipped: s?.skipped,
+    isPanel: p.isPanel,
+    panelGrid: p.panelGrid,
+    units: props.mode === "stencil" ? undefined : o?.bbox.units ?? null,
+    arcs: o?.parse.arcsLinearized,
+  };
 });
 
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -116,66 +88,71 @@ function pickFile() {
   fileInput.value?.click();
 }
 
-async function handleResult() {
-  if (props.mode === "stencil") {
-    const r = stencil.result.value;
-    if (r) {
-      emit("stencilDetected", {
-        width: r.width,
-        height: r.height,
-        outlinePoints: r.outlinePoints,
-        topPads: r.topPads,
-        bottomPads: r.bottomPads,
-      });
-    }
-  } else {
-    const r = outline.result.value;
-    if (r) {
-      emit("sizeDetected", {
-        width: r.width,
-        height: r.height,
-        filename: r.filename,
-        outlinePoints: r.outlinePoints,
-        holes: r.holes,
-      });
-    }
+/**
+ * 解析结果 → 交给 store。
+ * 拼版文件先弹窗让用户选口径(整版 / 单板),非拼版直接用整版口径。
+ */
+function submit(p: GerberImportPayload) {
+  payload.value = p;
+  if (p.isPanel) {
+    // 拼版文件:先弹窗让用户选口径(默认沿用上次选择)
+    showPanelDialog.value = true;
+    return;
   }
+  emit("gerberLoaded", { ...p, mode: "panel" });
+}
+
+/** 弹窗选择完成:按选中口径应用 */
+function confirmPanelMode(mode: PanelMode) {
+  showPanelDialog.value = false;
+  const p = payload.value;
+  if (p) emit("gerberLoaded", { ...p, mode });
 }
 
 /**
  * 统一入口:按当前模式解析,并把结果同步到另一模式的数据源 ——
  * 治具模式导入 ZIP 时顺带解析锡膏层焊盘(best-effort,无锡膏层静默跳过),
  * 切到钢网模式后无需重复导入即可看到带开孔的钢网;
- * 钢网模式的板框已含在结果里(applyStencilGerber 会写 pcbOutlinePoints),
- * 切回治具模式天然可用。
+ * 钢网模式的板框已含在结果里(会写 pcbOutlinePoints),切回治具模式天然可用。
  */
 async function processFile(file: File) {
   if (props.mode === "stencil") {
     await stencil.processFile(file);
-    await handleResult();
-    return;
-  }
-  await outline.processFile(file);
-  await handleResult();
-  // 治具模式:同一文件再跑一遍锡膏解析,焊盘写入 store(stencilPadsTop/Bottom)
-  try {
-    await stencil.processFile(file);
     const r = stencil.result.value;
     if (r) {
-      emit("stencilDetected", {
-        width: r.width,
-        height: r.height,
-        outlinePoints: r.outlinePoints,
-        topPads: r.topPads,
-        bottomPads: r.bottomPads,
+      submit({
+        filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
+        isPanel: r.isPanel,
+        panelGrid: r.panelGrid,
+        hasPads: true,
+        variants: r.variants,
       });
-    } else {
-      // 纯板框文件(无锡膏层):清掉失败状态,避免污染钢网模式的导入 UI
-      stencil.reset();
     }
+    return;
+  }
+
+  await outline.processFile(file);
+  const o = outline.result.value;
+  if (!o) return;
+
+  // 治具模式:同一文件再跑一遍锡膏解析,拿到焊盘;纯板框文件则静默跳过
+  let pads: { variants: GerberStencilResult["variants"] } | null = null;
+  try {
+    await stencil.processFile(file);
+    const s = stencil.result.value;
+    if (s) pads = { variants: s.variants };
+    else stencil.reset();
   } catch {
     stencil.reset();
   }
+
+  submit({
+    filename: o.filename,
+    isPanel: o.parse.isPanel,
+    panelGrid: o.parse.panelGrid,
+    hasPads: pads !== null,
+    variants: pads?.variants ?? o.variants,
+  });
 }
 
 async function onFileChange(e: Event) {
@@ -254,6 +231,8 @@ onBeforeUnmount(() => {
 function clear() {
   if (props.mode === "stencil") stencil.reset();
   else outline.reset();
+  payload.value = null;
+  configStore.clearPanelScope();
 }
 
 function fmt(n: number): string {
@@ -357,6 +336,19 @@ const outlinePath = computed(() => {
           <span class="info-label">{{ t('gerber.pcbSize') }}</span>
           <span class="info-value">{{ fmt(display.width) }} × {{ fmt(display.height) }} mm</span>
         </div>
+        <div v-if="display.isPanel" class="info-row">
+          <span class="info-label">{{ t('gerber.panel') }}</span>
+          <span class="info-value">
+            {{ display.panelGrid ? t('gerber.panelGrid', display.panelGrid) : t('gerber.panelDetected') }}
+          </span>
+        </div>
+        <div v-if="display.isPanel" class="info-row">
+          <span class="info-label">{{ t('gerber.panelScope') }}</span>
+          <span class="info-value" :title="t('gerber.panelScopeHint')">
+            {{ t(activeMode === 'single' ? 'gerber.scopeSingle' : 'gerber.scopePanel') }}
+            <button class="link-btn" @click="showPanelDialog = true">{{ t('gerber.panelChange') }}</button>
+          </span>
+        </div>
         <div v-if="props.mode === 'stencil'" class="info-row">
           <span class="info-label">{{ t('stencil.padCountShort') }}</span>
           <span class="info-value">
@@ -369,14 +361,14 @@ const outlinePath = computed(() => {
         </div>
         <div v-if="props.mode !== 'stencil'" class="info-row">
           <span class="info-label">{{ t('gerber.units') }}</span>
-          <span class="info-value">{{ display.bbox?.units || t('gerber.unitsUnknown') }}</span>
+          <span class="info-value">{{ display.units || t('gerber.unitsUnknown') }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">{{ t('gerber.vertices') }}</span>
           <span class="info-value">
             {{ display.outlinePoints.length }}
-            <span v-if="display.parse && display.parse.arcsLinearized > 0" class="info-sub">
-              ({{ t('gerber.arcs', { n: display.parse.arcsLinearized }) }})
+            <span v-if="display.arcs && display.arcs > 0" class="info-sub">
+              ({{ t('gerber.arcs', { n: display.arcs }) }})
             </span>
           </span>
         </div>
@@ -398,6 +390,42 @@ const outlinePath = computed(() => {
 
       <button class="reimport-btn" @click="clear">{{ t('gerber.reimport') }}</button>
     </div>
+
+    <!-- 拼版口径选择:检测到拼版时先问用户做整版还是单板 -->
+    <el-dialog
+      v-model="showPanelDialog"
+      :title="t('gerber.panelDialogTitle')"
+      width="420"
+      align-center
+      :close-on-click-modal="false"
+    >
+      <p class="dialog-desc">
+        {{ t('gerber.panelDialogDesc', {
+          grid: display?.panelGrid
+            ? t('gerber.panelGrid', display.panelGrid)
+            : t('gerber.panelDetected'),
+        }) }}
+      </p>
+      <div class="scope-options">
+        <button
+          class="scope-option"
+          :class="{ 'is-active': activeMode === 'panel' }"
+          @click="confirmPanelMode('panel')"
+        >
+          <span class="scope-name">{{ t('gerber.scopePanel') }}</span>
+          <span class="scope-hint">{{ t('gerber.scopePanelHint') }}</span>
+        </button>
+        <button
+          class="scope-option"
+          :class="{ 'is-active': activeMode === 'single' }"
+          @click="confirmPanelMode('single')"
+        >
+          <span class="scope-name">{{ t('gerber.scopeSingle') }}</span>
+          <span class="scope-hint">{{ t('gerber.scopeSingleHint') }}</span>
+        </button>
+      </div>
+      <p class="dialog-foot">{{ t('gerber.panelDialogFoot') }}</p>
+    </el-dialog>
   </div>
 </template>
 
@@ -589,5 +617,73 @@ const outlinePath = computed(() => {
 .reimport-btn:hover {
   background: var(--bg-overlay-l1);
   color: var(--text-default);
+}
+
+/* 拼版口径:结果卡片里的切换链接 */
+.link-btn {
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--bg-brand);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* 拼版口径选择弹窗 */
+.dialog-desc {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.scope-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--border-neutral-l1);
+  border-radius: var(--radius-8);
+  background: var(--bg-base-default);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.scope-option:hover {
+  border-color: var(--bg-brand);
+  background: var(--bg-brand-popup);
+}
+
+.scope-option.is-active {
+  border-color: var(--bg-brand);
+  background: var(--bg-brand-popup);
+}
+
+.scope-name {
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-default);
+}
+
+.scope-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.dialog-foot {
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 </style>

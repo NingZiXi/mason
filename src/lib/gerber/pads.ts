@@ -18,6 +18,8 @@
  * 坐标单位 mm;原点与板框一致(由调用方做居中平移)。
  */
 
+import { srSpacingMm } from "./parser";
+
 export interface PadPart {
   /** 极性:D=dark 曝光(开孔) / C=clear 擦除(在该焊盘内恢复材料) */
   polarity: "D" | "C";
@@ -907,23 +909,29 @@ export function extractPads(text: string): ExtractPadsResult {
       if (lsMatch) tfScale = lsMatch[1] ? parseFloat(lsMatch[1]) : 1;
       const lpMatch = rawLine.match(/%LP([DC])\*%/i);
       if (lpMatch) imagePolarity = lpMatch[1].toUpperCase() === "C" ? "C" : "D";
-      // %SR 步进重复
-      const srMatch = rawLine.match(/%SRX(\d+)Y(\d+)X(-?[\d.]+)Y(-?[\d.]+)\*%/i);
-      if (srMatch) {
-        flushSR();
-        const nx = parseInt(srMatch[1], 10);
-        const ny = parseInt(srMatch[2], 10);
-        if (nx > 0 && ny > 0 && (nx > 1 || ny > 1)) {
-          srActive = true;
-          srNx = nx;
-          srNy = ny;
-          srDx = parseFloat(srMatch[3]);
-          srDy = parseFloat(srMatch[4]);
-          srBuffer = [];
+      // %SR 步进重复:嘉立创等用 I/J 表示列/行间距,部分工具用 X/Y
+      const srBody = rawLine.match(/%SR([^%*]*)\*%/i);
+      if (srBody) {
+        const body = srBody[1].trim();
+        const ij = body.match(/^X(\d+)Y(\d+)I(-?[\d.]+)J(-?[\d.]+)$/i);
+        const xy = body.match(/^X(\d+)Y(\d+)X(-?[\d.]+)Y(-?[\d.]+)$/i);
+        const m = ij ?? xy;
+        if (m) {
+          flushSR();
+          const nx = parseInt(m[1], 10);
+          const ny = parseInt(m[2], 10);
+          if (nx > 0 && ny > 0 && (nx > 1 || ny > 1)) {
+            srActive = true;
+            srNx = nx;
+            srNy = ny;
+            srDx = srSpacingMm(m[3], places);
+            srDy = srSpacingMm(m[4], places);
+            srBuffer = [];
+          }
+        } else {
+          // %SR*% 结束块(无参数)
+          flushSR();
         }
-      } else if (/^%SR/i.test(rawLine)) {
-        // %SR 结束块(无参数)
-        flushSR();
       }
       // %ADD 光圈定义(其余 % 命令忽略)
       const ap = parseAperture(rawLine, macros);

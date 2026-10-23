@@ -16,6 +16,7 @@ import { ref, computed } from "vue";
 import JSZip from "jszip";
 import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
 import { extractPads, type PadPolygon } from "../lib/gerber/pads";
+import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
 import { detectOutlineFiles } from "../lib/gerber/outline-detect";
 import { detectPasteFiles, pickPasteBySide } from "../lib/gerber/paste-detect";
 
@@ -39,6 +40,12 @@ export interface GerberStencilResult {
   bottomPasteFile: string | null;
   /** 焊盘数量 */
   padCount: number;
+  /** 是否为拼版(多块 PCB 阵列) */
+  isPanel: boolean;
+  /** 拼版阵列(仅由 %SR 给出时存在) */
+  panelGrid?: { nx: number; ny: number };
+  /** 整版 / 单板两套口径(默认字段为整版) */
+  variants: { panel: PanelVariant; single: PanelVariant };
   /** 因光圈缺失等被跳过的图形数(>0 表示文件存在兼容问题) */
   skipped: number;
 }
@@ -150,7 +157,7 @@ export function useGerberStencil() {
     // 板框:优先用 outline 层,否则用 pads 的 bbox 生成矩形
     let outline: GerberOutline;
     if (outlineText) {
-      outline = extractOutline(outlineText);
+      outline = extractOutline(outlineText, { panel: true });
       if (outline.points.length < 3) {
         // 板框解析失败,回退到 pads bbox
         outline = bboxToOutline(anyPads);
@@ -159,44 +166,37 @@ export function useGerberStencil() {
       outline = bboxToOutline(anyPads);
     }
 
-    // 统一居中:以板框 bbox 中心为原点
-    const cx = (outline.bbox.minX + outline.bbox.maxX) / 2;
-    const cy = (outline.bbox.minY + outline.bbox.maxY) / 2;
+    // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同
+    const singleOutline =
+      outline.isPanel && outlineText
+        ? extractOutline(outlineText, { panel: false })
+        : outline;
 
-    const centeredOutline = outline.points.map(
-      ([x, y]): [number, number] => [x - cx, y - cy]
-    );
-    const centeredHoles = outline.holes.map((h) =>
-      h.map(([x, y]): [number, number] => [x - cx, y - cy])
-    );
-    const centerPads = (pads: PadPolygon[]): PadPolygon[] =>
-      pads.map((p) => ({
-        ...p,
-        cx: p.cx - cx,
-        cy: p.cy - cy,
-        parts: p.parts.map((pt) => ({
-          ...pt,
-          points: pt.points.map(([x, y]): [number, number] => [x - cx, y - cy]),
-          holes: pt.holes?.map((h) =>
-            h.map(([x, y]): [number, number] => [x - cx, y - cy])
-          ),
-        })),
-      }));
-    const centeredTop = topResult ? centerPads(topResult.pads) : [];
-    const centeredBottom = bottomResult ? centerPads(bottomResult.pads) : [];
+    const variants = {
+      panel: makePanelVariant(outline, topResult?.pads ?? [], bottomResult?.pads ?? []),
+      single: makePanelVariant(
+        singleOutline,
+        topResult?.pads ?? [],
+        bottomResult?.pads ?? []
+      ),
+    };
+    const applied = variants.panel;
 
     result.value = {
-      outlinePoints: centeredOutline,
-      outlineHoles: centeredHoles,
-      topPads: centeredTop,
-      bottomPads: centeredBottom,
-      width: outline.bbox.maxX - outline.bbox.minX,
-      height: outline.bbox.maxY - outline.bbox.minY,
-      bboxCenter: { x: cx, y: cy },
+      outlinePoints: applied.outlinePoints,
+      outlineHoles: applied.outlineHoles,
+      topPads: applied.topPads ?? [],
+      bottomPads: applied.bottomPads ?? [],
+      width: applied.width,
+      height: applied.height,
+      bboxCenter: applied.center,
       outlineFile,
       topPasteFile,
       bottomPasteFile,
-      padCount: centeredTop.length + centeredBottom.length,
+      padCount: (applied.topPads?.length ?? 0) + (applied.bottomPads?.length ?? 0),
+      isPanel: outline.isPanel,
+      panelGrid: outline.panelGrid,
+      variants,
       skipped:
         (topResult?.skippedFlashes ?? 0) + (topResult?.skippedLines ?? 0) +
         (bottomResult?.skippedFlashes ?? 0) + (bottomResult?.skippedLines ?? 0),
@@ -228,6 +228,7 @@ export function useGerberStencil() {
       units: "mm",
       arcsLinearized: 0,
       totalCommands: 0,
+      isPanel: false,
     };
   }
 

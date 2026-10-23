@@ -12,6 +12,7 @@
 import { ref, computed } from "vue";
 import JSZip from "jszip";
 import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
+import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
 import { detectOutlineFiles, type OutlineCandidate } from "../lib/gerber/outline-detect";
 
 export interface GerberOutlineResult {
@@ -26,6 +27,8 @@ export interface GerberOutlineResult {
   /** 多边形原始包围盒中心(用于 debug) */
   bboxCenter: { x: number; y: number };
   parse: GerberOutline;
+  /** 整版 / 单板两套口径(默认字段为整版) */
+  variants: { panel: PanelVariant; single: PanelVariant };
 }
 
 export function useGerberOutline() {
@@ -92,7 +95,7 @@ export function useGerberOutline() {
   }
 
   function finalize(filename: string, gerberText: string): void {
-    const outline = extractOutline(gerberText);
+    const outline = extractOutline(gerberText, { panel: true });
 
     if (outline.points.length < 3) {
       throw new Error(
@@ -100,25 +103,27 @@ export function useGerberOutline() {
       );
     }
 
-    // 把多边形点平移到以 bbox 中心为原点(方便 SCAD 居中放置);内孔同坐标系一起平移
-    const cx = (outline.bbox.minX + outline.bbox.maxX) / 2;
-    const cy = (outline.bbox.minY + outline.bbox.maxY) / 2;
-    const centeredPoints = outline.points.map(
-      ([x, y]): [number, number] => [x - cx, y - cy]
-    );
-    const centeredHoles = outline.holes.map((h) =>
-      h.map(([x, y]): [number, number] => [x - cx, y - cy])
-    );
+    // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同
+    const singleOutline = outline.isPanel
+      ? extractOutline(gerberText, { panel: false })
+      : outline;
+
+    const variants = {
+      panel: makePanelVariant(outline),
+      single: makePanelVariant(singleOutline),
+    };
+    const applied = variants.panel;
 
     result.value = {
       bbox: outline.bbox,
       filename,
-      width: outline.bbox.maxX - outline.bbox.minX,
-      height: outline.bbox.maxY - outline.bbox.minY,
-      outlinePoints: centeredPoints,
-      holes: centeredHoles,
-      bboxCenter: { x: cx, y: cy },
+      width: applied.width,
+      height: applied.height,
+      outlinePoints: applied.outlinePoints,
+      holes: applied.outlineHoles,
+      bboxCenter: applied.center,
       parse: outline,
+      variants,
     };
   }
 

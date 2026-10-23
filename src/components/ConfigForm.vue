@@ -2,6 +2,7 @@
 import { computed, onBeforeMount, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore, windowHalf, effectivePlatterMargin, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
+import PanelScopePicker from "./PanelScopePicker.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -85,6 +86,9 @@ function applyPreset(id: string) {
 
 <template>
   <div class="config-form">
+    <!-- 拼版口径(仅导入拼版 Gerber 时出现):放在最上面,先定口径再调参数 -->
+    <PanelScopePicker />
+
     <!-- 参数校验:非阻塞警告 -->
     <div v-if="warnings.length > 0" class="warnings-card">
       <div class="warnings-head">

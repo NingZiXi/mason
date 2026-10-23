@@ -30,6 +30,14 @@ export interface LayerTransform {
   scale: number;
 }
 
+/** %SR 步进重复块:块内图形按 nx × ny 阵列复制,偏移量已换算为原始坐标单位 */
+export interface StepRepeat {
+  nx: number;
+  ny: number;
+  dxRaw: number;
+  dyRaw: number;
+}
+
 /** 解析出的单个 Gerber 命令 */
 export interface ParsedCommand {
   type: string;
@@ -44,6 +52,8 @@ export interface ParsedCommand {
   j?: number;
   /** 本命令生效时的图层变换(恒等时省略) */
   tf?: LayerTransform;
+  /** 所属 %SR 块(块外命令省略);同块命令共享同一对象引用 */
+  sr?: StepRepeat;
   raw?: string;
   [key: string]: unknown;
 }
@@ -52,12 +62,27 @@ export interface ParseResult {
   format: GerberFormat;
   units: "mm" | "in" | null;
   commands: ParsedCommand[];
+  /** 文件级拼版阵列(多个 %SR 块时取首个 >1 的块) */
+  srGrid?: { nx: number; ny: number };
 }
 
 const TWO_PI = Math.PI * 2;
 const ARC_PRECISION_MM = 0.1;
 const ARC_MIN_SEGMENTS = 8;
 const ARC_MAX_SEGMENTS = 200;
+
+/**
+ * %SR 的列/行间距换算为 mm。
+ * Gerber 规范要求按 FS 编码写整数(如 places=[4,5] 时 5999492 = 59.99492mm),
+ * 但嘉立创/立创EDA 直接写十进制 mm(I59.99492)。无小数点时先按 FS 解释,
+ * 结果不落在合理间距区间则退回 mm 解释。
+ */
+export function srSpacingMm(raw: string, places: [number, number]): number {
+  const v = parseFloat(raw);
+  if (raw.includes(".")) return v;
+  const byFs = v / Math.pow(10, places[1]);
+  return byFs >= 0.5 && byFs <= 3000 ? byFs : v;
+}
 
 /** 有向面积(shoelace,顺时针为负) */
 function signedArea(pts: Array<[number, number]>): number {
@@ -152,6 +177,10 @@ export function parseGerber(text: string): ParseResult {
       ? { mx: tfMx, my: tfMy, rot: tfRot, scale: tfScale }
       : undefined;
 
+  // %SR 步进重复状态;srInfo 对象在块内共享,块结束置空
+  let srInfo: StepRepeat | null = null;
+  let srGrid: { nx: number; ny: number } | undefined;
+
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith("G04")) continue;
@@ -183,6 +212,38 @@ export function parseGerber(text: string): ParseResult {
       tfScale = lsMatch[1] ? parseFloat(lsMatch[1]) : 1;
     }
 
+    // %SR 步进重复:块内图形阵列复制;参数行本身不含坐标,处理完直接跳过
+    if (line.startsWith("%")) {
+      const srMatch = rawLine.match(/%SR([^%*]*)\*%/i);
+      if (srMatch) {
+        const body = srMatch[1].trim();
+        // 嘉立创/常见写法用 I/J 表示列/行间距,部分工具用 X/Y
+        const ij = body.match(/^X(\d+)Y(\d+)I(-?[\d.]+)J(-?[\d.]+)$/i);
+        const xy = body.match(/^X(\d+)Y(\d+)X(-?[\d.]+)Y(-?[\d.]+)$/i);
+        const m = ij ?? xy;
+        if (m) {
+          const nx = parseInt(m[1], 10);
+          const ny = parseInt(m[2], 10);
+          if (nx > 0 && ny > 0 && (nx > 1 || ny > 1)) {
+            const scale = Math.pow(10, format.places[1]);
+            srInfo = {
+              nx,
+              ny,
+              dxRaw: srSpacingMm(m[3], format.places) * scale,
+              dyRaw: srSpacingMm(m[4], format.places) * scale,
+            };
+            srGrid ??= { nx, ny };
+          } else {
+            srInfo = null;
+          }
+        } else {
+          // %SR*% 结束块(无参数);只给计数不给间距时无法阵列,按单份处理
+          srInfo = null;
+        }
+      }
+      continue;
+    }
+
     // 更新弧线模式(G02=CW, G03=CCW, G01=直线)
     // 同一行可能既有 G03 又有 D01,不能 continue!
     // 注意:不能用 \b 边界(G 后跟数字不是边界),改为数字前后断言
@@ -211,6 +272,7 @@ export function parseGerber(text: string): ParseResult {
         x,
         y,
         tf: tfSnapshot(),
+        sr: srInfo ?? undefined,
         raw: line,
       });
     } else if (/D03\*/.test(line)) {
@@ -231,6 +293,7 @@ export function parseGerber(text: string): ParseResult {
         i: hasArcOffset ? i : undefined,
         j: hasArcOffset ? j : undefined,
         tf: tfSnapshot(),
+        sr: srInfo ?? undefined,
         raw: line,
       });
     }
@@ -240,14 +303,51 @@ export function parseGerber(text: string): ParseResult {
     if (yMatch) prevY = y;
   }
 
-  return { format, units, commands };
+  return { format, units, commands: expandStepRepeat(commands), srGrid };
+}
+
+/** 把 %SR 块内的命令按 nx × ny 阵列展开(块外命令原样保留) */
+function expandStepRepeat(commands: ParsedCommand[]): ParsedCommand[] {
+  const out: ParsedCommand[] = [];
+  let i = 0;
+  while (i < commands.length) {
+    const sr = commands[i].sr;
+    if (!sr) {
+      out.push(commands[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < commands.length && commands[j].sr === sr) j++;
+    const block = commands.slice(i, j);
+    for (let iy = 0; iy < sr.ny; iy++) {
+      for (let ix = 0; ix < sr.nx; ix++) {
+        const dx = ix * sr.dxRaw;
+        const dy = iy * sr.dyRaw;
+        for (const cmd of block) {
+          out.push({ ...cmd, x: (cmd.x as number) + dx, y: (cmd.y as number) + dy });
+        }
+      }
+    }
+    i = j;
+  }
+  return out;
 }
 
 /**
  * 从 Gerber 文本提取板框多边形轮廓(已闭合,弧线已线性化)
+ *
+ * @param opts.panel 拼版文件的外框口径:
+ *   - true(默认)取整版外接矩形(含工艺边 / V-CUT 框)
+ *   - false 只取其中一块单板(面积最大的闭合轮廓)
+ *   非拼版文件两种口径结果相同。
  */
-export function extractOutline(text: string): GerberOutline {
-  const { format, units, commands } = parseGerber(text);
+export function extractOutline(
+  text: string,
+  opts?: { panel?: boolean }
+): GerberOutline {
+  const parsed = parseGerber(text);
+  const { format, units, commands } = parsed;
   const inToMm = 25.4;
   let totalCommands = commands.length;
   let arcs = 0;
@@ -385,26 +485,120 @@ export function extractOutline(text: string): GerberOutline {
   // 过滤退化轮廓(闭合后 <4 个点 = 不足 3 个不同顶点)
   const valid = allContours.filter((c) => c.length >= 4);
 
-  // 外框 = 面积最大的轮廓(area 初值 -1:自交蝴蝶结等零面积轮廓也能被选中,保持旧行为);
-  // 其余落在外框内部的 = 内孔;外部独立轮廓(拼板)忽略
-  let outer: Array<[number, number]> | null = null;
-  let outerArea = -1;
-  let totalPoints = 0;
-  for (const c of valid) {
-    totalPoints += c.length;
-    const a = Math.abs(signedArea(c));
-    if (a > outerArea) {
-      outerArea = a;
-      outer = c;
+  // 拼版判定:
+  // 1) %SR 阵列复制了多份图形(最可靠)
+  // 2) 多块面积相当且包围盒互不重叠的闭合轮廓(未用 SR 的拼版)
+  const srCols = parsed.srGrid?.nx ?? 1;
+  const srRows = parsed.srGrid?.ny ?? 1;
+  const areaOf = (c: Array<[number, number]>): number => Math.abs(signedArea(c));
+  const contourBbox = (c: Array<[number, number]>) => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of c) {
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+    return { x0, y0, x1, y1 };
+  };
+  let disjointPanel = false;
+  if (closedContours.length >= 2) {
+    const ranked = closedContours
+      .map((c) => ({ c, a: areaOf(c) }))
+      .sort((p, q) => q.a - p.a);
+    if (ranked[1].a > 1 && ranked[1].a >= ranked[0].a * 0.5) {
+      const b0 = contourBbox(ranked[0].c);
+      const b1 = contourBbox(ranked[1].c);
+      const overlap =
+        b0.x0 <= b1.x1 && b1.x0 <= b0.x1 && b0.y0 <= b1.y1 && b1.y0 <= b0.y1;
+      disjointPanel = !overlap;
     }
   }
+  const isPanel = srCols * srRows > 1 || disjointPanel;
 
+  // 拼版:外框取全部图形(含工艺边 / V-CUT 框)的整体包围盒,内孔不适用
+  let outer: Array<[number, number]> | null = null;
+  let totalPoints = 0;
   const holes: Array<Array<[number, number]>> = [];
-  if (outer) {
-    for (const c of valid) {
-      if (c === outer) continue;
-      const [px, py] = c[0];
-      if (pointInPoly(px, py, outer)) holes.push(c);
+
+  if (isPanel && opts?.panel !== false) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const add = (x: number, y: number) => {
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    };
+    let prevMmX = 0;
+    let prevMmY = 0;
+    for (const cmd of commands) {
+      if (cmd.type !== "op") continue;
+      const x = toMm(cmd.x as number);
+      const y = toMm(cmd.y as number);
+      const [tx, ty] = applyTf(x, y, cmd.tf as never);
+      add(tx, ty);
+      if (cmd.op === "interpolate" && cmd.isArc) {
+        const i = cmd.i !== undefined ? toMm(cmd.i as number) : 0;
+        const j = cmd.j !== undefined ? toMm(cmd.j as number) : 0;
+        if (Math.abs(i) > 1e-9 || Math.abs(j) > 1e-9) {
+          const [tcx, tcy] = applyTf(prevMmX + i, prevMmY + j, cmd.tf as never);
+          const r = Math.hypot(i, j) * Math.abs((cmd.tf as { scale?: number })?.scale ?? 1);
+          add(tcx - r, tcy - r);
+          add(tcx + r, tcy + r);
+        }
+      }
+      prevMmX = x;
+      prevMmY = y;
+    }
+    for (const c of valid) totalPoints += c.length;
+    if (isFinite(x0)) {
+      outer = [
+        [x0, y0],
+        [x1, y0],
+        [x1, y1],
+        [x0, y1],
+        [x0, y0],
+      ];
+    }
+  } else {
+    // 单板:外框 = 面积最大的轮廓(area 初值 -1:自交蝴蝶结等零面积轮廓也能被选中,保持旧行为);
+    // 其余落在外框内部的 = 内孔;外部独立小轮廓(杂线)忽略
+    //
+    // 拼版取单板时不能直接挑最大轮廓 —— 整版外框(若为闭合轮廓)通常比单块板大得多。
+    // 有 %SR 阵列时先按单个阵列单元的尺寸筛掉整版外框,再在剩余轮廓里取最大。
+    let candidates = valid;
+    if (isPanel && srCols * srRows > 1 && valid.length > 0) {
+      const panelBox = contourBbox(valid[0]);
+      for (const c of valid) {
+        const b = contourBbox(c);
+        panelBox.x0 = Math.min(panelBox.x0, b.x0);
+        panelBox.y0 = Math.min(panelBox.y0, b.y0);
+        panelBox.x1 = Math.max(panelBox.x1, b.x1);
+        panelBox.y1 = Math.max(panelBox.y1, b.y1);
+      }
+      const cellW = ((panelBox.x1 - panelBox.x0) / srCols) * 1.2;
+      const cellH = ((panelBox.y1 - panelBox.y0) / srRows) * 1.2;
+      const fit = valid.filter((c) => {
+        const b = contourBbox(c);
+        return b.x1 - b.x0 <= cellW && b.y1 - b.y0 <= cellH;
+      });
+      if (fit.length > 0) candidates = fit;
+    }
+    let outerArea = -1;
+    for (const c of candidates) {
+      totalPoints += c.length;
+      const a = areaOf(c);
+      if (a > outerArea) {
+        outerArea = a;
+        outer = c;
+      }
+    }
+    if (outer) {
+      for (const c of valid) {
+        if (c === outer) continue;
+        const [px, py] = c[0];
+        if (pointInPoly(px, py, outer)) holes.push(c);
+      }
     }
   }
 
@@ -431,6 +625,8 @@ export function extractOutline(text: string): GerberOutline {
     units,
     arcsLinearized: arcs,
     totalCommands,
+    isPanel,
+    panelGrid: srCols * srRows > 1 ? { nx: srCols, ny: srRows } : undefined,
   };
 }
 
@@ -462,4 +658,8 @@ export interface GerberOutline {
   arcsLinearized: number;
   /** Gerber 命令总数(便于诊断) */
   totalCommands: number;
+  /** 是否为拼版(多块 PCB 阵列) */
+  isPanel: boolean;
+  /** 拼版阵列(仅 isPanel 且由 %SR 给出时存在) */
+  panelGrid?: { nx: number; ny: number };
 }

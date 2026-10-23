@@ -8,6 +8,7 @@ import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { PadPolygon } from "../lib/gerber/pads";
+import type { PanelMode, PanelVariant } from "../lib/gerber/panel";
 
 export type AppMode = "jig" | "stencil";
 
@@ -125,6 +126,14 @@ export interface AppConfig {
   pcbOutlinePoints: Array<[number, number]>;
   /** 板框内孔轮廓(同 pcbOutlinePoints 坐标系;板内开槽的 PCB) */
   pcbOutlineHoles: Array<Array<[number, number]>>;
+
+  // 拼版口径
+  /** 建模口径:panel = 整版(含工艺边 / V-CUT 框) / single = 只做一块单板 */
+  panelMode: PanelMode;
+  /** 导入的 Gerber 是否识别为拼版(决定是否展示口径选择) */
+  panelAvailable: boolean;
+  /** 拼版阵列(仅由 %SR 声明时存在,展示用) */
+  panelGrid: { nx: number; ny: number } | null;
 }
 
 const DEFAULT: AppConfig = {
@@ -181,6 +190,9 @@ const DEFAULT: AppConfig = {
   gerberFilename: null,
   pcbOutlinePoints: [],
   pcbOutlineHoles: [],
+  panelMode: "panel",
+  panelAvailable: false,
+  panelGrid: null,
 };
 
 /**
@@ -579,53 +591,76 @@ export const useConfigStore = defineStore("config", () => {
   });
 
   // Actions
-  function applyGerberSize(
-    width: number,
-    height: number,
-    filename: string,
-    outlinePoints: Array<[number, number]> = [],
-    holes: Array<Array<[number, number]>> = []
-  ) {
+
+  /** 缓存导入文件的整版 / 单板两套口径,供 panelMode 切换时复用(不落盘) */
+  const gerberVariants = ref<{
+    panel: PanelVariant;
+    single: PanelVariant;
+    hasPads: boolean;
+  } | null>(null);
+
+  /** 把某个口径的几何写入 config(尺寸 / 板框 / 焊盘 + 钢网尺寸联动) */
+  function applyVariant(mode: PanelMode) {
+    const cached = gerberVariants.value;
+    if (!cached) return;
+    const v = cached[mode];
     const c = config.value;
-    c.pcbSizeX = width;
-    c.pcbSizeY = height;
-    c.gerberFilename = filename;
-    c.pcbOutlinePoints = outlinePoints;
-    c.pcbOutlineHoles = holes;
-    // 导入新 Gerber:滑块自动落到 60% 位置(中间靠右),台阶有合理默认值
-    //   滑动条本身仍可调到偏移 0(lip = lipMax,台阶 = 0),由用户主动选择
-    //   stencilSize 下界 = ceil((pcbMax+20)/10)*10(与 watch 同式,只放大不缩小)
-    const pcbMax = Math.max(width, height);
+
+    c.pcbSizeX = Math.round(v.width * 100) / 100;
+    c.pcbSizeY = Math.round(v.height * 100) / 100;
+    c.pcbOutlinePoints = v.outlinePoints;
+    c.pcbOutlineHoles = v.outlineHoles;
+    if (cached.hasPads) {
+      c.stencilPadsTop = v.topPads ?? [];
+      c.stencilPadsBottom = v.bottomPads ?? [];
+    }
+
+    // 钢网尺寸:口径切换会改变板子长边,只放大不缩小
+    //   stencilSize 下界 = ceil((pcbMax+20)/10)*10(与 watch 同式)
+    //   唇宽同步回到 60% 默认位(板子尺寸变了,旧唇宽不再对应同一台阶)
+    const pcbMax = Math.max(c.pcbSizeX, c.pcbSizeY);
     const stencilFloor = Math.ceil((pcbMax + 20) / 10) * 10;
     c.stencilSize = Math.max(c.stencilSize, stencilFloor);
     const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
-    const lip = 0.6 * lipMax;
-    c.stencilLip = Math.round(lip * 10) / 10;
+    c.stencilLip = Math.round(0.6 * lipMax * 10) / 10;
     c.platterWidth = c.stencilSize - 2 * c.stencilLip;
+
+    c.panelMode = mode;
   }
 
-  /** 钢网模式:导入板框 + 双面锡膏层结果 */
-  function applyStencilGerber(
-    width: number,
-    height: number,
-    outlinePoints: Array<[number, number]>,
-    topPads: PadPolygon[],
-    bottomPads: PadPolygon[]
-  ) {
+  /** 导入 Gerber:写入两套口径并按 mode 应用(hasPads = 是否带锡膏层结果) */
+  function applyGerberImport(payload: {
+    filename: string;
+    isPanel: boolean;
+    panelGrid?: { nx: number; ny: number };
+    hasPads: boolean;
+    mode: PanelMode;
+    variants: { panel: PanelVariant; single: PanelVariant };
+  }) {
+    gerberVariants.value = {
+      panel: payload.variants.panel,
+      single: payload.variants.single,
+      hasPads: payload.hasPads,
+    };
     const c = config.value;
-    c.pcbSizeX = width;
-    c.pcbSizeY = height;
-    c.pcbOutlinePoints = outlinePoints;
-    c.stencilPadsTop = topPads;
-    c.stencilPadsBottom = bottomPads;
-    // 导入新 Gerber:滑块自动落到 60% 位置(同 applyGerberSize)
-    const pcbMax = Math.max(width, height);
-    const stencilFloor = Math.ceil((pcbMax + 20) / 10) * 10;
-    c.stencilSize = Math.max(c.stencilSize, stencilFloor);
-    const lipMax = Math.max(0, (c.stencilSize - pcbMax) / 2);
-    const lip = 0.6 * lipMax;
-    c.stencilLip = Math.round(lip * 10) / 10;
-    c.platterWidth = c.stencilSize - 2 * c.stencilLip;
+    c.gerberFilename = payload.filename;
+    c.panelAvailable = payload.isPanel;
+    c.panelGrid = payload.panelGrid ?? null;
+    applyVariant(payload.mode);
+  }
+
+  /** 切换拼版口径(设置面板 / 导入弹窗共用) */
+  function setPanelMode(mode: PanelMode) {
+    if (!config.value.panelAvailable) return;
+    applyVariant(mode);
+  }
+
+  /** 丢弃拼版状态:切换工程 / 清除导入后不再持有该文件的两种口径 */
+  function clearPanelScope() {
+    gerberVariants.value = null;
+    config.value.panelAvailable = false;
+    config.value.panelGrid = null;
+    config.value.panelMode = "panel";
   }
 
   function setMode(mode: AppMode) {
@@ -719,8 +754,9 @@ export const useConfigStore = defineStore("config", () => {
     pythonError,
     engineLoading,
     bundledEngine,
-    applyGerberSize,
-    applyStencilGerber,
+    applyGerberImport,
+    setPanelMode,
+    clearPanelScope,
     setMode,
     applyPreset,
     reset,

@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
+import PanelScopePicker from "./PanelScopePicker.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -47,6 +48,9 @@ const showAdvanced = ref(false);
   <div class="stencil-form">
     <!-- 钢网参数 -->
     <div class="section-label">{{ t('stencil.params') }}</div>
+
+    <!-- 拼版口径(仅导入拼版 Gerber 时出现) -->
+    <PanelScopePicker />
 
     <!-- PCB 板厚(基础参数,影响卡槽深度与总厚度) -->
     <div class="field">

@@ -9,13 +9,13 @@ import { useConfigStore } from "./stores/config";
 import { useUiStore } from "./stores/ui";
 import ConfigForm from "./components/ConfigForm.vue";
 import ModelPreview from "./components/ModelPreview.vue";
-import GerberImport from "./components/GerberImport.vue";
+import GerberImport, { type GerberImportPayload } from "./components/GerberImport.vue";
 import ScrewDiagram from "./components/ScrewDiagram.vue";
 import StencilForm from "./components/StencilForm.vue";
 import PythonSetup from "./components/PythonSetup.vue";
 import ProjectMenu from "./components/ProjectMenu.vue";
 import SettingsMenu from "./components/SettingsMenu.vue";
-import type { PadPolygon } from "./lib/gerber/pads";
+import type { PanelMode } from "./lib/gerber/panel";
 
 const configStore = useConfigStore();
 const ui = useUiStore();
@@ -286,36 +286,10 @@ function slotStyle(id: string): Record<string, string> {
   return { height: cardHeights.value[id] + "px" };
 }
 
-function onSizeDetected(payload: {
-  width: number;
-  height: number;
-  filename: string;
-  outlinePoints: Array<[number, number]>;
-  holes: Array<Array<[number, number]>>;
-}) {
-  configStore.applyGerberSize(
-    payload.width,
-    payload.height,
-    payload.filename,
-    payload.outlinePoints,
-    payload.holes
-  );
-}
-
-function onStencilDetected(payload: {
-  width: number;
-  height: number;
-  outlinePoints: Array<[number, number]>;
-  topPads: PadPolygon[];
-  bottomPads: PadPolygon[];
-}) {
-  configStore.applyStencilGerber(
-    payload.width,
-    payload.height,
-    payload.outlinePoints,
-    payload.topPads,
-    payload.bottomPads
-  );
+function onGerberLoaded(
+  payload: GerberImportPayload & { mode: PanelMode }
+) {
+  configStore.applyGerberImport(payload);
 }
 
 onMounted(() => {
@@ -475,7 +449,7 @@ onBeforeUnmount(() => {
             </svg>
           </div>
           <div v-show="!collapsed.gerber" class="slot-body">
-            <GerberImport :mode="appMode" @size-detected="onSizeDetected" @stencil-detected="onStencilDetected" />
+            <GerberImport :mode="appMode" @gerber-loaded="onGerberLoaded" />
           </div>
           <div
             v-if="!collapsed.gerber"
