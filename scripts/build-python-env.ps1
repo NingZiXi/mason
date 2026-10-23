@@ -49,7 +49,7 @@ Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getpip -
 if ($LASTEXITCODE -ne 0) { throw "get-pip 失败(exit $LASTEXITCODE)" }
 
 Write-Host "==> 安装 CAD 依赖 build123d / shapely / numpy(镜像 $PypiMirror,约 200MB)..."
-& $py -m pip install --no-warn-script-location --no-cache-dir -i $PypiMirror build123d shapely numpy
+& $py -m pip install --no-warn-script-location --no-cache-dir -i $PypiMirror build123d==0.11.1 shapely numpy
 if ($LASTEXITCODE -ne 0) { throw "依赖安装失败(exit $LASTEXITCODE)" }
 
 Write-Host "==> 清理缓存与字节码..."
