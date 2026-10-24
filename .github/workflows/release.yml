@@ -123,10 +123,26 @@ jobs:
         with:
           path: artifacts
 
-      - name: Flatten artifacts
+      - name: Flatten artifacts (stable asset names)
         run: |
+          set -euo pipefail
           mkdir -p release
-          find artifacts -type f -exec cp {} release/ \;
+          pick() { find artifacts -type f -iname "$1" | head -n 1; }
+          # 资产名不带版本号:站点用 releases/latest/download/<name> 作为永久直链,
+          # 无需调用 GitHub API(限流/网络不通时也能直接下载)
+          msi=$(pick "*.msi")
+          if [ -n "$msi" ]; then cp "$msi" release/Mason-windows-x64.msi; fi
+          exe=$(pick "*-setup.exe")
+          if [ -n "$exe" ]; then cp "$exe" release/Mason-windows-x64-setup.exe; fi
+          dmg=$(pick "*.dmg")
+          if [ -n "$dmg" ]; then cp "$dmg" release/Mason-macos-aarch64.dmg; fi
+          appzip=$(pick "Mason.zip")
+          if [ -n "$appzip" ]; then cp "$appzip" release/Mason-macos-aarch64.zip; fi
+          deb=$(pick "*.deb")
+          if [ -n "$deb" ]; then cp "$deb" release/Mason-linux-amd64.deb; fi
+          rpm=$(pick "*.rpm")
+          if [ -n "$rpm" ]; then cp "$rpm" release/Mason-linux-x86_64.rpm; fi
+          ls -lh release
 
       - name: Resolve curated release notes
         id: notes
