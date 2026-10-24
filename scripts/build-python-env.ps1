@@ -52,6 +52,15 @@ Write-Host "==> 安装 CAD 依赖 build123d / shapely / numpy(镜像 $PypiMirror
 & $py -m pip install --no-warn-script-location --no-cache-dir -i $PypiMirror build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy
 if ($LASTEXITCODE -ne 0) { throw "依赖安装失败(exit $LASTEXITCODE)" }
 
+Write-Host "==> 裁剪未使用的渲染贴图..."
+# threejs_materials 内含 86MB PNG 法线贴图,仅 three.js 材质渲染使用;
+# 本项目只做几何建模与 STL/STEP 导出,已实测导入、三件套、钢网、server 全部正常
+$texDir = Join-Path $dest "Lib\site-packages\threejs_materials"
+if (Test-Path $texDir) {
+  Get-ChildItem $texDir -Recurse -Filter "*.png" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+  Write-Host "    已移除 threejs_materials/*.png"
+}
+
 Write-Host "==> 清理缓存与字节码..."
 Get-ChildItem $dest -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 Get-ChildItem $dest -Recurse -Filter "*.pyc" -File -ErrorAction SilentlyContinue | Remove-Item -Force

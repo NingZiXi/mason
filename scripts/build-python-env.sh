@@ -59,6 +59,11 @@ PY="$DEST/bin/python3"
 echo "==> 安装 CAD 依赖 build123d / shapely / numpy..."
 "$PY" -m pip install --no-warn-script-location --no-cache-dir -i "$PYPI_MIRROR" build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy
 
+echo "==> 裁剪未使用的渲染贴图..."
+# threejs_materials 内含 86MB PNG 法线贴图,仅 three.js 材质渲染使用;
+# 本项目只做几何建模与 STL/STEP 导出
+find "$DEST"/lib/python*/site-packages/threejs_materials -name "*.png" -delete 2>/dev/null || true
+
 echo "==> 清理缓存与字节码..."
 find "$DEST" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$DEST" -type f -name "*.pyc" -delete 2>/dev/null || true
