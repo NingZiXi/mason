@@ -66,6 +66,10 @@ struct Server {
     stdin: ChildStdin,
     pending: Pending,
     next_id: u32,
+    /// 引擎可执行文件路径(出错时一并展示,便于判断用的是内置还是系统 Python)
+    python: String,
+    /// Python stderr 日志(进程崩溃时读尾部 traceback)
+    log_path: PathBuf,
 }
 
 /// 全局唯一的常驻 server;互斥锁同时把请求串行化(单进程 Python 顺序执行)
@@ -113,9 +117,14 @@ async fn spawn_server(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| AppError::Io(format!("启动 Python 服务失败: {}", e)))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        AppError::Io(format!(
+            "启动 Python 服务失败: {}\n引擎: {}\n日志: {}",
+            e,
+            python_path,
+            log_path.display()
+        ))
+    })?;
 
     let stdin = child
         .stdin
@@ -158,6 +167,8 @@ async fn spawn_server(
         stdin,
         pending,
         next_id: 0,
+        python: python_path.to_string(),
+        log_path: log_path.to_path_buf(),
     })
 }
 
@@ -195,12 +206,41 @@ impl Server {
 
         match timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), rx).await {
             Ok(Ok(resp)) => Ok(resp),
-            Ok(Err(_)) => Err(AppError::RenderFailed(
-                "Python CAD 引擎已退出(进程崩溃或依赖缺失,请确认已 pip install build123d shapely numpy)".into(),
-            )),
+            Ok(Err(_)) => {
+                // 进程已退出:把 stderr 日志尾部和引擎路径透出来,
+                // 否则用户只能看到"引擎已退出",无法判断是杀软拦截还是缺 DLL
+                let tail = log_tail(&self.log_path, 10);
+                let mut msg = format!(
+                    "Python CAD 引擎已退出(进程崩溃或依赖缺失)\n引擎: {}\n日志: {}",
+                    self.python,
+                    self.log_path.display()
+                );
+                if !tail.is_empty() {
+                    msg.push_str("\n---- 引擎最后输出 ----\n");
+                    msg.push_str(&tail);
+                }
+                Err(AppError::RenderFailed(msg))
+            }
             Err(_) => Err(AppError::Timeout("Python 生成超时(120s)".into())),
         }
     }
+}
+
+/// 读取诊断日志尾部(空行剔除,限制条数与总长度,避免撑爆 UI 提示)
+fn log_tail(path: &std::path::Path, max_lines: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let tail = lines[lines.len().saturating_sub(max_lines)..].join("\n");
+    if tail.chars().count() > 1200 {
+        let cut: String = tail.chars().skip(tail.chars().count() - 1200).collect();
+        return format!("…{}", cut);
+    }
+    tail
 }
 
 // ---------------------------------------------------------------------------

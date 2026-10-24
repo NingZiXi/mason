@@ -1077,6 +1077,18 @@ html.dark .empty-card {
   background: var(--scrim);
 }
 
+/* 崩溃诊断是多行文本(引擎路径 + 日志尾部),需保留换行并可滚动 */
+.overlay.error span {
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: left;
+  line-height: 1.55;
+  max-width: 86%;
+  max-height: 80%;
+  overflow: auto;
+  padding: 0 12px;
+}
+
 .spin-icon {
   color: var(--bg-brand);
   animation: spin 1s linear infinite;

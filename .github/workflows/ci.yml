@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: 安装几何依赖
-        run: pip install build123d==0.11.1 shapely numpy pytest
+        run: pip install build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy pytest
       - name: 运行几何验证测试
         run: python python/tests/run_all.py
       - name: 运行几何回归测试(pytest)

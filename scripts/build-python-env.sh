@@ -57,7 +57,7 @@ rm -f /tmp/mason-python-standalone.tar.gz
 PY="$DEST/bin/python3"
 
 echo "==> 安装 CAD 依赖 build123d / shapely / numpy..."
-"$PY" -m pip install --no-warn-script-location --no-cache-dir -i "$PYPI_MIRROR" build123d==0.11.1 shapely numpy
+"$PY" -m pip install --no-warn-script-location --no-cache-dir -i "$PYPI_MIRROR" build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy
 
 echo "==> 清理缓存与字节码..."
 find "$DEST" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
