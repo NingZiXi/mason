@@ -941,14 +941,14 @@
         也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。
       </p>
       <div class="hero-cta">
-        <a class="btn btn-primary" id="hero-primary" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64.msi" target="_blank" rel="noopener">
+        <a class="btn btn-primary" id="hero-primary" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64-setup.exe" target="_blank" rel="noopener">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           <span id="hero-primary-label">免费下载</span>
         </a>
         <a class="btn btn-ghost" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener" data-i18n="hero.source">查看源码</a>
       </div>
       <div class="os-row" id="os-row">
-        <a class="os-chip" data-os="windows" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64.msi" target="_blank" rel="noopener">
+        <a class="os-chip" data-os="windows" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64-setup.exe" target="_blank" rel="noopener">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
           Windows
         </a>
@@ -1396,8 +1396,8 @@
         <span class="os-reco" data-i18n="download.reco" hidden>推荐</span>
         <svg viewBox="0 0 24 24"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
         <div class="os-name">Windows</div>
-        <div class="os-file" data-i18n="download.winFile">.msi 安装包 · Win 10/11</div>
-        <a class="os-btn" data-os-link="windows" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64.msi" target="_blank" rel="noopener" data-i18n="download.btn">下载</a>
+        <div class="os-file" data-i18n="download.winFile">.exe 安装器 · Win 10/11</div>
+        <a class="os-btn" data-os-link="windows" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64-setup.exe" target="_blank" rel="noopener" data-i18n="download.btn">下载</a>
       </div>
       <div class="dl-card reveal" data-os="mac">
         <span class="os-reco" data-i18n="download.reco" hidden>推荐</span>
@@ -1484,7 +1484,7 @@
      不依赖 GitHub API(api.github.com 限流或不可达时仍可直接下载) */
   var DL_BASE = "https://github.com/NingZiXi/mason/releases/latest/download/";
   var DL = {
-    windows: DL_BASE + "Mason-windows-x64.msi",
+    windows: DL_BASE + "Mason-windows-x64-setup.exe",
     mac: DL_BASE + "Mason-macos-aarch64.dmg",
     linux: DL_BASE + "Mason-linux-amd64.deb"
   };
@@ -1583,7 +1583,7 @@
       "download.h2": "下载 Mason",
       "download.sub": "三个平台均提供预编译安装包，开箱即用。",
       "download.reco": "推荐",
-      "download.winFile": ".msi 安装包 · Win 10/11",
+      "download.winFile": ".exe 安装器 · Win 10/11",
       "download.macFile": ".dmg · Apple Silicon",
       "download.linuxFile": ".deb / .rpm · Debian/RHEL 系",
       "download.btn": "下载",
@@ -1692,7 +1692,7 @@
       "download.h2": "Download Mason",
       "download.sub": "Prebuilt installers for all three platforms, ready out of the box.",
       "download.reco": "For You",
-      "download.winFile": ".msi installer · Win 10/11",
+      "download.winFile": ".exe installer · Win 10/11",
       "download.macFile": ".dmg · Apple Silicon",
       "download.linuxFile": ".deb / .rpm · Debian/RHEL",
       "download.btn": "Download",
@@ -1841,7 +1841,7 @@
       if (!data || !data.assets) return;
       var ver = data.tag_name || "";
       var map = {
-        windows: matchAsset(data.assets, /^Mason-windows-x64\.msi$/i),
+        windows: matchAsset(data.assets, /^Mason-windows-x64-setup\.exe$/i),
         mac: matchAsset(data.assets, /^Mason-macos-aarch64\.dmg$/i),
         linux: matchAsset(data.assets, /^Mason-linux-amd64\.deb$/i)
       };
