@@ -142,7 +142,7 @@ fn default_eject_slot_width() -> f64 { 22.0 }
 fn default_pry_notch_sides() -> Vec<String> { vec!["down".to_string()] }
 fn default_pry_notch_scale() -> f64 { 1.0 }
 fn default_corner_screw_d() -> f64 { 5.0 }
-fn default_post_clearance() -> f64 { 0.4 }
+fn default_post_clearance() -> f64 { 0.15 }
 fn default_peri_screw_d() -> f64 { 3.5 }
 fn default_outer_corner_radius() -> f64 { 5.0 }
 fn default_stencil_thickness() -> f64 { 0.3 }
