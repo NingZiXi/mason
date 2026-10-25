@@ -119,6 +119,9 @@ def base_params(**over):
         "pry_notch_sides": [], "pry_notch_scale": 1.0,
         "corner_screw_d": 5, "peri_screw_d": 3.5,
         "outer_corner_radius": 5, "base_support_pips": True,
+        # 显式锚定测试几何口径:不随 App 默认值漂移(现默认 0.15,
+        # 测试固定 0.4 = Ø9.4 角柱孔,test_v2 的 R_POST_HOLE 公式同源)
+        "post_clearance": 0.4,
     }
     p.update(over)
     # 旧式单值 stencil_size → 同步两轴(不覆盖显式给的矩形尺寸)

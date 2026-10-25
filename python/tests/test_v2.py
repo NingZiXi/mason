@@ -28,7 +28,8 @@ jig = p["jig_size"]
 corner_positions = jg.corner_screw_positions(window_poly, jig, p)
 CORNER = corner_positions[0][0]                                  # 角螺丝半宽(沿对角线)
 BAND = max(jig / 2 - 10, WIN_H + 4)                              # 周圈螺丝带
-# 4 角定位柱孔径 = corner_d/2 + 2.0 + post_clearance(与 jig_generator.build_base 同源)
+# 4 角定位柱孔径 = corner_d/2 + 2.0 + post_clearance(与 jig_generator.build_base 同源;
+# base_params 已显式锚定 0.4,与 App 默认值解耦)
 R_POST_HOLE = p["corner_screw_d"] / 2 + 2.0 + p.get("post_clearance", 0.4)
 
 # ===== insert(PCB 托盘) =====
