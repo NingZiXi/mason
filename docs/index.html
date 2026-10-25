@@ -1835,7 +1835,8 @@
     }
     return null;
   }
-  fetch(API)
+  /* cache: "no-store" —— 发版后避免浏览器沿用旧的 Release 数据,始终显示最新版本号 */
+  fetch(API, { cache: "no-store" })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (data) {
       if (!data || !data.assets) return;
