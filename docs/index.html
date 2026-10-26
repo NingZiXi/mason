@@ -961,7 +961,7 @@
           Linux
         </a>
       </div>
-      <p class="hero-ver" id="hero-ver"><span data-i18n="hero.verPrefix">最新版本：</span><a href="https://github.com/NingZiXi/mason/releases/latest" target="_blank" rel="noopener" data-i18n="hero.verLink">前往 Releases 查看</a></p>
+      <p class="hero-ver" id="hero-ver"><span data-i18n="hero.verPrefix">最新版本：</span><span id="hero-ver-num">v0.1.6</span></p>
     </div>
 
     <!-- 两种模式核心产物（部件色与 App 内一致） -->
@@ -1389,7 +1389,7 @@
     <div class="sec-head reveal">
       <div class="sec-tag">DOWNLOAD</div>
       <h2 data-i18n="download.h2">下载 Mason</h2>
-      <p id="dl-ver-text" data-i18n="download.sub">三个平台均提供预编译安装包，开箱即用。</p>
+      <p id="dl-ver-text"><span data-i18n="hero.verCurrent">当前版本 </span><span id="dl-ver-num">v0.1.6</span><span data-i18n="hero.verSuffix"> · 三个平台均提供预编译安装包，开箱即用。</span></p>
     </div>
     <div class="dl-cards">
       <div class="dl-card reveal" data-os="windows">
@@ -1477,7 +1477,6 @@
 
 <script>
 (function () {
-  var RELEASES = "https://github.com/NingZiXi/mason/releases/latest";
   var API = "https://api.github.com/repos/NingZiXi/mason/releases/latest";
   var REPO_API = "https://api.github.com/repos/NingZiXi/mason";
   /* Release 资产名固定不含版本号,所以这些直链永久有效,
@@ -1508,7 +1507,6 @@
       "hero.source": "查看源码",
       "hero.cta": "免费下载 · ",
       "hero.verPrefix": "最新版本：",
-      "hero.verLink": "前往 Releases 查看",
       "hero.verCurrent": "当前版本 ",
       "hero.verSuffix": " · 三个平台均提供预编译安装包，开箱即用。",
       "hero.svgTagJig": "JIG · 钢网夹具",
@@ -1581,7 +1579,6 @@
       "features.f6t": "中英双语 · 开源",
       "features.f6d": "MIT 协议完全开源，Tauri 2 + Vue 3 + Rust 技术栈，欢迎 Issue 与 PR。",
       "download.h2": "下载 Mason",
-      "download.sub": "三个平台均提供预编译安装包，开箱即用。",
       "download.reco": "推荐",
       "download.winFile": ".exe 安装器 · Win 10/11",
       "download.macFile": ".dmg · Apple Silicon",
@@ -1617,7 +1614,6 @@
       "hero.source": "View Source",
       "hero.cta": "Free Download · ",
       "hero.verPrefix": "Latest: ",
-      "hero.verLink": "See Releases",
       "hero.verCurrent": "Version ",
       "hero.verSuffix": " · Prebuilt installers for all three platforms, ready out of the box.",
       "hero.svgTagJig": "JIG · Stencil Jig",
@@ -1690,7 +1686,6 @@
       "features.f6t": "Bilingual · Open Source",
       "features.f6d": "Fully open source under MIT. Built with Tauri 2 + Vue 3 + Rust. Issues and PRs welcome.",
       "download.h2": "Download Mason",
-      "download.sub": "Prebuilt installers for all three platforms, ready out of the box.",
       "download.reco": "For You",
       "download.winFile": ".exe installer · Win 10/11",
       "download.macFile": ".dmg · Apple Silicon",
@@ -1737,10 +1732,12 @@
     if (!latestRelease) return;
     var ver = latestRelease.tag_name || "";
     if (!ver) return;
-    document.getElementById("hero-ver").innerHTML =
-      t("hero.verPrefix") + '<a href="' + RELEASES + '" target="_blank" rel="noopener">' + ver + "</a>";
-    document.getElementById("dl-ver-text").textContent =
-      t("hero.verCurrent") + ver + t("hero.verSuffix");
+    /* 仅更新版本号 span:静态硬编码值与 API 结果一致时无感,
+       API 被墙时静态值兜底;不再整体重写,避免链接/语言切换互相覆盖 */
+    var heroNum = document.getElementById("hero-ver-num");
+    if (heroNum) heroNum.textContent = ver;
+    var dlNum = document.getElementById("dl-ver-num");
+    if (dlNum) dlNum.textContent = ver;
   }
 
   var SHOT_CAPTIONS = ["showcase.cap1", "showcase.cap2", "showcase.cap3", "showcase.cap4"];

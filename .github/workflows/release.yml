@@ -171,3 +171,42 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+
+  sync-site-version:
+    name: Sync site version badge
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 基于master操作(而非tag),push 回 master 才不会 non-fast-forward;
+          # tag 打在发版提交上,树内容一致
+          ref: master
+
+      # 官网版本号硬编码在 HTML 里(API 被墙时的兜底显示),
+      # 发版后自动把两处 span 同步为新 tag,防止人为遗忘
+      - name: Update hardcoded version in docs/index.html
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          sed -i "s|id=\"hero-ver-num\">[^<]*</span>|id=\"hero-ver-num\">${TAG}</span>|" docs/index.html
+          sed -i "s|id=\"dl-ver-num\">[^<]*</span>|id=\"dl-ver-num\">${TAG}</span>|" docs/index.html
+          grep -n "hero-ver-num\|dl-ver-num" docs/index.html
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Site version already up to date."
+          else
+            git add docs/index.html
+            git commit -m "chore(site): sync site version to ${GITHUB_REF_NAME}"
+            git push
+          fi
