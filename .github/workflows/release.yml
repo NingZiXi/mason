@@ -57,6 +57,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Test Python server smoke checker
+        run: python -m unittest discover -s scripts -p test_check_python_server.py
+
       - name: Validate release version and signing key
         shell: bash
         env:
