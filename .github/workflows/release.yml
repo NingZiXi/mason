@@ -95,8 +95,7 @@ jobs:
           mkdir -p artifacts
           cp src-tauri/target/release/bundle/msi/*.msi artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/nsis/*.exe artifacts/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/nsis/*.exe.zip artifacts/
-          cp src-tauri/target/release/bundle/nsis/*.exe.zip.sig artifacts/
+          cp src-tauri/target/release/bundle/nsis/*.exe.sig artifacts/
 
       - name: Collect artifacts (macOS)
         if: matrix.platform == 'macos-latest'
@@ -118,8 +117,7 @@ jobs:
           cp src-tauri/target/release/bundle/deb/*.deb artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/rpm/*.rpm artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/appimage/*.AppImage artifacts/
-          cp src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz artifacts/
-          cp src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz.sig artifacts/
+          cp src-tauri/target/release/bundle/appimage/*.AppImage.sig artifacts/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

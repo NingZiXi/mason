@@ -71,9 +71,32 @@ if ($LASTEXITCODE -ne 0) { throw "验证失败:依赖导入报错" }
 
 # 生成器 server 模式冒烟(ping)
 Write-Host "==> 验证 server 模式..."
-$pingResponse = '{"id":1,"cmd":"ping"}' | & $py (Join-Path $root "python\jig_generator.py") --server
-if ($LASTEXITCODE -ne 0) { throw "server 冒烟失败" }
-try { $ping = $pingResponse | ConvertFrom-Json } catch { throw "server 冒烟返回无效 JSON: $pingResponse" }
+$scriptPath = Join-Path $root "python\jig_generator.py"
+$server = [System.Diagnostics.Process]::new()
+$server.StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+$server.StartInfo.FileName = $py
+$server.StartInfo.Arguments = "`"$scriptPath`" --server"
+$server.StartInfo.UseShellExecute = $false
+$server.StartInfo.RedirectStandardInput = $true
+$server.StartInfo.RedirectStandardOutput = $true
+$server.StartInfo.RedirectStandardError = $true
+if (-not $server.Start()) { throw "server 冒烟启动失败" }
+$stdoutTask = $server.StandardOutput.ReadToEndAsync()
+$stderrTask = $server.StandardError.ReadToEndAsync()
+$pingBytes = [System.Text.Encoding]::UTF8.GetBytes('{"id":1,"cmd":"ping"}' + "`n")
+$server.StandardInput.BaseStream.Write($pingBytes, 0, $pingBytes.Length)
+$server.StandardInput.BaseStream.Flush()
+$server.StandardInput.Close()
+if (-not $server.WaitForExit(60000)) {
+  $server.Kill()
+  $server.Dispose()
+  throw "server 冒烟超时(60 秒)"
+}
+$pingResponse = $stdoutTask.Result.Trim()
+$serverError = $stderrTask.Result
+if ($server.ExitCode -ne 0) { throw "server 冒烟失败(exit $($server.ExitCode)): $serverError" }
+$server.Dispose()
+try { $ping = $pingResponse | ConvertFrom-Json } catch { throw "server 冒烟返回无效 JSON: $pingResponse`n$serverError" }
 if (-not $ping.ok -or -not $ping.pong) { throw "server ping 失败: $pingResponse" }
 
 $size = [math]::Round(((Get-ChildItem $dest -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB)

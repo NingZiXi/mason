@@ -34,11 +34,9 @@ export function prepareRelease(input, output, tag, repository, projectRoot = roo
   }
   const platforms = {};
   const assets = [
-    [/-setup\.exe\.zip$/i, "Mason-windows-x64-setup.exe.zip", "windows-x86_64"],
+    [/-setup\.exe$/i, "Mason-windows-x64-setup.exe", "windows-x86_64"],
     [/\.app\.tar\.gz$/i, "Mason-macos-aarch64.app.tar.gz", "darwin-aarch64"],
-    [/\.AppImage\.tar\.gz$/i, "Mason-linux-x86_64.AppImage.tar.gz", "linux-x86_64"],
-    [/-setup\.exe$/i, "Mason-windows-x64-setup.exe"],
-    [/\.AppImage$/i, "Mason-linux-x86_64.AppImage"],
+    [/\.AppImage$/i, "Mason-linux-x86_64.AppImage", "linux-x86_64"],
     [/\.msi$/i, "Mason-windows-x64.msi"],
     [/\.dmg$/i, "Mason-macos-aarch64.dmg"],
     [/Mason\.zip$/i, "Mason-macos-aarch64.zip"],
