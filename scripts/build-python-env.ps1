@@ -1,4 +1,4 @@
-# 构建内置 Python CAD 引擎环境(打进安装包,用户零配置)
+﻿# 构建内置 Python CAD 引擎环境(打进安装包,用户零配置)
 #
 # 用法: npm run build:python-env
 # 产物: src-tauri/resources/python-env/(gitignored,打包时由 Tauri resources 收进安装包)

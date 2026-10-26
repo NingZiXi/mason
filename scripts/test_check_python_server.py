@@ -7,6 +7,10 @@ from check_python_server import check_server
 
 
 class ServerSmokeTests(unittest.TestCase):
+    def test_windows_build_script_has_explicit_utf8_encoding(self):
+        script = Path(__file__).with_name("build-python-env.ps1")
+        self.assertTrue(script.read_bytes().startswith(b"\xef\xbb\xbf"))
+
     def run_fixture(self, source):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "engine with spaces.py"
