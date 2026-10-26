@@ -58,7 +58,7 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 ### General
 - Real-time 3D preview (three.js) with background preheating of multiple parts, sub-second switching
 - Stencil rendering deeply optimized — 2400+ pads complete in ~3 seconds
-- Project parameter save / load (JSON)
+- Project save / load (JSON) preserves all modeling settings, work mode, pad metadata, and both panel / single-board datasets; legacy projects remain supported, with defaults for settings absent from the file
 - Chinese / English bilingual UI
 - STL / STEP dual-format export with auto-created timestamp directories
 

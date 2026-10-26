@@ -33,6 +33,9 @@ pub struct ScadParams {
     pub stencil_size: f64,
     /// 周圈螺丝间距(B 面配置;0 = 关闭周圈孔)
     pub screw_spacing: f64,
+    /// 螺丝规格,用于联动周圈孔径和六角螺母尺寸
+    #[serde(default = "default_screw_spec")]
+    pub screw_spec: String,
     pub base_height: f64,
     pub top_cover_height: f64,
     pub jig_size: f64,
@@ -49,6 +52,9 @@ pub struct ScadParams {
     /// 凸台半宽逐轴 = max(stencil_half - lip, slot_half)
     #[serde(default = "default_stencil_lip")]
     pub stencil_lip: f64,
+    /// A/B 框窗口相对凸台的单边间隙
+    #[serde(default = "default_window_gap")]
+    pub window_gap: f64,
     /// 矩形板凸台圆角半径
     #[serde(default = "default_platter_corner_radius")]
     pub platter_corner_radius: f64,
@@ -70,6 +76,15 @@ pub struct ScadParams {
     /// 周圈螺丝直径(M3.5)
     #[serde(default = "default_peri_screw_d")]
     pub peri_screw_d: f64,
+    /// 是否在 B 面生成六角螺母沉孔
+    #[serde(default = "default_use_hex_nut")]
+    pub use_hex_nut: bool,
+    /// 六角螺母对边距(mm)
+    #[serde(default = "default_nut_across_flats")]
+    pub nut_across_flats: f64,
+    /// 六角螺母高度(mm)
+    #[serde(default = "default_nut_height")]
+    pub nut_height: f64,
     /// 外缘圆角半径
     #[serde(default = "default_outer_corner_radius")]
     pub outer_corner_radius: f64,
@@ -134,9 +149,11 @@ pub struct ScadParams {
 }
 
 fn default_insert_height() -> f64 { 8.0 }
+fn default_screw_spec() -> String { "M3".to_string() }
 fn default_platter_height() -> f64 { 4.0 }
 fn default_platter_margin() -> f64 { 5.0 }
 fn default_stencil_lip() -> f64 { 15.0 }
+fn default_window_gap() -> f64 { 0.5 }
 fn default_platter_corner_radius() -> f64 { 4.5 }
 fn default_eject_slot_width() -> f64 { 22.0 }
 fn default_pry_notch_sides() -> Vec<String> { vec!["down".to_string()] }
@@ -144,6 +161,9 @@ fn default_pry_notch_scale() -> f64 { 1.0 }
 fn default_corner_screw_d() -> f64 { 5.0 }
 fn default_post_clearance() -> f64 { 0.15 }
 fn default_peri_screw_d() -> f64 { 3.5 }
+fn default_use_hex_nut() -> bool { true }
+fn default_nut_across_flats() -> f64 { 5.5 }
+fn default_nut_height() -> f64 { 2.7 }
 fn default_outer_corner_radius() -> f64 { 5.0 }
 fn default_stencil_thickness() -> f64 { 0.3 }
 fn default_pad_shrink() -> f64 { 0.0 }
@@ -315,20 +335,25 @@ async fn run_with_log(app: &AppHandle, mut cmd: std::process::Command) -> Result
         }
     });
 
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
+    let status = loop {
+        match child
+            .try_wait()
+            .map_err(|e| AppError::Io(format!("等待安装进程失败: {}", e)))?
+        {
+            Some(status) => break status,
+            None if tokio::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = app.emit("install-log", "[timeout] 安装超时(10 分钟),请检查网络后重试");
+                return Err(AppError::Timeout("安装超时(10 分钟)".into()));
+            }
+            None => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
+        }
+    };
+
     let _ = t_out.await;
     let _ = t_err.await;
-
-    let status = tokio::time::timeout(
-        std::time::Duration::from_secs(600),
-        tokio::task::spawn_blocking(move || child.wait()),
-    )
-    .await
-    .map_err(|_| {
-        let _ = app.emit("install-log", "[timeout] 安装超时(10 分钟),请检查网络后重试");
-        AppError::Timeout("安装超时(10 分钟)".into())
-    })?
-    .map_err(|e| AppError::Io(format!("等待安装进程失败: {}", e)))?
-    .map_err(|e| AppError::Io(format!("安装进程异常: {}", e)))?;
 
     if status.success() {
         Ok(())
@@ -350,7 +375,7 @@ pub async fn install_deps(
     if !std::path::Path::new(&python_path).exists() {
         return Err(AppError::Other(format!("路径不存在: {}", python_path)));
     }
-    let _ = app.emit("install-log", format!("> pip install build123d shapely numpy(清华镜像)"));
+    let _ = app.emit("install-log", "> pip install build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy(清华镜像)");
 
     let mut cmd = std::process::Command::new(&python_path);
     cmd.arg("-m")
@@ -361,7 +386,8 @@ pub async fn install_deps(
         .arg("off")
         .arg("-i")
         .arg("https://pypi.tuna.tsinghua.edu.cn/simple")
-        .arg("build123d")
+        .arg("build123d==0.12.0")
+        .arg("cadquery-ocp-novtk==7.9.3.1.1")
         .arg("shapely")
         .arg("numpy");
 
@@ -532,7 +558,10 @@ pub async fn ensure_dir(path: String) -> Result<(), AppError> {
 pub struct ProjectFile {
     #[serde(default = "default_version")]
     pub version: u32,
-    pub config: ScadParams,
+    // Project state includes UI mode, both panel scopes, and legacy keys.
+    // Keep the original keys until frontend migration; ScadParams would drop them
+    // and inject defaults before legacy fields can be interpreted.
+    pub config: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
     pub gerber_filename: Option<String>,
     #[serde(default)]
@@ -549,12 +578,12 @@ fn default_version() -> u32 {
 #[tauri::command]
 pub async fn save_project(
     path: String,
-    config: ScadParams,
+    config: serde_json::Map<String, serde_json::Value>,
     gerber_filename: Option<String>,
 ) -> Result<String, AppError> {
     let now = chrono_like_now();
     let project = ProjectFile {
-        version: 1,
+        version: 2,
         config,
         gerber_filename,
         created_at: now.clone(),
@@ -588,4 +617,44 @@ fn chrono_like_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     format!("epoch:{}", now.as_secs())
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn save_load_preserves_project_state() {
+        let config = json!({
+            "app_mode": "stencil", "post_clearance": 0.45,
+            "pry_notch_sides": ["left", "up"], "pry_notch_scale": 1.4,
+            "panel_mode": "single", "panel_available": true,
+            "panel_variants": {"panel": {"width": 90}, "single": {"width": 40}},
+            "stencil_pads_top": [{"type": "circle", "polarity": "C", "parts": []}]
+        });
+        let path = std::env::temp_dir().join(format!(
+            "mason-project-test-{}-{}.json", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let project = tauri::async_runtime::block_on(async {
+            save_project(path.to_string_lossy().into_owned(), config.as_object().unwrap().clone(), Some("panel.zip".into())).await.unwrap();
+            load_project(path.to_string_lossy().into_owned()).await.unwrap()
+        });
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(project.version, 2);
+        assert_eq!(serde_json::Value::Object(project.config), config);
+        assert_eq!(project.gerber_filename.as_deref(), Some("panel.zip"));
+    }
+
+    #[test]
+    fn legacy_keys_reach_frontend_without_injected_defaults() {
+        let project: ProjectFile = serde_json::from_value(json!({
+            "config": {"stencil_size": 140, "platter_width": 110, "pry_notch_side": "off"}
+        })).unwrap();
+        assert_eq!(project.version, 1);
+        assert_eq!(project.config["platter_width"], 110);
+        assert!(!project.config.contains_key("stencil_lip"));
+        assert!(!project.config.contains_key("stencil_size_x"));
+    }
 }

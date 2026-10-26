@@ -4,9 +4,16 @@ import { useI18n } from "vue-i18n";
 import { useUiStore } from "../stores/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getVersion } from "@tauri-apps/api/app";
+import { isTauri } from "@tauri-apps/api/core";
+import { ElMessageBox, ElNotification } from "element-plus";
+import { useUpdaterStore } from "../stores/updater";
+import { version } from "../../package.json";
 
 const { t } = useI18n();
 const ui = useUiStore();
+const updater = useUpdaterStore();
+const canUpdate = isTauri() && !import.meta.env.DEV;
+const confirmingUpdate = ref(false);
 const showSettings = ref(false);
 const appVersion = ref("");
 const activeTab = ref<"about" | "appearance" | "general">("about");
@@ -15,9 +22,35 @@ onMounted(async () => {
   try {
     appVersion.value = await getVersion();
   } catch {
-    appVersion.value = "";
+    appVersion.value = version;
+  }
+  if (canUpdate) {
+    await updater.checkForUpdates();
+    if (updater.update) {
+      ElNotification({
+        title: t("updates.available", { version: updater.update.version }),
+        message: t("updates.notification"),
+        duration: 8000,
+        onClick: () => { activeTab.value = "about"; showSettings.value = true; },
+      });
+    }
   }
 });
+
+async function installUpdate() {
+  if (confirmingUpdate.value || updater.busy) return;
+  confirmingUpdate.value = true;
+  try {
+    await ElMessageBox.confirm(t("updates.confirm"), t("updates.title"), {
+      confirmButtonText: t("updates.install"), cancelButtonText: t("updates.later"), type: "warning",
+    });
+    await updater.installUpdate();
+  } catch {
+    // Closing or cancelling the confirmation leaves the update available.
+  } finally {
+    confirmingUpdate.value = false;
+  }
+}
 
 const REPO_URL = "https://github.com/NingZiXi/mason";
 const ISSUE_URL = "https://github.com/NingZiXi/mason/issues";
@@ -34,6 +67,7 @@ function closeSettings() {
 
 <template>
   <button class="settings-btn" :title="t('settings.button')" @click="showSettings = true">
+    <span v-if="updater.update" class="update-dot" :title="t('updates.title')" />
     <svg viewBox="0 0 24 24" width="15" height="15">
       <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
@@ -112,11 +146,37 @@ function closeSettings() {
               </div>
               <div class="app-meta">
                 <div class="app-name">{{ t('app.title') }}</div>
-                <div class="app-version">v{{ appVersion || '0.1.0' }}</div>
+                <div class="app-version">v{{ appVersion || version }}</div>
               </div>
             </div>
 
             <p class="about-desc">{{ t('about.desc') }}</p>
+
+            <div class="update-card" aria-live="polite">
+              <strong>{{ t('updates.title') }}</strong>
+              <p v-if="!canUpdate">{{ t('updates.development') }}</p>
+              <template v-else>
+                <p v-if="updater.status === 'checking'">{{ t('updates.checking') }}</p>
+                <p v-else-if="updater.status === 'latest'">{{ t('updates.latest') }}</p>
+                <p v-else-if="updater.status === 'downloading'">
+                  {{ updater.total ? t('updates.progress', { percent: updater.progress }) : t('updates.downloading') }}
+                </p>
+                <p v-else-if="updater.status === 'installing'">{{ t('updates.installing') }}</p>
+                <p v-else-if="updater.status === 'ready'">{{ t('updates.ready') }}</p>
+                <p v-else-if="updater.update">{{ t('updates.available', { version: updater.update.version }) }}</p>
+                <p v-else>{{ t('updates.automatic') }}</p>
+                <el-progress v-if="updater.status === 'downloading' && updater.total" :percentage="updater.progress" />
+                <pre v-if="updater.update?.body" class="update-notes">{{ updater.update.body }}</pre>
+                <p v-if="updater.error" class="update-error">{{ t('updates.failed') }}<br>{{ updater.error }}</p>
+                <div class="update-actions">
+                  <el-button v-if="updater.status === 'ready'" size="small" type="primary" @click="updater.restart()">{{ t('updates.restart') }}</el-button>
+                  <template v-else>
+                    <el-button size="small" :loading="updater.status === 'checking'" :disabled="updater.busy || confirmingUpdate" @click="updater.checkForUpdates()">{{ t('updates.check') }}</el-button>
+                    <el-button v-if="updater.update" size="small" type="primary" :loading="updater.status === 'downloading' || updater.status === 'installing'" :disabled="updater.busy || confirmingUpdate" @click="installUpdate">{{ t('updates.install') }}</el-button>
+                  </template>
+                </div>
+              </template>
+            </div>
 
             <div class="link-list">
               <a class="link-row" @click="openLink(REPO_URL)">
@@ -219,6 +279,7 @@ function closeSettings() {
 
 <style scoped>
 .settings-btn {
+  position: relative;
   width: 32px;
   height: 32px;
   display: inline-flex;
@@ -288,7 +349,16 @@ function closeSettings() {
 .dialog-body {
   display: flex;
   min-height: 380px;
+  max-height: min(600px, 75vh);
 }
+
+.update-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-brand); }
+.update-card { padding: 12px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-6); font-size: 12px; color: var(--text-secondary); }
+.update-card p { margin: 8px 0; line-height: 1.6; }
+.update-notes { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; }
+.update-error { color: var(--el-color-danger); overflow-wrap: anywhere; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.update-actions .el-button { margin-left: 0; }
 
 /* 侧边栏 */
 .sidebar {

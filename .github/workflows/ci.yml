@@ -32,8 +32,32 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: 安装几何依赖
-        run: pip install build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy pytest
+        run: pip install -r python/requirements.txt pytest
       - name: 运行几何验证测试
         run: python python/tests/run_all.py
       - name: 运行几何回归测试(pytest)
         run: python -m pytest python/test_jig_generator.py -q
+
+  rust:
+    name: Rust (Tauri 后端编译检查)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Linux 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+      - name: 安装 Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: 编译检查
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: 项目保存加载回归测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib project_tests

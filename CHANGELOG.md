@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.7] - 2026-10-26
+
+### Features
+
+- **In-app updates**: installed releases check for updates on startup. The About page shows release notes and supports confirmed download, installation and restart of signed updates.
+- Release workflows publish signed updater artifacts and a `latest.json` manifest for Windows, Apple Silicon macOS and Linux AppImage.
+
+### Fixes and Improvements
+
+- Project save/load now preserves the full application parameter set.
+- Release workflows validate version consistency and require the signing key before building update artifacts.
+
 ## [0.1.6] - 2026-10-25
 
 ### Features

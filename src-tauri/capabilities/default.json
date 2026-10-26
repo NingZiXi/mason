@@ -26,6 +26,8 @@
     "store:allow-set",
     "store:allow-save",
     "store:allow-load",
-    "store:allow-entries"
+    "store:allow-entries",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

@@ -1,8 +1,7 @@
 # PCB 钢网夹具生成器 - Python 依赖
 # Python 3.11+
-# build123d 锁 0.11.1:0.13.0 起依赖 cadquery-ocp 8.x,OCP 8 移除了
-# TopTools_ListOfShape,jig_generator.py 的 OCC 原生布尔会 ImportError。
-# 0.11.1 的约束 cadquery-ocp-novtk<8.0,>=7.9 正好锁在可用 API 上。
-build123d==0.11.1
+# Keep these versions aligned with the geometry CI and bundled-runtime build.
+build123d==0.12.0
+cadquery-ocp-novtk==7.9.3.1.1
 shapely>=2.0.0
 numpy>=2.0.0

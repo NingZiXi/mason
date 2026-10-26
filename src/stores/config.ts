@@ -5,10 +5,11 @@
  * 与 Rust 后端的 ScadParams 结构对齐。
  */
 import { defineStore } from "pinia";
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { PadPolygon } from "../lib/gerber/pads";
 import type { PanelMode, PanelVariant } from "../lib/gerber/panel";
+import { deserializeProjectConfig, serializeProjectConfig, type GerberVariants } from "../lib/project";
 
 export type AppMode = "jig" | "stencil";
 
@@ -392,7 +393,8 @@ function computeJigSize(c: AppConfig): number {
 }
 
 export const useConfigStore = defineStore("config", () => {
-  const config = ref<AppConfig>({ ...DEFAULT });
+  const config = ref<AppConfig>(JSON.parse(JSON.stringify(DEFAULT)));
+  let restoringProject = false;
 
   // 派生:周圈螺丝位置(与 Python compute_perimeter_screw_positions 同算法)
   // 孔带靠外:螺丝圆心距外缘 10mm,窗口→螺丝的内侧带完整留给钢网夹紧;
@@ -453,6 +455,7 @@ export const useConfigStore = defineStore("config", () => {
       config.value.platterCornerRadius,
     ],
     () => {
+      if (restoringProject) return;
       const c = config.value;
       if (c.stencilSizeX < c.pcbSizeX + 0.1) {
         c.stencilSizeX = Math.ceil((c.pcbSizeX + 20) / 10) * 10;
@@ -480,6 +483,7 @@ export const useConfigStore = defineStore("config", () => {
       config.value.windowGap,
     ],
     () => {
+      if (restoringProject) return;
       config.value.jigSize = computeJigSize(config.value);
     }
   );
@@ -489,6 +493,7 @@ export const useConfigStore = defineStore("config", () => {
   watch(
     () => config.value.baseHeight,
     (h) => {
+      if (restoringProject) return;
       config.value.platterHeight = h;
     },
     { immediate: true }
@@ -499,6 +504,7 @@ export const useConfigStore = defineStore("config", () => {
   watch(
     () => config.value.screwSpec,
     (spec) => {
+      if (restoringProject) return;
       const s = SCREW_SPECS[spec as ScrewSpec];
       if (!s) return;
       config.value.periScrewD = s.holeD;
@@ -606,12 +612,26 @@ export const useConfigStore = defineStore("config", () => {
 
   // Actions
 
-  /** 缓存导入文件的整版 / 单板两套口径,供 panelMode 切换时复用(不落盘) */
-  const gerberVariants = ref<{
-    panel: PanelVariant;
-    single: PanelVariant;
-    hasPads: boolean;
-  } | null>(null);
+  /** 导入文件的整版 / 单板两套口径,随项目一起保存。 */
+  const gerberVariants = ref<GerberVariants | null>(null);
+
+  function projectConfig() {
+    return serializeProjectConfig(config.value, gerberVariants.value);
+  }
+
+  async function restoreProject(raw: unknown, filename: string | null) {
+    const restored = deserializeProjectConfig(raw, DEFAULT);
+    restored.config.gerberFilename = filename;
+    restoringProject = true;
+    try {
+      Object.assign(config.value, restored.config);
+      gerberVariants.value = restored.panelVariants;
+      // Flush queued watchers while restoration is active, preserving custom dimensions.
+      await nextTick();
+    } finally {
+      restoringProject = false;
+    }
+  }
 
   /** 把某个口径的几何写入 config(尺寸 / 板框 / 焊盘 + 钢网尺寸联动) */
   function applyVariant(mode: PanelMode) {
@@ -772,6 +792,8 @@ export const useConfigStore = defineStore("config", () => {
     applyGerberImport,
     setPanelMode,
     clearPanelScope,
+    projectConfig,
+    restoreProject,
     setMode,
     applyPreset,
     reset,

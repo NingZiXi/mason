@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Local updater signing keys and npm cache (never commit private keys)
+.tauri/
+.npm-cache/
+
 # Rust / Tauri 构建产物
 src-tauri/target
 src-tauri/gen

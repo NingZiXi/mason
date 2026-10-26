@@ -57,7 +57,7 @@ rm -f /tmp/mason-python-standalone.tar.gz
 PY="$DEST/bin/python3"
 
 echo "==> 安装 CAD 依赖 build123d / shapely / numpy..."
-"$PY" -m pip install --no-warn-script-location --no-cache-dir -i "$PYPI_MIRROR" build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy
+"$PY" -m pip install --no-warn-script-location --no-cache-dir -i "$PYPI_MIRROR" -r "$ROOT/python/requirements.txt"
 
 echo "==> 裁剪未使用的渲染贴图..."
 # threejs_materials 内含 86MB PNG 法线贴图,仅 three.js 材质渲染使用;

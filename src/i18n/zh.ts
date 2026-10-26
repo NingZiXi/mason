@@ -73,6 +73,17 @@ export default {
     aboutTitle: "关于本项目",
     close: "关闭",
   },
+  updates: {
+    title: "软件更新", check: "检查更新", checking: "正在检查更新…",
+    latest: "当前已是最新版本", available: "发现新版本 v{version}",
+    automatic: "每次启动时自动检查新版本", notification: "点击这里查看更新说明并安装。",
+    install: "更新并重启", later: "暂不更新",
+    confirm: "更新安装后将关闭并重启软件。请先保存项目，并等待模型生成或导出完成；未保存的改动会丢失。现在开始更新吗？",
+    downloading: "正在下载更新…", progress: "正在下载更新 {percent}%",
+    installing: "正在安装更新，请稍候…", ready: "更新已安装，请重启软件。", restart: "重启软件",
+    failed: "更新操作失败，请检查网络后重试。",
+    development: "开发预览不执行更新，请在安装版中使用此功能。",
+  },
   win: {
     minimize: "最小化",
     maximize: "最大化",

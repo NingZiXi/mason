@@ -49,7 +49,7 @@ Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $getpip -
 if ($LASTEXITCODE -ne 0) { throw "get-pip 失败(exit $LASTEXITCODE)" }
 
 Write-Host "==> 安装 CAD 依赖 build123d / shapely / numpy(镜像 $PypiMirror,约 200MB)..."
-& $py -m pip install --no-warn-script-location --no-cache-dir -i $PypiMirror build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy
+& $py -m pip install --no-warn-script-location --no-cache-dir -i $PypiMirror -r (Join-Path $root "python\requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "依赖安装失败(exit $LASTEXITCODE)" }
 
 Write-Host "==> 裁剪未使用的渲染贴图..."
@@ -71,8 +71,10 @@ if ($LASTEXITCODE -ne 0) { throw "验证失败:依赖导入报错" }
 
 # 生成器 server 模式冒烟(ping)
 Write-Host "==> 验证 server 模式..."
-"{'id': 1, 'cmd': 'ping'}" | & $py (Join-Path $root "python\jig_generator.py") --server | Out-Null
+$pingResponse = '{"id":1,"cmd":"ping"}' | & $py (Join-Path $root "python\jig_generator.py") --server
 if ($LASTEXITCODE -ne 0) { throw "server 冒烟失败" }
+try { $ping = $pingResponse | ConvertFrom-Json } catch { throw "server 冒烟返回无效 JSON: $pingResponse" }
+if (-not $ping.ok -or -not $ping.pong) { throw "server ping 失败: $pingResponse" }
 
 $size = [math]::Round(((Get-ChildItem $dest -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB)
 Write-Host ""

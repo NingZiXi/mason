@@ -73,6 +73,17 @@ export default {
     aboutTitle: "About this project",
     close: "Close",
   },
+  updates: {
+    title: "Software Updates", check: "Check for Updates", checking: "Checking for updates…",
+    latest: "You are up to date", available: "Version {version} is available",
+    automatic: "Automatically checks for updates on startup", notification: "Click to view release notes and install.",
+    install: "Update and Restart", later: "Later",
+    confirm: "The app will close and restart after installing. Save your project and wait for model generation or export to finish first; unsaved changes will be lost. Update now?",
+    downloading: "Downloading update…", progress: "Downloading update {percent}%",
+    installing: "Installing update, please wait…", ready: "Update installed. Restart the app to finish.", restart: "Restart App",
+    failed: "The update operation failed. Check your connection and try again.",
+    development: "Updates are disabled in development preview. Use an installed release.",
+  },
   win: {
     minimize: "Minimize",
     maximize: "Maximize",

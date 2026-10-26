@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mason",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "cn.local.mason",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "resources": ["resources/python-env", "resources/scripts"],
     "icon": [
@@ -40,5 +41,12 @@
     "category": "DeveloperTool",
     "shortDescription": "PCB 钢网夹具生成器",
     "longDescription": "根据 PCB Gerber 文件自动生成 3D 打印的锡膏刷钢网定位夹具"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGMkUxQTAyQUY4NkQ4OQpSV1NKYmZncW9PSHlBVTNFWUZlREFFZ1B3NDVFK2dhaU5QWDRvb0hhYXJZYU5FR1hCYmt0NXNNUwo=",
+      "endpoints": ["https://github.com/NingZiXi/mason/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
   }
 }
