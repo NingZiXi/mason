@@ -100,7 +100,7 @@ for idx, params in enumerate(CASES):
             for x, y in py_pos for cx, cy in corners)
         ck.check(f"与 4 角柱孔净距 ≥1mm(最小 {min_clear:.2f}mm)", min_clear >= 1.0)
     corners = jg.corner_screw_positions(win, params["jig_size"])
-    ck.check(f"角螺丝 4 个,全在窗口外({corners[0]})", len(corners) == 4
+    ck.check(f"角定位柱 4 个,全在窗口外({corners[0]})", len(corners) == 4
              and all(abs(x) >= maxx and abs(y) >= maxy for x, y in corners))
 
 ck.finish("螺丝布局验证")

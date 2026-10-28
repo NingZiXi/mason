@@ -25,7 +25,7 @@
 
 **Mason** is a desktop application built with Tauri 2 + Python (build123d) that converts Gerber ZIP files exported from JLCPCB into 3D-printable solder paste printing tools. It offers two working modes covering different scenarios from prototyping to small-batch production:
 
-- **Stencil Jig Mode** — Generates a three-piece set (base / tray / cover) that clamps a pre-made metal stencil for printing. Ideal for irregular PCBs and scenarios requiring even pressure.
+- **Stencil Jig Mode** — Generates a PCB tray, B-side base, and A-side cover. The metal stencil is clamped between the base and cover, then the assembly drops onto the tray and is aligned by its four integral posts.
 - **PCB Stencil Mode** — Directly generates an all-in-one stencil with a built-in PCB pocket based on the Paste Mask layer. Works independently without a jig, perfect for rapid prototyping.
 
 The core design goal is a minimal workflow of "drag in Gerber → export STL", with sensible defaults that produce usable results out of the box.
@@ -41,8 +41,8 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Pad parsing covers circle / rectangle / obround / rounded rectangle / polygon / region fill aperture types
 
 ### Stencil Jig Mode
-- Parametric three-piece generation: base (B-side, with M3 hex nut countersink), PCB tray (with screw-free integrated positioning posts), cover (A-side)
-- Screw layout: 4 corners always present + evenly spaced perimeter screws based on spacing, supporting M2/M2.5/M3 screw spec linkage
+- Four-part assembly: PCB tray at the bottom, followed by the B-side base, metal stencil, and A-side cover; four integral tray posts align the clamped assembly as it drops onto the tray
+- Screws are placed only around the A/B frame perimeter. The four corners are alignment posts, not screws; perimeter screw spacing and M2/M2.5/M3 specs are configurable
 - Jig size auto-calculated from stencil size (20mm steps); base and cover reusable for same-size PCBs
 - Full irregular PCB outline reproduction with adjustable pocket clearance
 
@@ -112,7 +112,7 @@ Installer artifacts are in `src-tauri/target/release/bundle/` (Windows: `.msi` /
 1. Drag in a Gerber ZIP to auto-detect the board outline
 2. Confirm basic parameters: PCB size / thickness, stencil size, etc.
 3. (Optional) Adjust advanced parameters: screw spacing, tray thickness, pocket clearance, etc.
-4. Switch between base / insert / cover parts in the 3D preview on the right
+4. Preview the PCB tray (insert), B-side base, and A-side cover individually
 5. Click "Export", select a directory — a `mason_export_<timestamp>/` subfolder is auto-created and STL files are written into it
 
 ### PCB Stencil Mode

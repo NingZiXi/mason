@@ -666,7 +666,8 @@
   .s-win{fill:rgba(62,125,98,.10);stroke:var(--green);stroke-width:1.5;stroke-dasharray:5,4}
   .s-pcb{fill:rgba(90,155,127,.22);stroke:var(--green-accent);stroke-width:1;stroke-dasharray:3,3}
   .s-peri{fill:var(--green);stroke:#fff;stroke-width:1;animation:pad-pop .4s ease forwards;opacity:0}
-  .s-corner{fill:var(--green-active);stroke:#fff;stroke-width:1.4;animation:pad-pop .4s ease forwards;opacity:0;transform-box:fill-box;transform-origin:center}
+  .s-corner{fill:var(--paper);stroke:var(--green-active);stroke-width:2.2;animation:pad-pop .4s ease forwards;opacity:0;transform-box:fill-box;transform-origin:center}
+  .s-post-core{fill:var(--green-active)}
   .s-dim{font-size:10.5px;fill:var(--ink-2);font-weight:700;letter-spacing:.8px}
   .shot-list{display:flex;flex-direction:column;gap:12px}
   .shot-item{
@@ -937,7 +938,7 @@
       <span class="eyebrow"><i></i><span data-i18n="hero.eyebrow">开源 · 免费 · 跨平台</span></span>
       <h1><span data-i18n="hero.h1a">Gerber 到 3D 打印 —</span><br /><span class="hl" data-i18n="hero.h1b">两种模式全搞定</span></h1>
       <p class="hero-sub" data-i18n="hero.sub">
-        从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具三件套</b>（底座 / 托盘 / 顶盖），
+        从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具</b>（PCB 托盘 / B 面底座 / 金属钢网 / A 面顶盖），
         也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。
       </p>
       <div class="hero-cta">
@@ -987,7 +988,7 @@
         <rect x="6" y="6" width="508" height="408" rx="16" fill="url(#grid)" opacity=".5"/>
         <circle cx="260" cy="210" r="200" fill="url(#softGlow)"/>
 
-        <!-- ========== 左侧:夹具模式三件套爆炸图 ========== -->
+        <!-- ========== 左侧:夹具装配爆炸图,从下到上为托盘/底座/钢网/顶盖 ========== -->
         <!-- 模式标签 -->
         <g class="part part-tag" data-depth="-0.28" font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
           <rect x="18" y="18" width="110" height="20" rx="10" fill="#EDF2F7"/>
@@ -995,8 +996,8 @@
         </g>
         <!-- 虚线对齐（先隐藏后划线） -->
         <g class="part part-line" data-depth="-0.25" stroke="#5A9B7F" stroke-width="1.2" stroke-dasharray="4 5" opacity=".5">
-          <line class="dash-line" x1="100" y1="72" x2="100" y2="370"/>
-          <line class="dash-line" x1="250" y1="72" x2="250" y2="370"/>
+          <line class="dash-line" x1="100" y1="72" x2="100" y2="414"/>
+          <line class="dash-line" x1="250" y1="72" x2="250" y2="414"/>
         </g>
         <!-- cover 顶盖 (top) -->
         <g class="part part-top float-y" filter="url(#glow)" data-depth="-0.48" style="transform-origin:175px 110px">
@@ -1005,32 +1006,39 @@
           <polygon points="175,136 250,102 250,120 175,154" fill="#B87530"/>
           <polygon points="138,102 175,84 212,102 175,120" fill="#FDFEFD"/>
         </g>
-        <!-- insert 托盘 (mid) -->
+        <!-- 金属钢网:位于 A 面顶盖下方、B 面底座上方 -->
         <g class="part part-mid float-mid" data-depth="-0.30" style="transform-origin:175px 210px">
-          <polygon points="100,202 175,168 250,202 175,236" fill="#69AB8C"/>
-          <polygon points="100,202 175,236 175,254 100,220" fill="#5A9B7F"/>
-          <polygon points="175,236 250,202 250,220 175,254" fill="#487E66"/>
-          <polygon points="128,202 175,180 222,202 175,224" fill="#2D5A4B" opacity=".7"/>
-          <circle cx="112" cy="210" r="3" fill="#FDFEFD"/>
-          <circle cx="238" cy="210" r="3" fill="#FDFEFD"/>
+          <polygon points="112,206 175,178 238,206 175,234" fill="#C9D8D0" stroke="#5A9B7F" stroke-width="1.4"/>
+          <polygon points="126,206 175,184 224,206 175,228" fill="#FDFEFD"/>
+          <circle cx="144" cy="203" r="2" fill="#5A9B7F"/><circle cx="159" cy="211" r="2" fill="#5A9B7F"/>
+          <circle cx="190" cy="197" r="2" fill="#5A9B7F"/><circle cx="205" cy="205" r="2" fill="#5A9B7F"/>
         </g>
-        <!-- base 底座 (bot) -->
-        <g class="part part-bot float-fast" filter="url(#glow)" data-depth="-0.18" style="transform-origin:175px 310px">
-          <polygon points="100,302 175,268 250,302 175,336" fill="#5D7FA3"/>
-          <polygon points="100,302 175,336 175,354 100,320" fill="#4C6F94"/>
-          <polygon points="175,336 250,302 250,320 175,354" fill="#3D5A79"/>
+        <!-- B 面底座:位于钢网下方、PCB 托盘上方;四角孔供定位柱穿过 -->
+        <g class="part part-bot float-fast" filter="url(#glow)" data-depth="-0.18" style="transform-origin:175px 290px">
+          <polygon points="100,282 175,248 250,282 175,316" fill="#5D7FA3"/>
+          <polygon points="100,282 175,316 175,334 100,300" fill="#4C6F94"/>
+          <polygon points="175,316 250,282 250,300 175,334" fill="#3D5A79"/>
+          <polygon points="128,282 175,260 222,282 175,304" fill="#FDFEFD" opacity=".92"/>
           <g fill="#3D5A79">
-            <circle cx="114" cy="308" r="3.5"/>
-            <circle cx="236" cy="308" r="3.5"/>
-            <circle cx="140" cy="326" r="3"/>
-            <circle cx="210" cy="326" r="3"/>
+            <circle cx="112" cy="287" r="2.5"/><circle cx="238" cy="287" r="2.5"/>
+            <circle cx="140" cy="304" r="2.5"/><circle cx="210" cy="304" r="2.5"/>
           </g>
+        </g>
+        <!-- PCB 托盘位于最下方,四角空心柱用于落位而非螺丝 -->
+        <g class="part part-mid float-mid" data-depth="-0.36" style="transform-origin:175px 378px">
+          <polygon points="100,370 175,336 250,370 175,404" fill="#69AB8C"/>
+          <polygon points="100,370 175,404 175,412 100,378" fill="#5A9B7F"/>
+          <polygon points="175,404 250,370 250,378 175,412" fill="#487E66"/>
+          <polygon points="128,370 175,348 222,370 175,392" fill="#2D5A4B" opacity=".7"/>
+          <circle cx="112" cy="370" r="4" fill="#FDFEFD" stroke="#5A9B7F" stroke-width="2"/>
+          <circle cx="238" cy="370" r="4" fill="#FDFEFD" stroke="#5A9B7F" stroke-width="2"/>
         </g>
         <!-- 部件标注 -->
         <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
           <text x="268" y="110" data-i18n="hero.svgCover">cover 顶盖</text>
-          <text x="268" y="210" data-i18n="hero.svgInsert">insert 托盘</text>
-          <text x="268" y="316" data-i18n="hero.svgBase">base 底座</text>
+          <text x="268" y="210" data-i18n="hero.svgStencil">金属钢网</text>
+          <text x="268" y="300" data-i18n="hero.svgBase">base 底座 · B 面</text>
+          <text x="268" y="380" data-i18n="hero.svgInsert">PCB 托盘 · 定位柱</text>
         </g>
 
         <!-- ========== 右侧:钢网模式一体式钢网 ========== -->
@@ -1096,7 +1104,7 @@
         <div class="shot-frame">
           <div class="shot-chrome">
             <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
-            <span class="shot-title" id="shot-title">夹具模式 · 三件套 3D 预览</span>
+            <span class="shot-title" id="shot-title">夹具模式 · 装配 3D 预览</span>
           </div>
           <div class="shot-viewport">
             <img src="assets/shot-jig.png" alt="Mason 夹具模式界面" class="shot-img is-active" data-shot="0" />
@@ -1161,7 +1169,7 @@
           <span class="shot-item-num">01</span>
           <span class="shot-item-text">
             <b data-i18n="showcase.s1t">夹具模式 · 3D 预览</b>
-            <i data-i18n="showcase.s1d">托盘 / 底座 / 顶盖实时渲染</i>
+            <i data-i18n="showcase.s1d">B 面底座夹住钢网后,由托盘四角定位柱落位</i>
           </span>
         </button>
         <button class="shot-item" data-shot="1" role="tab">
@@ -1285,10 +1293,10 @@
       <div class="mode mode-jig reveal">
         <span class="mode-badge">JIG MODE</span>
         <h3 data-i18n="modes.jigT">钢网夹具模式</h3>
-        <p data-i18n="modes.jigD">生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。</p>
+        <p data-i18n="modes.jigD">金属钢网夹在下方的 B 面底座与上方的 A 面顶盖之间,由周圈螺丝夹紧；夹好的组件再通过 PCB 托盘四角的定位柱定位落下。</p>
         <ul>
-          <li data-i18n="modes.jigL1">三件套参数化生成，免螺丝一体定位柱</li>
-          <li data-i18n="modes.jigL2">螺丝布局自动补位，M2 / M2.5 / M3 规格联动</li>
+          <li data-i18n="modes.jigL1">托盘四角一体定位柱,用于组件落位,不装螺丝</li>
+          <li data-i18n="modes.jigL2">夹紧螺丝仅布置在框体周圈,支持 M2 / M2.5 / M3</li>
           <li data-i18n="modes.jigL3">夹具尺寸按钢网自动计算，同尺寸 PCB 复用</li>
         </ul>
       </div>
@@ -1503,7 +1511,7 @@
       "hero.eyebrow": "开源 · 免费 · 跨平台",
       "hero.h1a": "Gerber 到 3D 打印 —",
       "hero.h1b": "两种模式全搞定",
-      "hero.sub": "从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具三件套</b>（底座 / 托盘 / 顶盖），也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。",
+      "hero.sub": "从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具</b>（托盘 / B 面底座 / 金属钢网 / A 面顶盖），也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。",
       "hero.source": "查看源码",
       "hero.cta": "免费下载 · ",
       "hero.verPrefix": "最新版本：",
@@ -1512,20 +1520,21 @@
       "hero.svgTagJig": "JIG · 钢网夹具",
       "hero.svgTagStencil": "STENCIL · PCB 钢网",
       "hero.svgCover": "cover 顶盖",
-      "hero.svgInsert": "insert 托盘",
-      "hero.svgBase": "base 底座",
+      "hero.svgInsert": "PCB 托盘 · 定位柱",
+      "hero.svgBase": "B 面底座",
+      "hero.svgStencil": "金属钢网",
       "hero.svgStencilLabel": "一体式 PCB 钢网",
       "showcase.h2": "真实界面，开箱即用",
       "showcase.sub": "不是示意图 —— 这就是你每天工作的界面。拖入 Gerber，剩下的交给 Mason。",
       "showcase.s1t": "夹具模式 · 3D 预览",
-      "showcase.s1d": "托盘 / 底座 / 顶盖实时渲染",
+      "showcase.s1d": "B 面底座夹住钢网后,由托盘四角定位柱落位",
       "showcase.s2t": "钢网模式 · 焊盘开孔",
       "showcase.s2d": "450+ 焊盘一体式钢网",
       "showcase.s3t": "Gerber 解析演示",
       "showcase.s3d": "点选板形 · 实时解析板框与焊盘",
       "showcase.s4t": "螺丝布局计算器",
       "showcase.s4d": "拖动滑块 · 与应用同算法实时联动",
-      "showcase.cap1": "夹具模式 · 三件套 3D 预览",
+      "showcase.cap1": "夹具模式 · 装配 3D 预览",
       "showcase.cap2": "钢网模式 · 450+ 焊盘开孔",
       "showcase.cap3": "Gerber 解析 · 在线演示",
       "showcase.cap4": "螺丝布局 · 在线计算器",
@@ -1540,6 +1549,7 @@
       "demo.stVerts": "顶点",
       "demo.stPads": "焊盘",
       "demo.stScrews": "螺丝总数",
+      "demo.stPosts": "四角定位柱",
       "demo.stWindow": "窗口",
       "demo.stJig": "夹具边长",
       "demo.stHole": "周圈孔径",
@@ -1555,9 +1565,9 @@
       "modes.h2": "两种模式，覆盖原型到量产",
       "modes.sub": "从快速原型验证到小批量生产，选择最适合你场景的工作方式。",
       "modes.jigT": "钢网夹具模式",
-      "modes.jigD": "生成底座 / 托盘 / 顶盖三件套，夹紧预制金属钢网进行印刷。适合异形 PCB 和需要均匀压紧的场景。",
-      "modes.jigL1": "三件套参数化生成，免螺丝一体定位柱",
-      "modes.jigL2": "螺丝布局自动补位，M2 / M2.5 / M3 规格联动",
+      "modes.jigD": "金属钢网夹在下方的 B 面底座与上方的 A 面顶盖之间,由周圈螺丝夹紧；夹好的组件再通过 PCB 托盘四角的定位柱定位落下。",
+      "modes.jigL1": "托盘四角一体定位柱,用于组件落位,不装螺丝",
+      "modes.jigL2": "夹紧螺丝仅布置在框体周圈,支持 M2 / M2.5 / M3",
       "modes.jigL3": "夹具尺寸按钢网自动计算，同尺寸 PCB 复用",
       "modes.stencilT": "PCB 钢网模式",
       "modes.stencilD": "根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。",
@@ -1610,7 +1620,7 @@
       "hero.eyebrow": "Open Source · Free · Cross-platform",
       "hero.h1a": "Gerber to 3D Print —",
       "hero.h1b": "Two Modes, One Tool",
-      "hero.sub": "Start from a JLCPCB Gerber ZIP and generate either a <b>3-piece stencil jig</b> (base / insert / cover) or a <b>one-piece PCB stencil</b>. Custom parser · Parametric CAD · Real-time preview · Zero cloud.",
+      "hero.sub": "Start from a JLCPCB Gerber ZIP and generate either a <b>stencil jig</b> (tray / B-side base / metal stencil / A-side cover) or a <b>one-piece PCB stencil</b>. Custom parser · Parametric CAD · Real-time preview · Zero cloud.",
       "hero.source": "View Source",
       "hero.cta": "Free Download · ",
       "hero.verPrefix": "Latest: ",
@@ -1618,21 +1628,22 @@
       "hero.verSuffix": " · Prebuilt installers for all three platforms, ready out of the box.",
       "hero.svgTagJig": "JIG · Stencil Jig",
       "hero.svgTagStencil": "STENCIL · PCB Stencil",
-      "hero.svgCover": "cover",
-      "hero.svgInsert": "insert",
-      "hero.svgBase": "base",
+      "hero.svgCover": "A-side cover",
+      "hero.svgInsert": "PCB tray · alignment posts",
+      "hero.svgBase": "B-side base",
+      "hero.svgStencil": "Metal stencil",
       "hero.svgStencilLabel": "One-piece PCB stencil",
       "showcase.h2": "The Real Interface, Ready to Use",
       "showcase.sub": "Not mockups — this is the interface you work in every day. Drop in a Gerber, Mason does the rest.",
       "showcase.s1t": "Jig Mode · 3D Preview",
-      "showcase.s1d": "Insert / base / cover live render",
+      "showcase.s1d": "The perimeter-screwed stencil assembly drops onto four tray alignment posts",
       "showcase.s2t": "Stencil Mode · Pad Apertures",
       "showcase.s2d": "450+ pads on a one-piece stencil",
       "showcase.s3t": "Gerber Parser Demo",
       "showcase.s3d": "Pick a shape · outline & pads parsed live",
       "showcase.s4t": "Screw Layout Calculator",
       "showcase.s4d": "Drag sliders · same algorithm as the app",
-      "showcase.cap1": "Jig Mode · 3-piece 3D Preview",
+      "showcase.cap1": "Jig Mode · Assembly 3D Preview",
       "showcase.cap2": "Stencil Mode · 450+ Apertures",
       "showcase.cap3": "Gerber Parser · Live Demo",
       "showcase.cap4": "Screw Layout · Live Calculator",
@@ -1647,6 +1658,7 @@
       "demo.stVerts": "Vertices",
       "demo.stPads": "Pads",
       "demo.stScrews": "Total Screws",
+      "demo.stPosts": "Corner alignment posts",
       "demo.stWindow": "Window",
       "demo.stJig": "Jig Size",
       "demo.stHole": "Hole Dia.",
@@ -1662,9 +1674,9 @@
       "modes.h2": "Two Modes, Prototype to Production",
       "modes.sub": "From rapid prototyping to small-batch production — pick the workflow that fits your scenario.",
       "modes.jigT": "Stencil Jig Mode",
-      "modes.jigD": "Generates a base / insert / cover set that clamps a pre-made metal stencil for printing. Ideal for irregular PCBs and even-pressure scenarios.",
-      "modes.jigL1": "Parametric 3-piece set with screwless alignment posts",
-      "modes.jigL2": "Auto screw layout with M2 / M2.5 / M3 size linking",
+      "modes.jigD": "The metal stencil is clamped between the lower B-side base and upper A-side cover by perimeter screws. The clamped assembly then drops onto the PCB tray and aligns on its four corner posts.",
+      "modes.jigL1": "Four integral tray alignment posts locate the assembly; they are not screws",
+      "modes.jigL2": "Clamping screws sit around the frame perimeter; supports M2 / M2.5 / M3",
       "modes.jigL3": "Jig size auto-computed from stencil; reusable for same-size PCBs",
       "modes.stencilT": "PCB Stencil Mode",
       "modes.stencilD": "Generates a one-piece stencil with a built-in PCB pocket directly from the paste layer — no jig needed, perfect for quick prototypes.",
@@ -2520,7 +2532,7 @@
   /* ==========================================================
      LIVE Demo 2 · 螺丝布局计算器（镜头 4）
      与应用 config.ts 同算法：windowHalfXY / computeJigSize /
-     screwPositions / cornerScrews / 钢网自动推荐
+     screwPositions / corner alignment posts / 钢网自动推荐
   ========================================================== */
   var SCREW_SPECS = {
     "M2.5": { holeD: 2.7 }, "M3": { holeD: 3.2 }, "M4": { holeD: 4.3 }, "M5": { holeD: 5.3 }
@@ -2588,7 +2600,7 @@
     }).join("");
     var cornerEls = corner.map(function (p) {
       var q = P(p[0], p[1]);
-      return '<circle cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" r="5.4" class="s-corner"/>';
+      return '<circle cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" r="5.4" class="s-corner"/><circle cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" r="1.5" class="s-post-core"/>';
     }).join("");
     var win = wh.half * 2 * scale;
     var winX = pad + (jig * scale - win) / 2;
@@ -2601,9 +2613,9 @@
       '<text x="' + (S / 2) + '" y="' + (S - 4) + '" text-anchor="middle" class="s-dim">JIG ' + jig + '×' + jig + ' mm</text>';
 
     if (screwStats) {
-      var total = peri.length + corner.length;
       screwStats.innerHTML =
-        '<span class="stat-chip">' + t("demo.stScrews") + ' <b>' + total + '</b></span>' +
+        '<span class="stat-chip">' + t("demo.stScrews") + ' <b>' + peri.length + '</b></span>' +
+        '<span class="stat-chip">' + t("demo.stPosts") + ' <b>4</b></span>' +
         '<span class="stat-chip">' + t("demo.stWindow") + ' <b>' + (wh.half * 2).toFixed(1) + 'mm</b></span>' +
         '<span class="stat-chip">' + t("demo.stJig") + ' <b>' + jig + 'mm</b></span>' +
         '<span class="stat-chip">' + t("demo.stHole") + ' <b>Ø' + SCREW_SPECS[c.spec].holeD + '</b></span>';

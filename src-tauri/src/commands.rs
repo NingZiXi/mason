@@ -67,7 +67,7 @@ pub struct ScadParams {
     /// 取放缺口大小比例(0.5~1.5,默认 1.0)
     #[serde(default = "default_pry_notch_scale")]
     pub pry_notch_scale: f64,
-    /// 4 角压钢网螺丝直径(M5)
+    /// Legacy field used to derive the four alignment-post diameter (stored value + 4 mm).
     #[serde(default = "default_corner_screw_d")]
     pub corner_screw_d: f64,
     /// 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.4)

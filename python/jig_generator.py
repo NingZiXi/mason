@@ -3,23 +3,21 @@
 PCB 钢网夹具生成器 v2 - 基于 build123d + Shapely(参考商用件逆向结构)
 
 结构(商用钢网夹解码结果):
-  - insert: 底板(R5 圆角)+ 中央凸台(PCB 槽在凸台顶面,深=板厚,PCB 与凸台顶齐平)
+  - insert: PCB 托盘底板(R5 圆角)+ 中央凸台(PCB 槽在凸台顶面,深=板厚,PCB 与凸台顶齐平)
             + 双梯形取放缺口(槽边两个对称 U 型缺口,手指抠板)
             + 底部圆形顶出孔(推出 PCB)
-            + 4 角空心定位柱(一体免螺丝,外Ø9/内Ø5,向上伸出穿过
-              cover 角孔与盖板顶面齐平)+ 板内孔挖穿(顶出/透锡)
-  - cover:  窗口 = 凸台+0.4(与 base 同一多边形,叠合孔口重合),45° 全高倒角
+            + 4 角空心定位柱(一体免螺丝,外Ø9/内Ø5,向上穿过 base / cover 角孔
+              用于夹紧组件落位)+ 板内孔挖穿(顶出/透锡)
+  - cover:  A 面顶盖,窗口 = 凸台+0.4(与 base 同一多边形,叠合孔口重合),45° 全高倒角
             (顶开口四角圆角半径与窗口一致,直边壁开口向上张开)
-            + 4 角定位柱过孔(Ø9.4)+ 周圈螺丝过孔(B 面配置)
-  - base:   窗口 = 凸台+0.4,顶缘反向拔模(底面开口更大)+ 周圈自攻底孔
+            + 4 角定位柱过孔(Ø9.4)+ 周圈夹紧螺丝过孔
+  - base:   B 面底座,窗口 = 凸台+0.4,顶缘反向拔模(底面开口更大)+ 周圈螺丝孔
             + 4 角定位柱孔(Ø9.4,与 cover 一一对应)
 
-装配(A 面印刷):base(下)+ insert + 钢网 + cover;insert 4 角定位柱穿过
-cover 角孔(与顶面齐平)把三层定位固定,钢网压在盖板与凸台顶面之间,
-PCB 与凸台齐平 → 钢网与 PCB 零间隙贴合,印刷质量最佳。
-B 面配置:insert 翻面(凸台朝下套进 base 窗口)整体翻转后,凸台高 ≡ base
-板厚 → base 顶面与 PCB B 面齐平,钢网零间隙平贴;cover 盖上、周圈螺丝
-对穿 cover 与 base 直接夹紧钢网边缘。
+装配(A 面印刷,自下而上):PCB 托盘(insert) → B 面底座(base) → 金属钢网 →
+A 面顶盖(cover)。周圈螺丝穿过顶盖和底座,将钢网夹紧在底座与顶盖之间；
+托盘上的 4 根一体空心定位柱穿过底座和顶盖对应孔,将夹好的组件定位后
+落到 PCB 托盘上。四角柱是定位结构,不是螺丝。
 """
 import argparse
 import json
@@ -326,9 +324,9 @@ def get_polys(p):
 
 
 def corner_screw_positions(window_poly, jig, p=None):
-    """4 角压钢网螺丝位置:紧贴夹具 4 角(沿对角线),boss(半径 corner_d/2+2)圆心
+    """4 角定位柱位置:紧贴夹具 4 角(沿对角线),post(半径 corner_d/2+2)圆心
     到两边各留 7mm,外缘 R5 圆角自然包容。
-    窗口过大时沿对角线内收到窗口外,保证 boss 不悬空;
+    窗口过大时沿对角线内收到窗口外,保证定位柱不悬空;
     但不能过远,避免 boss 与底板外缘 R5 圆角重叠而失去突出(到外缘
     直线的距离 ≥ R + r_post + 1.0 安全余量)。
     物理不变量:
@@ -468,8 +466,8 @@ def build_insert(p):
     jig = p["jig_size"]
     total_h = p["insert_height"]
     # 凸台高度 ≡ 底座板厚(不接受独立的 platter_height):
-    # B 面翻转装配时凸台套进底座窗口,两者相等 → 底座顶面与 PCB B 面
-    # 齐平,钢网才能零间隙平贴在板子和底座顶面上
+    # 反向装配时凸台套进 B 面底座窗口;高度与底座板厚相等,使 PCB B 面
+    # 与底座顶面齐平,钢网才能零间隙平贴在板子和底座顶面上
     platter_h = min(p.get("base_height", 4.0), total_h - 1.0)
     plate_h = total_h - platter_h
     pcb_t = p["pcb_thickness"]
@@ -645,10 +643,10 @@ def build_insert(p):
 
     # 6. 4 角定位柱(与托盘一体,空心管结构,免螺丝):
     #    外 Ø9 / 内 Ø5(壁厚 2mm),贯穿托盘全高并向上伸出 cover_h,
-    #    穿过 cover 角孔后与 cover 顶面齐平 —— 装配靠柱/孔配合把三层
-    #    定位固定;空心减材料,柱壁微量弹性也吸收装配应力;
-    #    托盘底面平贴 base(柱不向下伸),除这 4 个柱外无任何螺丝孔,
-    #    周圈螺丝(B 面配置)只在 cover/base 上,不贯穿托盘
+    #    穿过 base / cover 对应角孔后露出 —— 钢网夹紧组件落到 PCB 托盘时
+    #    由柱/孔配合定位;空心减材料,柱壁微量弹性也吸收装配应力;
+    #    托盘作为最下层 PCB 承托件(柱不向下伸),除这 4 个柱外无任何螺丝孔,
+    #    周圈夹紧螺丝只在 cover/base 上,不贯穿托盘
     cover_h = p["top_cover_height"]
     post_h = total_h + cover_h
     r_post = corner_d / 2 + 2.0  # Ø9 柱
@@ -664,7 +662,7 @@ def build_insert(p):
 
 def build_cover(p):
     """A 面顶盖:45° 全高倒角印刷窗口(压钢网边缘,钢网夹在盖板与凸台顶面之间)
-    + 4 角沉头螺丝 + 周圈孔"""
+    + 4 角定位柱过孔 + 周圈夹紧螺丝过孔"""
     jig = p["jig_size"]
     cover_h = p["top_cover_height"]
     r_out = p.get("outer_corner_radius", 5.0)
@@ -695,7 +693,7 @@ def build_cover(p):
     cover = cover - cone
 
     # 3. 4 角定位柱过孔(与 insert 定位柱同心):Ø9.4 全厚贯穿,
-    #    柱穿过后与盖板顶面齐平(免螺丝,柱/孔配合固定三层)
+    #    柱穿过对应孔为装配组件定位(免螺丝)
     positions = corner_screw_positions(window_poly, jig, p)
     r_post_hole = corner_d / 2 + 2.0 + p.get("post_clearance", 0.15)  # 柱 Ø9 + 可配置径向间隙
     for (x, y) in positions:
@@ -713,7 +711,7 @@ def build_cover(p):
 def build_base(p):
     """B 面底座:反向拔模窗口 + 周圈通孔 + 4 角定位柱孔 + (可选) 周圈螺母反沉孔
 
-    周圈通孔贯穿整个 base (z=-0.1..4.1),配合 cover/insert 周圈孔位:
+    周圈通孔贯穿整个 base (z=-0.1..4.1),配合 cover 周圈孔位:
     - 默认 use_hex_nut=True 时,底面开口对应六角螺母沉孔
       (z=0..nut_h+gap),适配机丝螺丝 + 螺母锁紧,装好后底面平整
     - use_hex_nut=False 时,只保留通孔,用户自攻螺丝拧入塑料

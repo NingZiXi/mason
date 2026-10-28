@@ -5,7 +5,7 @@
 推导(尺寸链 —— 全部从 Python get_polys 动态取值,不硬编码):
     slot ±50.15 → platter_half = max(120/2 - 1.5, 50.15) = 58.5
     → window = 58.5 + 0.5 = 59.0
-    → 角螺丝 / 周圈带 / 4 角柱孔径 均按几何动态推导
+    → 角定位柱 / 周圈螺丝带 / 定位柱孔径 均按几何动态推导
 """
 import math
 import sys
@@ -26,7 +26,7 @@ PLATTER_H = max(platter_poly.bounds[2], platter_poly.bounds[3]) # 凸台半宽
 WIN_H = max(window_poly.bounds[2], window_poly.bounds[3])       # 窗口半宽
 jig = p["jig_size"]
 corner_positions = jg.corner_screw_positions(window_poly, jig, p)
-CORNER = corner_positions[0][0]                                  # 角螺丝半宽(沿对角线)
+CORNER = corner_positions[0][0]                                  # 角定位柱半宽(沿对角线)
 BAND = max(jig / 2 - 10, WIN_H + 4)                              # 周圈螺丝带
 # 4 角定位柱孔径 = corner_d/2 + 2.0 + post_clearance(与 jig_generator.build_base 同源;
 # base_params 已显式锚定 0.4,与 App 默认值解耦)

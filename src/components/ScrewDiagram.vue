@@ -30,13 +30,19 @@ const screws = computed(() =>
   store.screwPositions.map(([x, y]) => ({ ...toSvg(x, y), r: 4 }))
 );
 
-const cornerScrews = computed(() => {
+const alignmentPosts = computed(() => {
   const win = windowHalf(c.value);
   const s = Math.max(c.value.jigSize / 2 - 7, win + 3.5);
   return [[s, s], [s, -s], [-s, s], [-s, -s]].map(([x, y]) => ({
     ...toSvg(x, y),
     r: 6.5,
   }));
+});
+
+// Keep the legacy project field while presenting the actual positioning-post OD.
+const cornerPostDiameter = computed({
+  get: () => c.value.cornerScrewD + 4,
+  set: (diameter: number) => { c.value.cornerScrewD = diameter - 4; },
 });
 
 const rect = computed(() => {
@@ -61,7 +67,7 @@ const windowRect = computed(() => {
   };
 });
 
-const screwCount = computed(() => screws.value.length + cornerScrews.value.length);
+const screwCount = computed(() => screws.value.length);
 const windowSize = computed(() => {
   const { hx, hy } = windowHalfXY(c.value);
   return `${(hx * 2).toFixed(1)}×${(hy * 2).toFixed(1)}`;
@@ -127,14 +133,23 @@ const showAdvanced = ref(false);
         </g>
         <g>
           <circle
-            v-for="(s, i) in cornerScrews"
+            v-for="(s, i) in alignmentPosts"
             :key="'c' + i"
             :cx="s.cx"
             :cy="s.cy"
-            :r="s.r"
+            :r="s.r - 1.5"
+            fill="var(--bg-base-default)"
+            stroke="var(--brand-500)"
+            stroke-width="3"
+          />
+          <circle
+            v-for="(s, i) in alignmentPosts"
+            :key="'p' + i"
+            :cx="s.cx"
+            :cy="s.cy"
+            r="1.5"
             fill="var(--brand-500)"
             stroke="var(--bg-base-default)"
-            stroke-width="1.5"
           />
         </g>
       </svg>
@@ -146,7 +161,8 @@ const showAdvanced = ref(false);
         <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <span>
-        <strong>{{ t('screwDiagram.count', { n: screwCount, s: c.screwSpec }) }}</strong>
+        <strong>{{ t('screwDiagram.count', { n: screwCount }) }}</strong>
+        · {{ t('screwDiagram.posts') }}
         {{ t('screwDiagram.jigSize', { x: c.jigSize, y: c.jigSize }) }}
         · {{ t('screwDiagram.windowSize', { s: windowSize }) }}
       </span>
@@ -211,8 +227,8 @@ const showAdvanced = ref(false);
         <div class="field">
           <label class="field-label">{{ t('config.cornerScrewD') }}</label>
           <el-input-number
-            v-model="c.cornerScrewD"
-            :min="3" :max="8" :step="0.5" :precision="1"
+            v-model="cornerPostDiameter"
+            :min="7" :max="12" :step="0.5" :precision="1"
             size="small" style="width: 100%"
           />
         </div>

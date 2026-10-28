@@ -70,7 +70,7 @@ export interface AppConfig {
   /** 周圈螺丝间距(B 面配置;0 = 关闭周圈孔) */
   screwSpacing: number;
   /** 周圈螺丝规格(机丝 GB/T 5277,GB/T 6170 六角螺母);切换后
-   *  自动套用标准孔径/螺母对边/螺母厚度;4 角固定 M5 不联动 */
+   *  自动套用周圈螺丝标准孔径/螺母尺寸;角定位柱尺寸独立设置 */
   screwSpec: "M2.5" | "M3" | "M3.5" | "M4" | "M5";
 
   // 几何细节 (高级用户可调)
@@ -101,7 +101,7 @@ export interface AppConfig {
   pryNotchSides: Array<'up' | 'down' | 'left' | 'right'>;
   /** 取放缺口大小比例(0.5~1.5,1.0=默认) */
   pryNotchScale: number;
-  /** 4 角压钢网螺丝直径(M5) */
+  /** Legacy field: four alignment-post outer diameter is cornerScrewD + 4mm. */
   cornerScrewD: number;
   /** 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.4)
    *  FDM 打印需要较大间隙吸收打印误差;光固化/CNC 可减小到 0.1~0.2mm */
@@ -302,7 +302,7 @@ export function platterHalfFor(c: AppConfig): number {
   return Math.max(hx, hy);
 }
 
-/** 窗口最大半宽(方形近似,用于 jig 尺寸推导/角螺丝钳位) */
+/** 窗口最大半宽(方形近似,用于 jig 尺寸推导/角定位柱钳位) */
 export function windowHalf(c: AppConfig): number {
   const { hx, hy } = windowHalfXY(c);
   return Math.max(hx, hy);
@@ -448,7 +448,7 @@ export const useConfigStore = defineStore("config", () => {
       config.value.stencilSizeY,
       config.value.stencilLip,
       config.value.windowGap,
-      // 螺丝相关参数影响夹紧下限/角柱约束,变化时重算 jigSize
+      // 周圈螺丝与角定位柱尺寸影响夹紧下限/角柱约束,变化时重算 jigSize
       config.value.periScrewD,
       config.value.cornerScrewD,
       config.value.outerCornerRadius,
@@ -588,7 +588,7 @@ export const useConfigStore = defineStore("config", () => {
         params: { m: c.platterMargin },
       });
     }
-    // 角螺丝 boss 被窗口挤出角部(内收保护触发,距角变远)
+    // 角定位柱被窗口挤出角部(内收保护触发,距角变远)
     if (win + 3.5 > c.jigSize / 2 - 7) {
       list.push({ key: "config.warnings.cornerScrewOutside" });
     }
