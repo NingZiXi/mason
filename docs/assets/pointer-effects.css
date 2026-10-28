@@ -1,0 +1,17 @@
+/* Keep native cursors and all hit targets fixed; only artwork/light responds. */
+@media(hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference){
+  .hero::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:0;background:radial-gradient(380px circle at var(--mouse-x,50%) var(--mouse-y,50%),#95bb9b18,transparent 75%);mask-image:linear-gradient(90deg,transparent 35%,#000 72%);opacity:0;transition:opacity .4s ease}
+  .hero[data-pointer-active=true]::after{opacity:1}
+  .hero-inner{z-index:1}
+  .hero-visual{transform:perspective(1100px) translate3d(var(--hero-x,0px),var(--hero-y,0px),0) rotateX(var(--hero-rx,0deg)) rotateY(var(--hero-ry,0deg));transition:transform .15s ease-out}
+  .hero-grid-overlay{translate:var(--grid-x,0px) var(--grid-y,0px);transition:translate .15s ease-out}
+  .mode,.feat,.wf-stage,.steps-v .step{transform:perspective(1000px) rotateX(var(--tilt-x,0deg)) rotateY(var(--tilt-y,0deg));transition:transform .18s ease-out,box-shadow .28s ease,border-color .28s ease,background .28s ease;backface-visibility:hidden}
+  .mode:hover,.mode:focus-within,.feat:hover,.steps-v .step:hover{transform:perspective(1000px) rotateX(var(--tilt-x,0deg)) rotateY(var(--tilt-y,0deg)) translateY(-3px)}
+  .wf-stage:hover{transform:perspective(1000px) rotateX(var(--tilt-x,0deg)) rotateY(var(--tilt-y,0deg)) translateY(-2px)}
+  .mode[data-pointer-active=true],.feat[data-pointer-active=true],.wf-stage[data-pointer-active=true],.steps-v .step[data-pointer-active=true]{border-color:#afc4b2;will-change:transform}
+  .mode::after,.feat::before{background:radial-gradient(240px circle at var(--spot-x,50%) var(--spot-y,50%),#82ac8e12,transparent 72%)}
+  .wf-stage,.steps-v .step{isolation:isolate}
+  .wf-stage::after,.steps-v .step::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;background:radial-gradient(220px circle at var(--spot-x,50%) var(--spot-y,50%),#82ac8e10,transparent 72%);opacity:0;transition:opacity .3s ease}
+  .wf-stage{position:relative}
+  .wf-stage[data-pointer-active=true]::after,.steps-v .step[data-pointer-active=true]::after{opacity:1}
+}

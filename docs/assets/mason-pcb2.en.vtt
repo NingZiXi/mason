@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00.000 --> 00:04.000
+Mason turns one real PCB into two types of solder-paste printing tools.
+
+00:04.000 --> 00:09.000
+PCB2 is 85 × 60 mm, with 347 parsed top-paste pads and 106 bottom-paste pads.
+
+00:09.000 --> 00:14.000
+Use a jig with a metal stencil, or print a standalone PCB stencil for prototyping.
+
+00:14.000 --> 00:17.000
+Top to bottom: A-side cover, metal stencil, B-side base, PCB tray.
+
+00:17.000 --> 00:19.200
+Clamp the metal stencil between the cover and base using the perimeter screws.
+
+00:19.200 --> 00:23.000
+Lower the complete assembly onto the tray's four alignment posts. The corner posts are not screws.
+
+00:23.000 --> 00:28.000
+Check the model, then export STL / STEP. Download the same Gerber example from the website.

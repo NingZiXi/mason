@@ -171,7 +171,7 @@
   /* 背景漂浮光斑 */
   .hero-bg{position:absolute;inset:0;pointer-events:none;overflow:hidden}
   /* Canvas 粒子 */
-  .hero-canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.55}
+  .hero-canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.14}
   .hero-bg::before,
   .hero-bg::after{
     content:"";position:absolute;border-radius:50%;
@@ -185,6 +185,7 @@
     width:320px;height:320px;background:radial-gradient(circle,#5A9B7F 0%,transparent 70%);
     bottom:-100px;left:-60px;animation:drift-2 10s ease-in-out infinite;
   }
+  .hero-bg::before,.hero-bg::after{display:none}
   .hero-grid-overlay{
     position:absolute;inset:0;pointer-events:none;opacity:.25;
     background-image:
@@ -199,6 +200,8 @@
   .hero{perspective:1200px}
   .hero-visual{transform-style:preserve-3d;will-change:transform}
   .hero-visual [data-depth]{will-change:transform}
+  .hero{background:#F7FAF8;perspective:none}
+  .hero-grid-overlay{opacity:.1}
 
   /* feat 卡片 3D tilt */
   .feat{transform-style:preserve-3d;will-change:transform}
@@ -282,6 +285,38 @@
     stroke-dasharray:400;stroke-dashoffset:400;
     animation:dash-draw 1.4s .55s cubic-bezier(.22,1,.36,1) forwards;
   }
+  /* cover 下表面 102+18+160 = 280；钢网 206+74 = 280；
+     钢网厚 2,紧贴 base 上表面 282。组件整体再下降 70,
+     base 下表面 282+18+70 = 托盘上表面 370。 */
+  @keyframes clamp-cover{
+    0%,14%,100%{transform:translateY(0)}
+    32%,84%{transform:translateY(160px)}
+  }
+  @keyframes clamp-mesh{
+    0%,14%,100%{transform:translateY(0)}
+    32%,84%{transform:translateY(74px)}
+  }
+  @keyframes seat-assembly{
+    0%,43%,84%,100%{transform:translateY(0)}
+    54%,72%{transform:translateY(70px)}
+  }
+  /* 三层合拢时标签会互相叠在一起,夹紧阶段先淡出,复位时再出现 */
+  @keyframes label-fade{
+    0%,14%{opacity:1}
+    30%,92%{opacity:0}
+    100%{opacity:1}
+  }
+  .hero-svg .assembly-unit{animation:seat-assembly 9s cubic-bezier(.45,0,.25,1) infinite}
+  .hero-svg .assembly-cover,.hero-svg .assembly-mesh{opacity:1}
+  .hero-svg .assembly-cover{animation:clamp-cover 9s cubic-bezier(.45,0,.25,1) infinite}
+  .hero-svg .assembly-mesh{animation:clamp-mesh 9s cubic-bezier(.45,0,.25,1) infinite}
+  .hero-svg .assembly-base{animation:none;opacity:1}
+  .hero-svg .cover-label{animation:clamp-cover 9s cubic-bezier(.45,0,.25,1) infinite,label-fade 9s ease infinite}
+  .hero-svg .mesh-label{animation:clamp-mesh 9s cubic-bezier(.45,0,.25,1) infinite,label-fade 9s ease infinite}
+  .hero-svg .base-label{animation:label-fade 9s ease infinite}
+  .hero-svg .locator-posts{opacity:.9}
+  .hero h1{letter-spacing:0}
+  .hero-visual{filter:drop-shadow(0 20px 30px rgba(34,48,43,.06))}
 
   /* ---------- Sections ---------- */
   section{padding:88px 0}
@@ -291,8 +326,9 @@
   .sec-head p{color:var(--ink-2);font-size:16px}
 
   /* reveal 滚动入场 */
-  .reveal{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.22,1,.36,1),transform .7s cubic-bezier(.22,1,.36,1)}
-  .reveal.in{opacity:1;transform:translateY(0)}
+  .reveal{opacity:1;translate:0 0}
+  .reveal-ready .reveal{transition:opacity .58s cubic-bezier(.22,1,.36,1) var(--reveal-delay,0ms),translate .58s cubic-bezier(.22,1,.36,1) var(--reveal-delay,0ms),transform .28s ease,box-shadow .28s ease,border-color .28s ease,background .28s ease}
+  .reveal-ready .reveal:not(.in){opacity:0;translate:0 16px;transition:none}
 
   /* steps */
   .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
@@ -467,8 +503,7 @@
     .modes{grid-template-columns:1fr}
     .nav-links .hide-m{display:none}
     section{padding:64px 0}
-    .hero-bg::before{width:240px;height:240px;top:-80px;right:-40px}
-    .hero-bg::after{width:200px;height:200px;bottom:-60px;left:-40px}
+    .hero-bg::before,.hero-bg::after{display:none}
     /* showcase / workflow / bento 响应式 */
     .showcase{grid-template-columns:1fr}
     .shot-list{flex-direction:row;overflow-x:auto;padding-bottom:4px}
@@ -490,6 +525,12 @@
       animation-iteration-count:1 !important;
       transition-duration:.01ms !important;
     }
+    .hero-svg .assembly-cover{animation:none !important;opacity:1;transform:translateY(0)}
+    .hero-svg .assembly-unit{animation:none !important;transform:none}
+    .hero-svg .assembly-mesh{animation:none !important;opacity:1;transform:translateY(0)}
+    .hero-svg .assembly-base{animation:none !important;opacity:1;transform:translateY(0)}
+    .hero-svg .cover-label,.hero-svg .mesh-label,.hero-svg .base-label{animation:none !important;opacity:1;transform:translateY(0)}
+    .hero-svg .locator-posts{animation:none !important;opacity:.9}
   }
 
   /* ============================================================
@@ -697,110 +738,11 @@
   .workflow-grid{
     display:grid;grid-template-columns:1.05fr .95fr;gap:36px;align-items:center;
   }
-  .wf-stage{
-    background:linear-gradient(160deg,#F4F9F6 0%,#EDF3EF 100%);
-    border:1px solid var(--line);border-radius:18px;
-    padding:26px;display:flex;align-items:center;justify-content:center;
-    box-shadow:inset 0 2px 12px rgba(62,125,98,.05);
-  }
-  .wf-svg{width:100%;max-width:460px;height:auto}
   /* 竖排步骤 */
   .steps-v{display:flex;flex-direction:column;gap:18px}
   .steps-v::before{display:none}
   .steps-v .step{display:flex;gap:16px;align-items:flex-start;margin-bottom:0}
   .steps-v .step-num{margin-bottom:0;flex:none}
-
-  /* --- 演示动画元素 --- */
-  .wf-drop{
-    fill:#fff;stroke:var(--green-accent);stroke-width:1.6;stroke-dasharray:7 6;
-    opacity:.9;
-    animation:wf-drop-pulse 10s ease-in-out infinite;
-  }
-  .wf-drop-text{
-    font-size:13px;fill:var(--ink-2);font-weight:600;letter-spacing:1px;
-    animation:wf-droptext 10s ease-in-out infinite;
-  }
-  .wf-file{
-    transform:translate(-90px,100px);
-    animation:wf-file-fly 10s cubic-bezier(.3,.7,.3,1) infinite;
-  }
-  .wf-file-body{fill:#fff;stroke:var(--green);stroke-width:2}
-  .wf-file-tab{fill:var(--green-light);stroke:var(--green);stroke-width:2}
-  .wf-file-label{font-size:15px;font-weight:800;fill:var(--green)}
-  .wf-file-sub{font-size:7.5px;font-weight:700;fill:var(--ink-2);letter-spacing:1px}
-  .wf-board{
-    fill:rgba(90,155,127,.10);stroke:var(--green);stroke-width:2;
-    stroke-dasharray:420;stroke-dashoffset:420;opacity:0;
-    animation:wf-board-draw 10s ease-in-out infinite;
-  }
-  .wf-scan{
-    stroke:var(--green-accent);stroke-width:2;opacity:0;
-    animation:wf-scan-move 10s ease-in-out infinite;
-  }
-  .wf-ring{
-    fill:none;stroke:var(--green);stroke-width:3;stroke-linecap:round;
-    stroke-dasharray:188;stroke-dashoffset:188;opacity:0;
-    transform:rotate(-90deg);transform-origin:230px 120px;
-    animation:wf-ring-spin 10s ease-in-out infinite;
-  }
-  .wf-layer{
-    stroke:#fff;stroke-width:1.5;opacity:0;
-  }
-  .wf-l1{fill:#E3A052;animation:wf-layer-pop 10s ease-in-out infinite}
-  .wf-l2{fill:#69AB8C;animation:wf-layer-pop 10s ease-in-out infinite}
-  .wf-l3{fill:#5D7FA3;animation:wf-layer-pop 10s ease-in-out infinite}
-  .wf-chip{opacity:0}
-  .wf-chip rect{fill:var(--green);stroke:none}
-  .wf-chip text{font-size:11px;font-weight:800;fill:#fff;letter-spacing:.5px}
-  .wf-c1{animation:wf-chip-pop 10s ease-in-out infinite}
-  .wf-c2{animation:wf-chip-pop 10s ease-in-out infinite}
-  .wf-c3{animation:wf-chip-pop 10s ease-in-out infinite}
-
-  @keyframes wf-file-fly{
-    0%{transform:translate(-90px,100px);opacity:0}
-    6%{opacity:1}
-    18%,26%{transform:translate(198px,80px);opacity:1}
-    32%,100%{transform:translate(198px,80px);opacity:0}
-  }
-  @keyframes wf-drop-pulse{
-    0%,16%{stroke:var(--green-accent);stroke-width:1.6;opacity:.9}
-    20%,30%{stroke:var(--green);stroke-width:3;opacity:.9}
-    38%,86%{stroke:var(--green-accent);stroke-width:1.6;opacity:0}
-    94%,100%{stroke:var(--green-accent);stroke-width:1.6;opacity:.9}
-  }
-  @keyframes wf-droptext{
-    0%,30%{opacity:.9}
-    36%,92%{opacity:0}
-    98%,100%{opacity:.9}
-  }
-  @keyframes wf-board-draw{
-    0%,30%{stroke-dashoffset:420;opacity:0}
-    34%{opacity:1}
-    46%,72%{stroke-dashoffset:0;opacity:1}
-    82%,100%{stroke-dashoffset:0;opacity:0}
-  }
-  @keyframes wf-scan-move{
-    0%,32%{transform:translateY(0);opacity:0}
-    36%{opacity:.8}
-    46%{transform:translateY(56px);opacity:.8}
-    50%,100%{transform:translateY(56px);opacity:0}
-  }
-  @keyframes wf-ring-spin{
-    0%,46%{stroke-dashoffset:188;opacity:0}
-    50%{opacity:.9}
-    62%{stroke-dashoffset:0;opacity:.9}
-    70%,100%{stroke-dashoffset:0;opacity:0}
-  }
-  @keyframes wf-layer-pop{
-    0%,60%{opacity:0;transform:translateY(14px)}
-    68%,82%{opacity:1;transform:translateY(0)}
-    92%,100%{opacity:0;transform:translateY(0)}
-  }
-  @keyframes wf-chip-pop{
-    0%,72%{opacity:0;transform:translateX(14px)}
-    78%,88%{opacity:1;transform:translateX(0)}
-    96%,100%{opacity:0;transform:translateX(0)}
-  }
 
   /* ============================================================
      Features Bento
@@ -888,7 +830,151 @@
     box-shadow:0 14px 36px rgba(62,125,98,.18);
   }
   .dl-card.is-reco .os-btn{box-shadow:0 4px 14px rgba(62,125,98,.35)}
+  /* PCB2 walkthrough: native steps and lazy CAD rendering. */
+  .story-sec{padding:76px 0 80px;background:#F4F5F0;border-bottom:1px solid var(--line);scroll-margin-top:64px}
+  .story-heading{display:flex;align-items:end;justify-content:space-between;gap:32px;margin-bottom:28px}
+  .story-heading h2{font-size:clamp(25px,3vw,35px);line-height:1.4;margin-top:10px;letter-spacing:-.5px}
+  .story-heading>p{max-width:310px;color:var(--ink-2);font-size:14px;line-height:1.8}
+  .story-video{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;border:1px solid #CFD9D0;border-radius:12px;background:#F4F5F0;box-shadow:0 20px 50px #203D3410}
+  .story-video:focus-visible,.sample-download:focus-visible{outline:3px solid var(--green);outline-offset:5px}
+  .sample-strip{display:flex;justify-content:space-between;align-items:center;gap:24px;margin-top:26px;padding:22px 0;border-bottom:1px solid #D5DED5}
+  .sample-info{display:flex;align-items:center;gap:20px;min-width:0}
+  .sample-stamp{flex:none;font-size:12px;font-weight:700;letter-spacing:1px;color:var(--green);padding:10px;border:1px solid #B3C7B8;border-radius:4px}
+  .sample-info h3{font-size:16px;font-weight:650;margin-bottom:3px}
+  .sample-info p{font-size:13px;color:var(--ink-2);line-height:1.7}
+  .sample-download{flex:none;display:inline-flex;gap:12px;align-items:center;background:var(--ink);color:white;padding:12px 20px;border-radius:7px;font-size:14px;font-weight:600;transition:background .2s,transform .2s}
+  .sample-download:hover{background:var(--green);transform:translateY(-2px)}
+  .story-transcript{margin:16px 0 0;background:none;border:0;border-radius:0}
+  .story-transcript summary{padding:5px 0;font-size:13px;color:var(--ink-2);gap:15px;justify-content:flex-start}
+  .story-transcript summary::after{margin-left:0}
+  .story-transcript ol{padding:14px 0 8px 22px;font-size:14px;color:var(--ink-2);line-height:1.9}
+  .story-transcript li+li{margin-top:7px}
+  .story-walk{border:1px solid #CFD9D0;background:#FAFBF7;border-radius:14px;overflow:hidden}
+  .story-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-bottom:1px solid #D5DED5;padding:0 20px;gap:12px}
+  .story-tabs button{font:inherit;color:var(--ink-2);background:none;border:0;border-bottom:2px solid transparent;padding:19px 4px 17px;display:flex;gap:10px;align-items:center;justify-content:center;cursor:pointer;font-size:13px}
+  .story-tabs button b{font:500 11px ui-monospace,monospace;opacity:.65}
+  .story-tabs button[aria-selected=true]{color:var(--green-active);border-bottom-color:var(--green);font-weight:650}
+  .story-tabs button:hover{color:var(--green)}
+  .story-panel{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:475px}
+  .story-copy{padding:40px 0 30px 32px;display:flex;flex-direction:column;align-items:start;min-width:0}
+  .story-number{font:12px ui-monospace,monospace;color:var(--green);letter-spacing:2px;margin-bottom:20px}
+  .story-copy h3{font-size:29px;line-height:1.5;letter-spacing:-.6px;font-weight:650;max-width:290px;margin-bottom:16px}
+  .story-copy>p{font-size:14px;color:var(--ink-2);line-height:1.95;margin-bottom:22px}
+  .story-copy .story-fact{margin-top:auto;font-size:11px;letter-spacing:.15px;color:var(--green-active);padding-top:24px;border-top:1px solid #D5DED5;width:100%}
+  .story-copy .sample-download{padding:10px 16px;margin:0 0 24px;font-size:13px}
+  .story-visual{position:relative;display:flex;flex-direction:column;min-width:0;touch-action:pan-y;background:radial-gradient(ellipse at 55% 45%,#EDF3EA00,#E4ECE333)}
+  .story-stage-tag{position:absolute;top:24px;left:30px;font:10px ui-monospace,monospace;letter-spacing:1.2px;color:#698071;z-index:1;pointer-events:none}
+  .story-model{height:388px;width:100%;position:relative;margin-top:18px}
+  .story-model canvas{display:block;width:100%;height:100%}
+  #pcb2-story:not([data-ready=true]) .story-model{visibility:hidden}
+  .story-callout-lines{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;transition:opacity .24s}
+  .story-callout-lines path{fill:none;stroke:#779A87;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;opacity:.75}
+  .story-callout-lines circle{fill:#FAFBF7;stroke:#54896F;stroke-width:1.3}
+  .story-callout{position:absolute;left:20px;top:25px;max-width:190px;padding:10px 12px;border-left:2px solid #8CAC98;background:linear-gradient(110deg,#FAFBF7EF,#FAFBF7C2);border-radius:0 5px 5px 0;pointer-events:none;transition:opacity .24s}
+  .story-callout>span:first-child{display:block;font:9px ui-monospace,monospace;letter-spacing:1.4px;color:#708777;margin-bottom:6px}
+  .story-callout b{display:block;font-size:12px;line-height:1.5;font-weight:600;color:var(--green-active)}
+  .story-callout>span:last-child{display:block;font-size:9px;line-height:1.6;color:#65796C;margin-top:4px}
+  .story-model[data-transitioning=true] .story-callout,.story-model[data-transitioning=true] .story-callout-lines{opacity:0}
+  .story-legend>span{transition:opacity .3s,background .3s;padding:4px 6px;border-radius:4px;opacity:.6}
+  .story-legend>span[data-active=true]{opacity:1;background:#E5EDE2;color:var(--green-active)}
+  .story-fallback{position:absolute;inset:30px 15px 60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;pointer-events:none}
+  .story-fallback p{font-size:12px;color:var(--ink-2);max-width:85%;text-align:center}
+  .story-legend{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;position:absolute;bottom:77px;left:12px;right:12px;font-size:10px;color:#5D7164}
+  .story-legend>span{display:flex;gap:5px;align-items:center}.story-legend i{width:6px;height:6px;border-radius:1px}
+  .story-legend .green{background:#5A9B7F}.story-legend .blue{background:#4C6F94}.story-legend .silver{background:#96A9A1}.story-legend .amber{background:#D9913D}
+  .story-modes-labels{display:grid;grid-template-columns:1fr 1fr;position:absolute;left:5%;right:5%;bottom:78px;text-align:center;font-size:11px;color:var(--green-active);gap:12px}
+  .story-parse-info{display:flex;gap:12px;flex-wrap:wrap;margin:0 0 22px;width:100%}
+  .story-parse-info div{display:flex;justify-content:space-between;gap:14px;width:100%;font-size:11px;color:var(--ink-2);padding-bottom:7px;border-bottom:1px solid #D5DED5}
+  .story-parse-info b{font:11px ui-monospace,monospace;color:var(--green)}
+  .story-status{margin:auto 20px 20px;text-align:center;font-size:12px;color:var(--green-active);min-height:21px}
+  .story-controls{display:flex;justify-content:space-between;gap:20px;align-items:center;padding:16px 28px;border-top:1px solid #D5DED5;background:#F3F6F0}
+  .story-nav{display:flex;gap:12px;margin-left:auto}
+  .story-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;font:500 12px var(--font);background:#FAFBF7;border:1px solid #C4D2C6;color:var(--green-active);border-radius:5px;cursor:pointer;padding:8px 12px;min-height:35px}
+  .story-button:hover:not(:disabled){border-color:var(--green);background:#E7EEE4}
+  .story-button:disabled{opacity:.35;cursor:default}
+  .story-next{background:var(--green);color:white;border-color:var(--green)}
+  .story-next:hover:not(:disabled){background:var(--green-active);color:white}
+  .story-assembly-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .story-phase-buttons{display:flex;gap:2px;padding:3px;border:1px solid #CEDACF;border-radius:5px}
+  .story-phase-buttons button{font:11px var(--font);padding:5px 8px;border:0;background:none;color:var(--ink-2);border-radius:3px;cursor:pointer}
+  .story-phase-buttons button[aria-pressed=true]{color:var(--green-active);background:#DDE8D9}
+  .story-timeline{height:2px;background:#DFE7DC}.story-timeline span{height:100%;display:block;background:var(--green);width:0}
+  .story-film-details{border:0;background:none;border-radius:0;margin:18px 0 0}
+  .story-film-details>summary{padding:8px 0;font-size:13px;color:var(--green-active);justify-content:flex-start;gap:14px}
+  .story-film-details>summary::after{margin-left:0}
+  .story-film-details video{margin-top:16px}
+  .story-walk [hidden]{display:none!important}
+  .story-walk button:focus-visible{outline:3px solid var(--green);outline-offset:-3px}
+  /* Fine interaction feedback: a shared pace, soft edges and small travel. */
+  .btn,.sample-download,.story-button,.os-btn,.story-phase-buttons button{transition:background .22s ease,border-color .22s ease,color .22s ease,box-shadow .28s ease,transform .22s cubic-bezier(.22,.61,.36,1)}
+  .btn-primary:hover{animation:none;box-shadow:0 7px 20px #315F4B2B}
+  .button-arrow,#hero-primary>svg,.sample-download>[aria-hidden]{display:inline-block;flex:none;transition:transform .25s cubic-bezier(.22,.61,.36,1)}
+  .mode{border-color:#D9E2D8;box-shadow:0 2px 6px #203D3403;isolation:isolate}
+  .mode>*{position:relative;z-index:1}
+  .mode::before{content:"";position:absolute;top:0;left:24px;right:24px;height:1px;background:linear-gradient(90deg,transparent,#7AA48D,transparent);opacity:0;transition:opacity .28s ease;pointer-events:none}
+  .mode::after,.feat::before{content:"";position:absolute;inset:0;background:radial-gradient(320px circle at var(--spot-x,50%) var(--spot-y,35%),#5A9B7F12,transparent 70%);opacity:0;transition:opacity .28s ease;pointer-events:none;z-index:0}
+  .mode-badge{transition:transform .28s ease,background .28s ease}
+  .feat{will-change:auto;transform-style:flat}
+  .mode:hover,.feat:hover{transform:none}
+  .btn:focus-visible,.sample-download:focus-visible,.os-btn:focus-visible{outline:3px solid #7BA88C;outline-offset:4px}
+  .btn:active,.sample-download:active,.os-btn:active,.story-button:not(:disabled):active,.story-phase-buttons button:not(:disabled):active{transform:translateY(1px) scale(.985);box-shadow:0 1px 3px #203D3414}
+  @media(hover:hover) and (pointer:fine){
+    .mode:hover,.mode:focus-within{transform:translateY(-3px);border-color:#A3BDA9;box-shadow:0 14px 32px #203D3410,0 3px 8px #203D3405}
+    .mode:hover::before,.mode[data-pointer-active=true]::after,.feat[data-pointer-active=true]::before{opacity:1}
+    .mode:hover .mode-badge{transform:translateX(2px)}
+    .feat:hover{transform:translateY(-3px)}
+    #hero-primary:hover>svg,.sample-download:hover>[aria-hidden],#story-download:hover>.button-arrow{transform:translateY(2px)}
+    .story-next:hover:not(:disabled) .button-arrow{transform:translateX(3px)}
+    #story-prev:hover:not(:disabled) .button-arrow{transform:translateX(-3px)}
+    .story-button:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 10px #203D340D}
+    .story-button:not(:disabled):active,.mode:active{transform:translateY(1px)}
+  }
+  /* Sparse drawing references stay behind the model; dimensions use its real projection. */
+  .story-model{isolation:isolate}
+  .story-model canvas{position:relative;z-index:1}
+  .story-callout-lines{z-index:2}.story-callout{z-index:3}
+  .story-reference-frame{position:absolute;inset:27px 20px 20px;pointer-events:none;z-index:0;opacity:.6}
+  .story-reference-frame::before{content:"";position:absolute;top:0;left:0;right:0;height:5px;background:repeating-linear-gradient(90deg,#8FA692 0 1px,transparent 1px 16px);opacity:.38;mask-image:linear-gradient(90deg,#000,transparent 40%,transparent 60%,#000)}
+  .story-reference-frame::after{content:"";position:absolute;top:0;left:0;bottom:0;width:5px;background:repeating-linear-gradient(0deg,#8FA692 0 1px,transparent 1px 16px);opacity:.25;mask-image:linear-gradient(#000,transparent 45%,#000)}
+  .story-reference-frame>i{position:absolute;width:10px;height:10px;border-color:#9DB29F;border-style:solid;border-width:0;opacity:.65}
+  .story-reference-frame>i:nth-child(1){left:0;top:0;border-left-width:1px;border-top-width:1px}.story-reference-frame>i:nth-child(2){right:0;top:0;border-right-width:1px;border-top-width:1px}
+  .story-reference-frame>i:nth-child(3){left:0;bottom:0;border-left-width:1px;border-bottom-width:1px}.story-reference-frame>i:nth-child(4){right:0;bottom:0;border-right-width:1px;border-bottom-width:1px}
+  .story-reference-frame>span{position:absolute;bottom:-2px;left:17px;font:8px ui-monospace,monospace;letter-spacing:1.5px;color:#73927D;background:#FAFBF7;padding:0 5px}
+  .story-dimensions{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;overflow:visible;transition:opacity .2s ease}
+  .story-dimensions path{fill:none;stroke:#88A28D;stroke-width:.8;opacity:.8;vector-effect:non-scaling-stroke}
+  .story-dimensions text{font:10px ui-monospace,monospace;fill:#507C61;text-anchor:middle;dominant-baseline:middle;paint-order:stroke;stroke:#FAFBF7;stroke-width:5px;stroke-linejoin:round}
+  .story-model[data-transitioning=true] .story-dimensions{opacity:0}
+  @media(prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}.reveal-ready .reveal:not(.in){opacity:1;translate:none}
+    .mode:hover,.feat:hover,.btn:hover,.sample-download:hover,.story-button:hover:not(:disabled),.btn:active,.sample-download:active,.os-btn:active,.story-button:not(:disabled):active{transform:none}
+    .button-arrow,#hero-primary>svg,.sample-download>[aria-hidden],.mode-badge{transform:none!important}
+    .story-dimensions{transition:none}
+  }
+  @media(prefers-reduced-motion:reduce){.story-callout,.story-callout-lines,.story-legend>span{transition:none}}
+  @media(max-width:950px){.story-panel{grid-template-columns:290px minmax(0,1fr)}.story-copy{padding:32px 0 24px 24px}.story-copy h3{font-size:25px}.story-controls{padding:14px 20px;gap:12px;flex-wrap:wrap}.story-assembly-controls{width:100%}.story-nav{margin-left:auto}.story-tabs{gap:3px;padding:0 12px}.story-tabs button{gap:6px;font-size:12px}}
+  @media(max-width:700px){
+    .story-sec{padding:48px 0}.story-heading{display:block}.story-heading>p{max-width:none;margin-top:14px}
+    .sample-strip{align-items:stretch;flex-direction:column;gap:18px}.sample-download{justify-content:center}
+    .sample-info{gap:12px;align-items:start}.story-video{border-radius:7px}
+    .story-panel{display:flex;flex-direction:column;min-height:0}
+    .story-visual{order:-1}.story-model{height:290px;margin-top:22px}.story-stage-tag{left:20px;top:16px;font-size:9px}
+    .story-copy{padding:8px 22px 22px;min-height:235px}.story-copy h3{font-size:25px;max-width:none;margin-bottom:10px}
+    .story-number{margin-bottom:9px;font-size:10px}.story-copy>p{font-size:13px;line-height:1.9;margin-bottom:14px}
+    .story-copy .story-fact{font-size:10px;padding-top:12px}.story-status{margin:0 12px 15px;font-size:11px}
+    .story-legend{bottom:46px;gap:10px;font-size:9px}.story-modes-labels{bottom:43px;font-size:10px}
+    .story-callout{top:9px;left:16px;padding:6px 9px;max-width:245px;border-left-width:1px}.story-callout>span:first-child{font-size:8px;margin-bottom:2px}.story-callout b{font-size:10px}.story-callout>span:last-child{font-size:8px;margin-top:2px}
+    .story-reference-frame{inset:22px 12px 16px}.story-reference-frame>span{font-size:7px;letter-spacing:1px}.story-dimensions text{font-size:9px}
+    .story-legend{gap:3px;left:5px;right:5px}.story-legend>span{padding:3px 4px;gap:3px}
+    .story-tabs{gap:0;padding:0 6px}.story-tabs button{flex-direction:column;gap:3px;font-size:10px;padding:13px 1px;line-height:1.5}.story-tabs button b{font-size:9px}
+    .story-controls{padding:14px;gap:12px}.story-nav{width:100%;justify-content:space-between}.story-button{min-height:40px;font-size:12px}
+    .story-assembly-controls{justify-content:space-between;gap:8px}.story-phase-buttons{width:100%;justify-content:space-around;order:1}.story-phase-buttons button{padding:8px 12px;font-size:12px}
+    .story-parse-info{margin-bottom:14px}.story-fallback{inset:32px 15px 42px}
+  }
 </style>
+<link rel="stylesheet" href="assets/site-extras.css" />
+<link rel="stylesheet" href="assets/workflow.css" />
+<link rel="stylesheet" href="assets/visual-refinement.css" />
+<link rel="stylesheet" href="assets/pointer-effects.css" />
 </head>
 <body>
 <!-- 滚动进度条 -->
@@ -947,6 +1033,7 @@
           <span id="hero-primary-label">免费下载</span>
         </a>
         <a class="btn btn-ghost" href="https://github.com/NingZiXi/mason" target="_blank" rel="noopener" data-i18n="hero.source">查看源码</a>
+        <a class="btn btn-ghost" href="#example" data-i18n="story.watch">一步步了解 ↗</a>
       </div>
       <div class="os-row" id="os-row">
         <a class="os-chip" data-os="windows" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64-setup.exe" target="_blank" rel="noopener">
@@ -988,7 +1075,7 @@
         <rect x="6" y="6" width="508" height="408" rx="16" fill="url(#grid)" opacity=".5"/>
         <circle cx="260" cy="210" r="200" fill="url(#softGlow)"/>
 
-        <!-- ========== 左侧:夹具装配爆炸图,从下到上为托盘/底座/钢网/顶盖 ========== -->
+        <!-- ========== 左侧:装配顺序为顶盖/钢网/底座,夹紧后整体落到托盘定位柱上 ========== -->
         <!-- 模式标签 -->
         <g class="part part-tag" data-depth="-0.28" font-family="inherit" font-size="10" font-weight="700" fill="#5A6B63" letter-spacing="1">
           <rect x="18" y="18" width="110" height="20" rx="10" fill="#EDF2F7"/>
@@ -999,33 +1086,8 @@
           <line class="dash-line" x1="100" y1="72" x2="100" y2="414"/>
           <line class="dash-line" x1="250" y1="72" x2="250" y2="414"/>
         </g>
-        <!-- cover 顶盖 (top) -->
-        <g class="part part-top float-y" filter="url(#glow)" data-depth="-0.48" style="transform-origin:175px 110px">
-          <polygon points="100,102 175,68 250,102 175,136" fill="#E3A052"/>
-          <polygon points="100,102 175,136 175,154 100,120" fill="#D9913D"/>
-          <polygon points="175,136 250,102 250,120 175,154" fill="#B87530"/>
-          <polygon points="138,102 175,84 212,102 175,120" fill="#FDFEFD"/>
-        </g>
-        <!-- 金属钢网:位于 A 面顶盖下方、B 面底座上方 -->
-        <g class="part part-mid float-mid" data-depth="-0.30" style="transform-origin:175px 210px">
-          <polygon points="112,206 175,178 238,206 175,234" fill="#C9D8D0" stroke="#5A9B7F" stroke-width="1.4"/>
-          <polygon points="126,206 175,184 224,206 175,228" fill="#FDFEFD"/>
-          <circle cx="144" cy="203" r="2" fill="#5A9B7F"/><circle cx="159" cy="211" r="2" fill="#5A9B7F"/>
-          <circle cx="190" cy="197" r="2" fill="#5A9B7F"/><circle cx="205" cy="205" r="2" fill="#5A9B7F"/>
-        </g>
-        <!-- B 面底座:位于钢网下方、PCB 托盘上方;四角孔供定位柱穿过 -->
-        <g class="part part-bot float-fast" filter="url(#glow)" data-depth="-0.18" style="transform-origin:175px 290px">
-          <polygon points="100,282 175,248 250,282 175,316" fill="#5D7FA3"/>
-          <polygon points="100,282 175,316 175,334 100,300" fill="#4C6F94"/>
-          <polygon points="175,316 250,282 250,300 175,334" fill="#3D5A79"/>
-          <polygon points="128,282 175,260 222,282 175,304" fill="#FDFEFD" opacity=".92"/>
-          <g fill="#3D5A79">
-            <circle cx="112" cy="287" r="2.5"/><circle cx="238" cy="287" r="2.5"/>
-            <circle cx="140" cy="304" r="2.5"/><circle cx="210" cy="304" r="2.5"/>
-          </g>
-        </g>
-        <!-- PCB 托盘位于最下方,四角空心柱用于落位而非螺丝 -->
-        <g class="part part-mid float-mid" data-depth="-0.36" style="transform-origin:175px 378px">
+        <!-- PCB 托盘固定在后景,四角一体定位柱用于夹紧组件落位 -->
+        <g class="pcb-tray" style="transform-origin:175px 378px">
           <polygon points="100,370 175,336 250,370 175,404" fill="#69AB8C"/>
           <polygon points="100,370 175,404 175,412 100,378" fill="#5A9B7F"/>
           <polygon points="175,404 250,370 250,378 175,412" fill="#487E66"/>
@@ -1033,13 +1095,47 @@
           <circle cx="112" cy="370" r="4" fill="#FDFEFD" stroke="#5A9B7F" stroke-width="2"/>
           <circle cx="238" cy="370" r="4" fill="#FDFEFD" stroke="#5A9B7F" stroke-width="2"/>
         </g>
+        <!-- 定位柱高度控制在底座厚度内:落位后完全没入底座,不再从组件后方冒出 -->
+        <g class="locator-posts" fill="none" stroke-linecap="round">
+          <path d="M112 358 V370 M175 324 V336 M238 358 V370 M175 392 V404" stroke="#3E7D62" stroke-width="8"/>
+          <path d="M112 358 V370 M175 324 V336 M238 358 V370 M175 392 V404" stroke="#A8D0BB" stroke-width="2"/>
+        </g>
+        <!-- 三层先夹紧,再由同一个父组带动落位,保持相对位置不变 -->
+        <g class="assembly-unit">
+        <!-- B 面底座:位于钢网下方、PCB 托盘上方;四角定位孔沿柱落位 -->
+        <g class="part assembly-base" style="transform-origin:175px 290px">
+          <polygon points="100,282 175,248 250,282 175,316" fill="#5D7FA3"/>
+          <polygon points="100,282 175,316 175,334 100,300" fill="#4C6F94"/>
+          <polygon points="175,316 250,282 250,300 175,334" fill="#3D5A79"/>
+          <polygon points="128,282 175,260 222,282 175,304" fill="#FDFEFD" opacity=".92"/>
+          <g fill="#3D5A79">
+            <circle cx="112" cy="282" r="3"/><circle cx="175" cy="260" r="3"/>
+            <circle cx="238" cy="282" r="3"/><circle cx="175" cy="304" r="3"/>
+          </g>
+        </g>
+        <!-- 金属钢网:位于 A 面顶盖下方、B 面底座上方 -->
+        <g class="part assembly-mesh" style="transform-origin:175px 210px">
+          <polygon points="112,206 175,234 238,206 238,208 175,236 112,208" fill="#879B94"/>
+          <polygon points="112,206 175,178 238,206 175,234" fill="#C9D8D0" stroke="#5A9B7F" stroke-width="1.4"/>
+          <polygon points="126,206 175,184 224,206 175,228" fill="#FDFEFD"/>
+          <circle cx="144" cy="203" r="2" fill="#5A9B7F"/><circle cx="159" cy="211" r="2" fill="#5A9B7F"/>
+          <circle cx="190" cy="197" r="2" fill="#5A9B7F"/><circle cx="205" cy="205" r="2" fill="#5A9B7F"/>
+        </g>
+        <!-- A 面顶盖,从上方压紧钢网 -->
+        <g class="part assembly-cover" style="transform-origin:175px 110px">
+          <polygon points="100,102 175,68 250,102 175,136" fill="#E3A052"/>
+          <polygon points="100,102 175,136 175,154 100,120" fill="#D9913D"/>
+          <polygon points="175,136 250,102 250,120 175,154" fill="#B87530"/>
+          <polygon points="138,102 175,84 212,102 175,120" fill="#FDFEFD"/>
+        </g>
         <!-- 部件标注 -->
         <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
-          <text x="268" y="110" data-i18n="hero.svgCover">cover 顶盖</text>
-          <text x="268" y="210" data-i18n="hero.svgStencil">金属钢网</text>
-          <text x="268" y="300" data-i18n="hero.svgBase">base 底座 · B 面</text>
-          <text x="268" y="380" data-i18n="hero.svgInsert">PCB 托盘 · 定位柱</text>
+          <text class="cover-label" x="268" y="110" data-i18n="hero.svgCover">cover 顶盖</text>
+          <text class="mesh-label" x="268" y="210" data-i18n="hero.svgStencil">金属钢网</text>
+          <text class="base-label" x="268" y="300" data-i18n="hero.svgBase">base 底座 · B 面</text>
         </g>
+        </g>
+        <text x="268" y="412" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600" data-i18n="hero.svgInsert">PCB 托盘 · 定位柱</text>
 
         <!-- ========== 右侧:钢网模式一体式钢网 ========== -->
         <g class="part part-tag">
@@ -1080,15 +1176,99 @@
         </g>
         <!-- 一体式钢网标注 -->
         <g class="part part-label" font-family="inherit" font-size="10.5" fill="#5A6B63" font-weight="600">
-          <text x="530" y="226" data-i18n="hero.svgStencilLabel">一体式 PCB 钢网</text>
+          <text x="430" y="330" text-anchor="middle" data-i18n="hero.svgStencilLabel">一体式 PCB 钢网</text>
         </g>
         <g class="part part-line" stroke="#E07A3C" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".6">
-          <path class="dash-line" d="M506 230 L530 226"/>
+          <path class="dash-line" d="M474 276 L474 310 L438 322"/>
         </g>
       </svg>
     </div>
   </div>
 </header>
+
+<!-- ============ Real PCB2 explainer and downloadable Gerber example ============ -->
+<section id="example" class="story-sec">
+  <div class="wrap">
+    <div class="story-heading">
+      <div><div class="sec-tag">ONE BOARD. TWO WAYS.</div><h2 id="pcb2-film-heading" data-i18n="story.h2">用一块真实的板子，看懂 Mason</h2></div>
+      <p data-i18n="story.sub">从导入板子到夹具落位，按你的节奏一步步探索。手机上也可以左右滑动切换。</p>
+    </div>
+    <div class="story-walk" id="pcb2-story" data-step="0">
+      <div class="story-tabs" role="tablist" aria-label="讲解步骤">
+        <button id="story-tab-0" role="tab" type="button" aria-controls="story-panel" aria-selected="true" data-story-step="0"><b>01</b><span>导入板子</span></button>
+        <button id="story-tab-1" role="tab" type="button" aria-controls="story-panel" aria-selected="false" tabindex="-1" data-story-step="1"><b>02</b><span>解析焊盘</span></button>
+        <button id="story-tab-2" role="tab" type="button" aria-controls="story-panel" aria-selected="false" tabindex="-1" data-story-step="2"><b>03</b><span>选择模式</span></button>
+        <button id="story-tab-3" role="tab" type="button" aria-controls="story-panel" aria-selected="false" tabindex="-1" data-story-step="3"><b>04</b><span>夹紧与落位</span></button>
+        <button id="story-tab-4" role="tab" type="button" aria-controls="story-panel" aria-selected="false" tabindex="-1" data-story-step="4"><b>05</b><span>开始体验</span></button>
+      </div>
+      <div class="story-panel" id="story-panel" role="tabpanel" aria-labelledby="story-tab-0">
+        <div class="story-copy">
+          <div class="story-number" id="story-number">01 / 05</div>
+          <h3 id="story-title">从你的板子开始。</h3>
+          <p id="story-description">这块 85 × 60 mm 的 PCB2 就是本次示例。把 Gerber ZIP 拖进 Mason，让真实板框成为模型的起点。</p>
+          <div class="story-parse-info" id="story-parse-info" hidden>
+            <div><b>.GKO</b><span data-layer-label>板框轮廓</span><span id="story-ready">已识别</span></div>
+            <div><b>.GTP</b><span data-layer-label>顶层锡膏</span><span>347</span></div>
+            <div><b>.GBP</b><span data-layer-label>底层锡膏</span><span>106</span></div>
+          </div>
+          <a id="story-download" class="sample-download" href="assets/examples/mason-pcb2-gerber.zip" download="Mason-PCB2-Gerber.zip" hidden><span>下载同款 Gerber</span><span class="button-arrow" aria-hidden="true">↓</span></a>
+          <div id="story-note" class="story-fact">真实示例 · 85 × 60 mm</div>
+        </div>
+        <div class="story-visual" id="story-visual" role="group" aria-label="PCB2 模型分步讲解">
+          <div class="story-stage-tag" id="story-stage-tag">PCB2 / YOUR STARTING POINT</div>
+          <div class="story-model" id="story-model">
+            <div class="story-reference-frame" aria-hidden="true"><i></i><i></i><i></i><i></i><span>PCB2 / GERBER</span></div>
+            <svg class="story-dimensions" id="story-dimensions" aria-hidden="true" hidden><g><path id="story-width-line"/><text id="story-width-label">85 mm</text></g><g><path id="story-height-line"/><text id="story-height-label">60 mm</text></g></svg>
+            <svg class="story-callout-lines" id="story-callout-lines" aria-hidden="true" hidden><path id="story-leader"/><circle id="story-guide-dot" r="3"/></svg>
+            <div class="story-callout" id="story-callout" hidden><span id="story-callout-tag">01 / CLAMP</span><b id="story-callout-title">三层组件，周圈夹紧</b><span id="story-callout-detail">A 面顶盖 · 金属钢网 · B 面底座</span></div>
+          </div>
+          <div class="story-fallback" id="story-fallback" role="status"><p id="story-fallback-note">正在准备模型…</p></div>
+          <div class="story-modes-labels" id="story-modes-labels" hidden><span id="story-jig-label">金属钢网夹具</span><span id="story-stencil-label">一体式打印钢网</span></div>
+          <div class="story-legend" id="story-legend" hidden><span><i class="green"></i><span data-part-label>PCB 托盘</span></span><span><i class="blue"></i><span data-part-label>B 面底座</span></span><span><i class="silver"></i><span data-part-label>金属钢网</span></span><span><i class="amber"></i><span data-part-label>A 面顶盖</span></span></div>
+          <div class="story-status" id="story-status" aria-live="polite" aria-atomic="true">真实示例 · 85 × 60 mm</div>
+        </div>
+      </div>
+      <div class="story-timeline" id="story-timeline" aria-hidden="true" hidden><span id="story-progress"></span></div>
+      <div class="story-controls">
+        <div class="story-assembly-controls" id="story-assembly-controls" hidden>
+          <button class="story-button" id="story-replay" type="button" disabled>重播装配</button>
+          <button class="story-button" id="story-pause" type="button" disabled>暂停</button>
+          <div class="story-phase-buttons"><button type="button" data-phase="0" aria-pressed="true">分解</button><button type="button" data-phase="0.56" aria-pressed="false">夹紧</button><button type="button" data-phase="1" aria-pressed="false">落位</button></div>
+        </div>
+        <div class="story-nav"><button class="story-button" id="story-prev" type="button" disabled><span class="button-arrow" aria-hidden="true">←</span><span data-nav-label>上一步</span></button><button class="story-button story-next" id="story-next" type="button"><span data-nav-label>下一步</span><span class="button-arrow" aria-hidden="true">→</span></button></div>
+      </div>
+    </div>
+    <div class="story-detail-entry"><p id="detail-error" hidden data-extra="failed">细节预览暂不可用，请稍后重试。</p><button class="story-button" id="story-detail-open" type="button" aria-haspopup="dialog" aria-controls="story-detail" data-extra="details">查看模型细节 ↗</button></div>
+    <dialog id="story-detail" class="detail-dialog" aria-labelledby="detail-title" aria-describedby="detail-note detail-hint">
+      <div class="detail-heading"><h3 id="detail-title" data-extra="detailTitle">从细节，看懂结构</h3><button class="story-button" type="button" data-detail-close data-extra="close" autofocus>关闭</button></div>
+      <div class="detail-presets" role="group" aria-label="Model detail presets"><button class="story-button" type="button" data-preset="posts" data-extra="posts" aria-pressed="false">四角定位柱</button><button class="story-button" type="button" data-preset="clamp" data-extra="clamp" aria-pressed="false">三层夹紧</button><button class="story-button" type="button" data-preset="apertures" data-extra="apertures" aria-pressed="false">焊盘开孔</button></div>
+      <div class="detail-stage"><div class="detail-model" id="detail-model"></div><p id="detail-status" class="detail-status" role="status" data-extra="loading">正在准备细节模型…</p></div>
+      <div class="detail-footer">
+        <div class="detail-toolbar"><button class="story-button" type="button" data-zoom="out" aria-label="缩小">−</button><button class="story-button" type="button" data-zoom="in" aria-label="放大">+</button><button class="story-button" type="button" data-detail-reset data-extra="reset">重置视角</button></div>
+        <p id="detail-note" class="detail-note"></p><p id="detail-hint" class="detail-hint" data-extra="hint">拖动旋转 · 滚轮或双指缩放 · 方向键旋转，+ / − 缩放</p>
+      </div>
+    </dialog>
+    <details class="story-film-details" id="story-film-details">
+      <summary data-i18n="story.fullFilm">观看完整演示 · 28 秒</summary>
+      <video class="story-video" id="pcb2-film" controls playsinline preload="none" poster="assets/mason-pcb2-poster.webp" aria-labelledby="pcb2-film-heading" aria-describedby="film-sample-note">
+      <source src="assets/mason-pcb2-explainer.mp4" type="video/mp4" />
+      <track kind="captions" src="assets/mason-pcb2.zh.vtt" srclang="zh" label="简体中文" />
+      <track kind="subtitles" src="assets/mason-pcb2.en.vtt" srclang="en" label="English" />
+      <p><a href="assets/mason-pcb2-explainer.mp4" data-i18n="story.fallback">下载视频观看</a></p>
+      </video>
+    </details>
+    <div class="sample-strip">
+      <div class="sample-info"><span class="sample-stamp">PCB2<br/>85 × 60</span><div><h3 id="film-description" data-i18n="story.sampleTitle">这块板子，你也可以试</h3><p id="film-sample-note" data-i18n="story.sampleNote">示例包含板框与正反面锡膏层。下载 ZIP，在 Mason 中导入即可体验；不作为完整生产资料。</p></div></div>
+      <a class="sample-download" href="assets/examples/mason-pcb2-gerber.zip" download="Mason-PCB2-Gerber.zip"><span data-i18n="story.download">下载 Gerber 示例</span><span aria-hidden="true">↓</span></a>
+    </div>
+    <details class="story-transcript"><summary data-i18n="story.transcript">查看视频文字说明</summary><ol>
+      <li data-i18n="story.step1">导入 85 × 60 mm 的 PCB2 示例，解析板框与正反面锡膏层。</li>
+      <li data-i18n="story.step2">选择配合金属钢网使用的夹具，或可直接打印、独立使用的一体式 PCB 钢网。</li>
+      <li data-i18n="story.step3">夹具由上方 A 面顶盖、金属钢网、下方 B 面底座组成夹紧组件，再整体沿 PCB 托盘四角定位柱落位。夹紧螺丝布置在周圈。</li>
+      <li data-i18n="story.step4">确认模型后导出 STL / STEP。视频中的模型由 Mason 的建模引擎实际生成。</li>
+    </ol></details>
+  </div>
+</section>
 
 <!-- ============ Showcase 真实界面 ============ -->
 <section id="showcase" class="showcase-sec">
@@ -1098,7 +1278,7 @@
       <h2 data-i18n="showcase.h2">真实界面，开箱即用</h2>
       <p data-i18n="showcase.sub">不是示意图 —— 这就是你每天工作的界面。拖入 Gerber，剩下的交给 Mason。</p>
     </div>
-    <div class="showcase reveal" id="showcase">
+    <div class="showcase reveal" id="showcase-stage">
       <!-- 主舞台：浏览器窗口框架 -->
       <div class="shot-stage">
         <div class="shot-frame">
@@ -1107,8 +1287,8 @@
             <span class="shot-title" id="shot-title">夹具模式 · 装配 3D 预览</span>
           </div>
           <div class="shot-viewport">
-            <img src="assets/shot-jig.png" alt="Mason 夹具模式界面" class="shot-img is-active" data-shot="0" />
-            <img src="assets/shot-stencil.png" alt="Mason 钢网模式界面" class="shot-img" data-shot="1" loading="lazy" />
+            <img src="assets/shot-jig.webp" srcset="assets/shot-jig-800.webp 800w, assets/shot-jig-1600.webp 1600w, assets/shot-jig.webp 2564w" sizes="(max-width: 700px) calc(100vw - 44px), (max-width: 900px) calc(100vw - 56px), (max-width: 1120px) calc(100vw - 350px), 770px" alt="Mason 夹具模式界面" class="shot-img is-active" data-shot="0" loading="lazy" decoding="async" width="2564" height="1604" />
+            <img src="assets/shot-stencil.webp" srcset="assets/shot-stencil-800.webp 800w, assets/shot-stencil-1600.webp 1600w, assets/shot-stencil.webp 2564w" sizes="(max-width: 700px) calc(100vw - 44px), (max-width: 900px) calc(100vw - 56px), (max-width: 1120px) calc(100vw - 350px), 770px" alt="Mason 钢网模式界面" class="shot-img" data-shot="1" loading="lazy" decoding="async" width="2564" height="1604" />
 
             <!-- 镜头 3 · 交互式 Gerber 解析演示 -->
             <div class="shot-demo" data-shot="2">
@@ -1207,62 +1387,36 @@
       <p data-i18n="workflow.sub">核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。</p>
     </div>
     <div class="workflow-grid">
-      <!-- 交互演示舞台 -->
       <div class="wf-stage reveal" aria-hidden="true">
         <svg class="wf-svg" viewBox="0 0 460 300">
-          <!-- 虚线投放区 -->
-          <rect class="wf-drop" x="150" y="60" width="160" height="120" rx="14" />
-          <text class="wf-drop-text" x="230" y="125" text-anchor="middle" data-i18n="workflow.drop">拖入此处</text>
-          <!-- Gerber ZIP 文件 -->
+          <defs><linearGradient id="wf-paper" x2=".6" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#edf4ec"/></linearGradient></defs>
+          <ellipse class="wf-shadow" cx="230" cy="221" rx="86" ry="12"/>
+          <g class="wf-drop-group"><rect class="wf-drop" x="150" y="58" width="160" height="130" rx="14"/><text class="wf-drop-text" x="230" y="163" text-anchor="middle" data-i18n="workflow.drop">拖入此处</text></g>
           <g class="wf-file">
-            <rect x="0" y="0" width="64" height="80" rx="8" class="wf-file-body" />
-            <path d="M0 8 a8 8 0 0 1 8-8 h48 a8 8 0 0 1 8 8 v10 H0 Z" class="wf-file-tab" />
-            <text x="32" y="52" text-anchor="middle" class="wf-file-label">.ZIP</text>
-            <text x="32" y="66" text-anchor="middle" class="wf-file-sub">GERBER</text>
+            <path class="wf-file-body" d="M8 0H44L64 20V72Q64 80 56 80H8Q0 80 0 72V8Q0 0 8 0Z"/>
+            <path class="wf-file-tab" d="M44 0V14Q44 20 50 20H64"/>
+            <text x="32" y="48" text-anchor="middle" class="wf-file-label">.ZIP</text><text x="32" y="64" text-anchor="middle" class="wf-file-sub">GERBER</text>
           </g>
-          <!-- 板框描绘 -->
-          <path class="wf-board" d="M170 84 H264 L290 110 V156 H170 Z" />
-          <!-- 扫描线 -->
-          <line class="wf-scan" x1="160" y1="90" x2="300" y2="90" />
-          <!-- 三层爆炸 -->
+          <g class="wf-board-group">
+            <path class="wf-board" pathLength="1" d="M173 86H263L287 110V163H173Z"/>
+            <g class="wf-pads"><rect x="213" y="110" width="28" height="26" rx="2"/><path d="M208 113h-6m6 7h-6m6 7h-6m6 7h-6m39-21h6m-6 7h6m-6 7h6m-6 7h6M216 105v-6m8 6v-6m8 6v-6m8 6v-6m-24 45v6m8-6v6m8-6v6m8-6v6"/><rect x="181" y="104" width="8" height="13"/><rect x="181" y="133" width="8" height="13"/><rect x="266" y="131" width="11" height="8"/></g>
+            <line class="wf-scan" x1="166" y1="87" x2="294" y2="87"/>
+          </g>
           <g class="wf-layers">
-            <polygon class="wf-layer wf-l1" points="170,130 230,100 290,130 230,160" />
-            <polygon class="wf-layer wf-l2" points="170,150 230,120 290,150 230,180" />
-            <polygon class="wf-layer wf-l3" points="170,170 230,140 290,170 230,200" />
+            <path class="wf-tray" d="M158 181 230 145 302 181 230 217Z"/>
+            <path class="wf-base" fill-rule="evenodd" d="M158 166 230 130 302 166 230 202ZM184 166 230 143 276 166 230 189Z"/>
+            <path class="wf-metal" d="M176 151 230 124 284 151 230 178Z"/>
+            <g class="wf-apertures" fill="#94a89b"><path d="m214 151 16-8 16 8-16 8Z"/><path d="m204 149 4-2m-1 7 4-2m3 6 4-2m25-12 4-2m-1 7 4-2m-1 8 4-2" stroke="#94a89b" stroke-width="2"/></g>
+            <path class="wf-cover" fill-rule="evenodd" d="M158 136 230 100 302 136 230 172ZM184 136 230 113 276 136 230 159Z"/>
           </g>
-          <!-- STL 导出 chip -->
-          <g class="wf-chips">
-            <g class="wf-chip wf-c1"><rect x="316" y="86" width="58" height="24" rx="12"/><text x="345" y="102" text-anchor="middle">.STL</text></g>
-            <g class="wf-chip wf-c2"><rect x="326" y="122" width="58" height="24" rx="12"/><text x="355" y="138" text-anchor="middle">.STL</text></g>
-            <g class="wf-chip wf-c3"><rect x="316" y="158" width="58" height="24" rx="12"/><text x="345" y="174" text-anchor="middle">.STEP</text></g>
-          </g>
-          <!-- 进度环 -->
-          <circle class="wf-ring" cx="230" cy="120" r="30" />
+          <g class="wf-chips"><path d="M308 160h18m-4-4 4 4-4 4" fill="none" stroke="#8cab97" stroke-width="1.5"/><g transform="translate(337 125)"><rect width="61" height="25" rx="7"/><text x="30.5" y="17" text-anchor="middle">.STL</text></g><g transform="translate(337 168)"><rect width="61" height="25" rx="7"/><text x="30.5" y="17" text-anchor="middle">.STEP</text></g></g>
         </svg>
       </div>
       <!-- 步骤说明（保留原内容，改竖排） -->
       <div class="steps steps-v">
-        <div class="step reveal">
-          <div class="step-num">1</div>
-          <div class="step-body">
-            <h3 data-i18n="workflow.s1t">拖入 Gerber ZIP</h3>
-            <p data-i18n="workflow.s1d">自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。</p>
-          </div>
-        </div>
-        <div class="step reveal">
-          <div class="step-num">2</div>
-          <div class="step-body">
-            <h3 data-i18n="workflow.s2t">实时 3D 预览</h3>
-            <p data-i18n="workflow.s2d">参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。</p>
-          </div>
-        </div>
-        <div class="step reveal">
-          <div class="step-num">3</div>
-          <div class="step-body">
-            <h3 data-i18n="workflow.s3t">导出 STL / STEP</h3>
-            <p data-i18n="workflow.s3d">一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。</p>
-          </div>
-        </div>
+        <div class="step reveal"><div class="step-num">1</div><div class="step-body"><h3 data-i18n="workflow.s1t">拖入 Gerber ZIP</h3><p data-i18n="workflow.s1d">自动识别板框层与锡膏层，异形板框完整还原，焊盘覆盖圆形 / 矩形 / 长圆形 / 多边形等光圈类型。</p></div></div>
+        <div class="step reveal"><div class="step-num">2</div><div class="step-body"><h3 data-i18n="workflow.s2t">实时 3D 预览</h3><p data-i18n="workflow.s2d">参数化 CAD 引擎秒级生成，千级焊盘钢网约 3 秒完成渲染，切换部件即时响应。</p></div></div>
+        <div class="step reveal"><div class="step-num">3</div><div class="step-body"><h3 data-i18n="workflow.s3t">导出 STL / STEP</h3><p data-i18n="workflow.s3d">一键导出直接切片打印，或发给钢网厂切割。自动创建时间戳目录，项目参数可保存复用。</p></div></div>
       </div>
     </div>
   </div>
@@ -1289,9 +1443,14 @@
       <h2 data-i18n="modes.h2">两种模式，覆盖原型到量产</h2>
       <p data-i18n="modes.sub">从快速原型验证到小批量生产，选择最适合你场景的工作方式。</p>
     </div>
+    <div class="mode-guide" id="mode-guide">
+      <h3 data-extra="question">你打算怎样制作？</h3>
+      <div class="mode-choices"><button class="story-button" type="button" data-mode-choice="jig" aria-pressed="false" data-extra="metal">已有金属钢网</button><button class="story-button" type="button" data-mode-choice="stencil" aria-pressed="false" data-extra="printed">直接打印钢网</button></div>
+      <div id="mode-result" class="mode-result" hidden aria-live="polite"><p id="mode-reason"></p></div>
+    </div>
     <div class="modes">
       <div class="mode mode-jig reveal">
-        <span class="mode-badge">JIG MODE</span>
+        <span class="mode-badge">JIG MODE</span><span class="mode-recommendation" data-extra="recommended" hidden>适合你的选择</span>
         <h3 data-i18n="modes.jigT">钢网夹具模式</h3>
         <p data-i18n="modes.jigD">金属钢网夹在下方的 B 面底座与上方的 A 面顶盖之间,由周圈螺丝夹紧；夹好的组件再通过 PCB 托盘四角的定位柱定位落下。</p>
         <ul>
@@ -1301,7 +1460,7 @@
         </ul>
       </div>
       <div class="mode mode-stencil reveal">
-        <span class="mode-badge">STENCIL MODE</span>
+        <span class="mode-badge">STENCIL MODE</span><span class="mode-recommendation" data-extra="recommended" hidden>适合你的选择</span>
         <h3 data-i18n="modes.stencilT">PCB 钢网模式</h3>
         <p data-i18n="modes.stencilD">根据锡膏层直接生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型。</p>
         <ul>
@@ -1607,6 +1766,19 @@
       "footer.changelog": "更新日志",
       "footer.issues": "反馈问题",
       "footer.author": "作者主页",
+      "story.watch": "一步步了解 ↗",
+      "story.fullFilm": "观看完整演示 · 28 秒",
+      "story.h2": "用一块真实的板子，看懂 Mason",
+      "story.sub": "从导入板子到夹具落位，按你的节奏一步步探索。手机上也可以左右滑动切换。",
+      "story.fallback": "下载视频观看",
+      "story.sampleTitle": "这块板子，你也可以试",
+      "story.sampleNote": "示例包含板框与正反面锡膏层。下载 ZIP，在 Mason 中导入即可体验；不作为完整生产资料。",
+      "story.download": "下载 Gerber 示例",
+      "story.transcript": "查看视频文字说明",
+      "story.step1": "导入 85 × 60 mm 的 PCB2 示例，解析板框与正反面锡膏层。",
+      "story.step2": "选择配合金属钢网使用的夹具，或可直接打印、独立使用的一体式 PCB 钢网。",
+      "story.step3": "夹具由上方 A 面顶盖、金属钢网、下方 B 面底座组成夹紧组件，再整体沿 PCB 托盘四角定位柱落位。夹紧螺丝布置在周圈。",
+      "story.step4": "确认模型后导出 STL / STEP。视频中的模型由 Mason 的建模引擎实际生成。",
       "footer.tagline": "从 Gerber 到 3D 打印钢网"
     },
     en: {
@@ -1716,6 +1888,19 @@
       "footer.changelog": "Changelog",
       "footer.issues": "Report Issue",
       "footer.author": "Author",
+      "story.watch": "Explore step by step ↗",
+      "story.fullFilm": "Watch the complete film · 28 seconds",
+      "story.h2": "One real board. The whole process.",
+      "story.sub": "Explore the board, models and assembly at your own pace. On mobile, swipe the model to move between steps.",
+      "story.fallback": "Download the video",
+      "story.sampleTitle": "Try this exact board",
+      "story.sampleNote": "Contains the outline and both paste layers. Import the ZIP into Mason to try it. This is a demo, not a complete manufacturing package.",
+      "story.download": "Download sample Gerber",
+      "story.transcript": "Read the video transcript",
+      "story.step1": "Import the 85 × 60 mm PCB2 sample and parse its outline and top/bottom paste layers.",
+      "story.step2": "Choose a jig for a metal stencil, or a standalone, directly printable PCB stencil.",
+      "story.step3": "Clamp the metal stencil between the upper A-side cover and lower B-side base. Lower the complete assembly onto the PCB tray using its four corner alignment posts. Clamping screws sit around the perimeter.",
+      "story.step4": "Check the model, then export STL / STEP. The models in the film were generated by Mason's CAD engine.",
       "footer.tagline": "From Gerber to 3D-Printed Stencils"
     }
   };
@@ -1813,25 +1998,8 @@
   }
 
   /* ---------- 滚动入场动画 ---------- */
-  var reveals = document.querySelectorAll(".reveal");
-  if ("IntersectionObserver" in window) {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (entry) {
-        if (entry.isIntersecting) {
-          var el = entry.target;
-          var idx = Array.prototype.indexOf.call(el.parentElement.children, el);
-          var delay = Math.min(idx, 6) * 80;
-          setTimeout(function () {
-            el.classList.add("in");
-          }, delay);
-          io.unobserve(el);
-        }
-      });
-    }, { threshold: 0.15, rootMargin: "0px 0px -40px 0px" });
-    reveals.forEach(function (r) { io.observe(r); });
-  } else {
-    reveals.forEach(function (r) { r.classList.add("in"); });
-  }
+  // Reveal headings in reading order, then their content. The module also owns
+  // pointer feedback; it does not add a persistent animation loop.
 
   /* 拉取最新 Release:仅用于补充版本号与文件大小,
      下载直链已由静态 href 提供,API 失败不影响下载 */
@@ -1881,58 +2049,15 @@
     })
     .catch(function () { /* 失败保持隐藏 */ });
 
-  /* ---------- Hero SVG 鼠标视差 ---------- */
-  var heroVisual = document.querySelector(".hero-visual");
-  var heroEl = document.querySelector(".hero");
-  if (heroVisual && heroEl && !window.matchMedia("(prefers-reduced-motion:reduce)").matches) {
-    heroEl.addEventListener("mousemove", function (e) {
-      var rect = heroEl.getBoundingClientRect();
-      var mx = (e.clientX - rect.left) / rect.width - 0.5;
-      var my = (e.clientY - rect.top) / rect.height - 0.5;
-      heroVisual.style.transform = "perspective(1100px) rotateX(" + (my * -4).toFixed(2) + "deg) rotateY(" + (mx * 6).toFixed(2) + "deg) translateZ(10px)";
-    });
-    heroEl.addEventListener("mouseleave", function () {
-      heroVisual.style.transform = "perspective(1100px) rotateX(0) rotateY(0) translateZ(0)";
-    });
-  }
-
-  /* ---------- Hero grid scroll 视差 ---------- */
-  var gridOverlay = document.querySelector(".hero-grid-overlay");
-  if (gridOverlay && !window.matchMedia("(prefers-reduced-motion:reduce)").matches) {
-    var raf = null;
-    window.addEventListener("scroll", function () {
-      if (raf) return;
-      raf = requestAnimationFrame(function () {
-        var y = window.scrollY;
-        gridOverlay.style.transform = "translateY(" + (y * 0.08) + "px)";
-        raf = null;
-      });
-    }, { passive: true });
-  }
-
-  /* ---------- feat 卡片 3D tilt ---------- */
-  var feats = document.querySelectorAll(".feat");
-  feats.forEach(function (card) {
-    if (window.matchMedia("(prefers-reduced-motion:reduce)").matches) return;
-    card.addEventListener("mousemove", function (e) {
-      var rect = card.getBoundingClientRect();
-      var x = (e.clientX - rect.left) / rect.width;
-      var y = (e.clientY - rect.top) / rect.height;
-      var rx = (y - 0.5) * -8;
-      var ry = (x - 0.5) * 8;
-      card.style.transform = "perspective(800px) rotateX(" + rx + "deg) rotateY(" + ry + "deg) translateY(-4px)";
-    });
-    card.addEventListener("mouseleave", function () {
-      card.style.transform = "";
-    });
-  });
+  /* Mouse parallax and card light are managed by pointer-effects.js. */
 
   /* ---------- Canvas 粒子背景 (炫酷版) ---------- */
   (function initParticles(){
-    if (window.matchMedia("(prefers-reduced-motion:reduce)").matches) return;
+    var particleMotion = window.matchMedia("(prefers-reduced-motion:reduce)");
     var canvas = document.querySelector(".hero-canvas");
     if (!canvas) return;
     var ctx = canvas.getContext("2d");
+    if (!ctx) return;
     var W, H, DPR = Math.min(window.devicePixelRatio || 1, 2);
     var particles = [];
     var mouse = { x: -9999, y: -9999, active: false };
@@ -2043,11 +2168,20 @@
       }
       raf = requestAnimationFrame(step);
     }
-    var raf;
+    var raf = 0, particleVisible = false;
+    function updateParticles() {
+      var running = particleVisible && !document.hidden && !particleMotion.matches;
+      if (running && !raf) { lastTime = performance.now(); raf = requestAnimationFrame(step); }
+      else if (!running) { cancelAnimationFrame(raf); raf = 0; mouse.active = false; }
+    }
     resize();
-    raf = requestAnimationFrame(step);
     window.addEventListener("resize", resize);
     var heroEl = document.querySelector(".hero");
+    new IntersectionObserver(function(entries) {
+      particleVisible = entries[0].isIntersecting; updateParticles();
+    }).observe(heroEl);
+    document.addEventListener("visibilitychange", updateParticles);
+    particleMotion.addEventListener("change", updateParticles);
     if (heroEl) {
       heroEl.addEventListener("mousemove", function(e){
         var rect = heroEl.getBoundingClientRect();
@@ -2090,12 +2224,22 @@
     }
   });
 
-  var prefersReduceMotion = window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+  var scrollMotion = window.matchMedia("(prefers-reduced-motion:reduce)");
+  var prefersReduceMotion = scrollMotion.matches;
+  var scrollFrame = 0, lastHeroProgress = -1, activeSection = "";
 
   function onScroll(){
+    scrollFrame = 0;
+    // Read geometry together, before changing any classes or inline styles.
     var y = window.scrollY;
     var maxScroll = document.documentElement.scrollHeight - window.innerHeight;
     var pct = maxScroll > 0 ? (y / maxScroll * 100) : 0;
+    var heroH = heroEl ? heroEl.offsetHeight : 1;
+    var heroProgress = prefersReduceMotion ? 0 : Math.min(y / Math.max(1, heroH), 1);
+    var current = sections.length ? sections[0].id : "";
+    for (var i = sections.length - 1; i >= 0; i--) {
+      if (sections[i].el.offsetTop - 120 <= y) { current = sections[i].id; break; }
+    }
 
     // 1) 进度条
     if (progressBar) progressBar.style.width = pct + "%";
@@ -2113,9 +2257,8 @@
     }
 
     // 4) Hero 退出 + 全层视差
-    if (heroEl && !prefersReduceMotion) {
-      var heroH = heroEl.offsetHeight;
-      var heroProgress = Math.min(y / heroH, 1);
+    if (heroEl && heroProgress !== lastHeroProgress) {
+      lastHeroProgress = heroProgress;
       if (heroProgress > 0.08) heroEl.classList.add("is-scroll-out");
       else heroEl.classList.remove("is-scroll-out");
 
@@ -2130,23 +2273,32 @@
     }
 
     // 5) Section 高亮
-    if (sections.length) {
-      var offset = 120;
-      var current = sections[0].id;
-      for (var i = sections.length - 1; i >= 0; i--) {
-        if (sections[i].el.offsetTop - offset <= y) { current = sections[i].id; break; }
-      }
+    if (sections.length && current !== activeSection) {
+      activeSection = current;
       sections.forEach(function(s){
         if (s.id === current) s.link.classList.add("is-active");
         else s.link.classList.remove("is-active");
       });
     }
   }
-  window.addEventListener("scroll", onScroll, { passive: true });
-  onScroll();
+  function scheduleScroll() { if (!scrollFrame) scrollFrame = requestAnimationFrame(onScroll); }
+  window.addEventListener("scroll", scheduleScroll, { passive: true });
+  window.addEventListener("resize", scheduleScroll, { passive: true });
+  new ResizeObserver(scheduleScroll).observe(document.body);
+  scrollMotion.addEventListener("change", function () {
+    prefersReduceMotion = scrollMotion.matches;
+    cancelAnchorScroll();
+    scheduleScroll(); updateShotTimer();
+  });
+  scheduleScroll();
 
   /* ---------- 平滑滚动 (offset sticky nav) ---------- */
+  var anchorFrame = 0;
+  function cancelAnchorScroll() { cancelAnimationFrame(anchorFrame); anchorFrame = 0; }
+  window.addEventListener("wheel", cancelAnchorScroll, {passive:true});
+  window.addEventListener("touchstart", cancelAnchorScroll, {passive:true});
   function smoothScrollTo(target, offsetPx){
+    cancelAnchorScroll();
     var start = window.scrollY;
     var el = typeof target === "string" ? document.querySelector(target) : target;
     if (!el) { window.scrollTo({ top: offsetPx, behavior: prefersReduceMotion ? "auto" : "smooth" }); return; }
@@ -2158,11 +2310,11 @@
       var elapsed = now - startTime;
       var p = Math.min(elapsed / duration, 1);
       var ease = 1 - Math.pow(1 - p, 3); // easeOutCubic
-      window.scrollTo(0, start + (end - start) * ease);
-      if (p < 1) requestAnimationFrame(step);
+      window.scrollTo({ top: start + (end - start) * ease, behavior: "instant" });
+      anchorFrame = p < 1 ? requestAnimationFrame(step) : 0;
     }
     if (prefersReduceMotion) { window.scrollTo(0, end); return; }
-    requestAnimationFrame(step);
+    anchorFrame = requestAnimationFrame(step);
   }
 
   // Nav 锚点
@@ -2229,6 +2381,7 @@
   var shotDemos = document.querySelectorAll(".shot-demo");
   var shotItems = document.querySelectorAll(".shot-item");
   var shotTimer = null;
+  var shotVisible = false, shotInteractionPaused = false;
   var SHOT_COUNT = shotItems.length || 4;
 
   function goShot(idx) {
@@ -2246,17 +2399,22 @@
   }
   function nextShot() { goShot((currentShot + 1) % SHOT_COUNT); }
   function startShotTimer() {
-    if (prefersReduceMotion || !SHOT_COUNT) return;
+    if (prefersReduceMotion || document.hidden || !shotVisible || shotInteractionPaused || !SHOT_COUNT) return;
     stopShotTimer();
     shotTimer = setInterval(nextShot, 4500);
   }
   function stopShotTimer() {
     if (shotTimer) { clearInterval(shotTimer); shotTimer = null; }
   }
+  function updateShotTimer() {
+    if (prefersReduceMotion || document.hidden || !shotVisible || shotInteractionPaused) stopShotTimer();
+    else if (!shotTimer) startShotTimer();
+  }
   /* 用户与任意 demo 控件交互时，永久暂停自动轮播；
      mouseleave 触发后延迟 8 秒再恢复，避免切走正在操作的状态 */
   var demoResumeTimer = null;
   function pauseShotTimerForInteraction() {
+    shotInteractionPaused = true;
     stopShotTimer();
     if (demoResumeTimer) { clearTimeout(demoResumeTimer); demoResumeTimer = null; }
   }
@@ -2264,7 +2422,7 @@
     if (demoResumeTimer) clearTimeout(demoResumeTimer);
     demoResumeTimer = setTimeout(function () {
       demoResumeTimer = null;
-      startShotTimer();
+      shotInteractionPaused = false; updateShotTimer();
     }, 8000);
   }
   shotItems.forEach(function (item) {
@@ -2273,8 +2431,11 @@
       goShot(Number(item.getAttribute("data-shot")));
     });
   });
-  var showcaseEl = document.getElementById("showcase");
+  var showcaseEl = document.getElementById("showcase-stage");
   if (showcaseEl) {
+    new IntersectionObserver(function (entries) {
+      shotVisible = entries[0].isIntersecting; updateShotTimer();
+    }, {threshold:.1}).observe(showcaseEl);
     /* 监听 showcase 内部任意交互：暂停轮播，离开 showcase 8 秒后再恢复 */
     showcaseEl.addEventListener("pointerdown", pauseShotTimerForInteraction, true);
     showcaseEl.addEventListener("input", pauseShotTimerForInteraction, true);
@@ -2284,7 +2445,7 @@
   }
   /* 任何 shot-demo 内部事件冒泡到 showcase 即暂停；
      离开 showcase 后 8 秒再恢复 */
-  startShotTimer();
+  document.addEventListener("visibilitychange", updateShotTimer);
 
   /* ==========================================================
      LIVE Demo 1 · Gerber 解析演示（镜头 3）
@@ -2657,5 +2818,6 @@
   applyLang(lang);
 })();
 </script>
+<script type="module" src="assets/story/pcb2-story.js"></script>
 </body>
 </html>

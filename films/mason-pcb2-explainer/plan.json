@@ -1,0 +1,200 @@
+{
+  "demo": false,
+  "product": "Mason · PCB2 结构讲解",
+  "style": "repo",
+  "repo": "E:\\workspace\\pcb-stencil-jig",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "duration": 28,
+  "scope": {
+    "versions": "current working tree",
+    "platforms": [
+      "desktop"
+    ]
+  },
+  "typography": {
+    "mode": "bilingual",
+    "zhFont": "Microsoft YaHei",
+    "enFont": "Segoe UI",
+    "zhStyle": "sans-serif"
+  },
+  "audioRequired": true,
+  "sfxRequired": true,
+  "audio": {
+    "music": {
+      "file": "assets/music.wav",
+      "gain": 0.7
+    },
+    "ducking": {
+      "enabled": true
+    },
+    "cues": [
+      {
+        "at": 6.299,
+        "syncOffset": 0.001,
+        "actionId": "parse-lock",
+        "file": "assets/sfx/pop.wav",
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 9.099,
+        "syncOffset": 0.001,
+        "actionId": "mode-switch",
+        "file": "assets/sfx/toggle.wav",
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 18.399,
+        "syncOffset": 0.001,
+        "actionId": "clamp",
+        "file": "assets/sfx/click.wav",
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 21.397,
+        "syncOffset": 0.003,
+        "actionId": "seat",
+        "file": "assets/sfx/resolve.wav",
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "resolve"
+      },
+      {
+        "at": 23.497,
+        "syncOffset": 0.003,
+        "actionId": "export-ready",
+        "file": "assets/sfx/success.wav",
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "success"
+      }
+    ]
+  },
+  "shots": [
+    {
+      "id": "intro",
+      "start": 0,
+      "end": 4,
+      "type": "detail",
+      "headline": "一块板子，两种做法",
+      "headlineEn": "One board. Two ways.",
+      "description": "用 PCB2 真实示例，讲清从 Gerber 到打印模型。",
+      "descriptionAt": 0,
+      "plainExplanation": "用 PCB2 真实示例，讲清从 Gerber 到打印模型。",
+      "claim": false,
+      "source": [],
+      "component": "src/client.jsx",
+      "actions": []
+    },
+    {
+      "id": "parse",
+      "start": 4,
+      "end": 9,
+      "type": "detail",
+      "headline": "读懂板框，也读懂焊盘",
+      "headlineEn": "Read the geometry",
+      "description": "85 × 60 mm · 顶层 347 个解析焊盘",
+      "descriptionAt": 0,
+      "plainExplanation": "85 × 60 mm · 顶层 347 个解析焊盘",
+      "claim": true,
+      "source": [
+        "repo:src/lib/gerber/parser.ts",
+        "repo:src/lib/gerber/pads.ts"
+      ],
+      "component": "src/client.jsx",
+      "actions": [
+        {
+          "id": "parse-lock",
+          "at": 2.3,
+          "action": "parse-lock",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "modes",
+      "start": 9,
+      "end": 14,
+      "type": "detail",
+      "headline": "为不同需求，生成不同工具",
+      "headlineEn": "Choose your tool",
+      "description": "金属钢网夹具 / 一体式打印钢网",
+      "descriptionAt": 0,
+      "plainExplanation": "金属钢网夹具 / 一体式打印钢网",
+      "claim": true,
+      "source": [
+        "repo:python/jig_generator.py"
+      ],
+      "component": "src/client.jsx",
+      "actions": [
+        {
+          "id": "mode-switch",
+          "at": 0.1,
+          "action": "mode-switch",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "assembly",
+      "start": 14,
+      "end": 23,
+      "type": "detail",
+      "headline": "先夹紧，再定位",
+      "headlineEn": "Clamp. Then locate.",
+      "description": "A 面顶盖 + 金属钢网 + B 面底座 → PCB 托盘",
+      "descriptionAt": 0,
+      "plainExplanation": "A 面顶盖 + 金属钢网 + B 面底座 → PCB 托盘",
+      "claim": true,
+      "source": [
+        "repo:python/jig_generator.py"
+      ],
+      "component": "src/client.jsx",
+      "actions": [
+        {
+          "id": "clamp",
+          "at": 4.4,
+          "action": "clamp",
+          "soundRequired": true
+        },
+        {
+          "id": "seat",
+          "at": 7.4,
+          "action": "seat",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "export",
+      "start": 23,
+      "end": 28,
+      "type": "detail",
+      "headline": "从文件，到能打印的模型",
+      "headlineEn": "Ready for your next build",
+      "description": "导出 STL / STEP · 下载同款 Gerber 示例",
+      "descriptionAt": 0,
+      "plainExplanation": "导出 STL / STEP · 下载同款 Gerber 示例",
+      "claim": true,
+      "source": [
+        "repo:src/components/ModelPreview.vue"
+      ],
+      "component": "src/client.jsx",
+      "actions": [
+        {
+          "id": "export-ready",
+          "at": 0.5,
+          "action": "export-ready",
+          "soundRequired": true
+        }
+      ]
+    }
+  ]
+}

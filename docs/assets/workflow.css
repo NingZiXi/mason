@@ -1,0 +1,25 @@
+.wf-stage{background:linear-gradient(155deg,#f6f9f2,#edf3ed);border:1px solid var(--line);border-radius:18px;padding:26px;display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px #fff;overflow:hidden;min-width:0}
+.wf-svg{width:100%;max-width:460px;height:auto;display:block;overflow:visible}
+.wf-stage svg *{animation-duration:10s;animation-timing-function:cubic-bezier(.4,0,.2,1);animation-iteration-count:infinite;animation-play-state:paused}
+.wf-stage.wf-running svg *{animation-play-state:running}
+.wf-shadow{fill:#54775d;opacity:.07;animation-name:wf-shadow-soft}
+.wf-drop{fill:#fff;fill-opacity:.55;stroke:#8eaf98;stroke-width:1.5;stroke-dasharray:6 6}
+.wf-drop-text{font-size:11px;fill:#77927d;font-weight:500;letter-spacing:1px}
+.wf-drop-group{animation-name:wf-drop-soft}
+.wf-file{transform:translate(72px,88px);opacity:0;animation-name:wf-file-soft}
+.wf-file-body{fill:url(#wf-paper);stroke:#567e60;stroke-width:1.5}.wf-file-tab{fill:#dce8d8;stroke:#567e60;stroke-width:1.2}.wf-file-label{font-size:14px;font-weight:750;fill:#3c6747;letter-spacing:1px}.wf-file-sub{font-size:7px;fill:#84977e;letter-spacing:1px}
+.wf-board-group{opacity:0;animation-name:wf-board-soft}.wf-board{fill:#e4eee2;stroke:#527b5a;stroke-width:1.7;stroke-dasharray:1;stroke-dashoffset:1;animation-name:wf-outline-soft}
+.wf-pads{fill:#8eac8f;stroke:#8eac8f;stroke-width:1.5;opacity:0;animation-name:wf-pads-soft}.wf-scan{stroke:#8bb595;stroke-width:1.4;opacity:0;animation-name:wf-scan-soft}
+.wf-layers{opacity:0;animation-name:wf-layers-soft}.wf-tray{fill:#77a487;stroke:#56856b;stroke-width:1}.wf-base{fill:#7895b0;stroke:#5a7b99;stroke-width:1}.wf-metal{fill:#d6dfd8;stroke:#a4b5a9;stroke-width:1}.wf-cover{fill:#e7bc79;stroke:#c59a5d;stroke-width:1}
+.wf-chips{opacity:0;animation-name:wf-chips-soft}.wf-chips rect{fill:#52795b}.wf-chips text{fill:#fff;font-size:10px;font-weight:650;letter-spacing:.6px}
+@keyframes wf-file-soft{0%,3%{opacity:0;transform:translate(72px,88px) rotate(-6deg)}8%{opacity:1}21%,27%{opacity:1;transform:translate(198px,77px) rotate(0deg)}34%,100%{opacity:0;transform:translate(198px,77px) rotate(0deg)}}
+@keyframes wf-drop-soft{0%,23%{opacity:1}37%,93%{opacity:0}100%{opacity:1}}
+@keyframes wf-board-soft{0%,26%{opacity:0}34%,54%{opacity:1}63%,100%{opacity:0}}
+@keyframes wf-outline-soft{0%,28%{stroke-dashoffset:1}44%,100%{stroke-dashoffset:0}}
+@keyframes wf-pads-soft{0%,37%{opacity:0}47%,100%{opacity:1}}
+@keyframes wf-scan-soft{0%,35%{opacity:0;transform:translateY(0)}38%{opacity:.65}48%{opacity:.65;transform:translateY(75px)}51%,100%{opacity:0;transform:translateY(75px)}}
+@keyframes wf-layers-soft{0%,52%{opacity:0;transform:translateY(10px)}64%,88%{opacity:1;transform:translateY(0)}97%,100%{opacity:0;transform:translateY(0)}}
+@keyframes wf-chips-soft{0%,72%{opacity:0;transform:translateX(-8px)}82%,90%{opacity:1;transform:translateX(0)}97%,100%{opacity:0;transform:translateX(0)}}
+@keyframes wf-shadow-soft{0%,25%{opacity:.04;transform:translateY(-15px) scaleX(.85);transform-origin:230px 221px}65%,90%{opacity:.08;transform:translateY(0) scaleX(1);transform-origin:230px 221px}100%{opacity:.04;transform:translateY(-15px) scaleX(.85);transform-origin:230px 221px}}
+@media(max-width:900px){.workflow-grid{grid-template-columns:minmax(0,1fr)}.wf-stage{padding:20px;min-height:240px}}
+@media(prefers-reduced-motion:reduce){.wf-stage svg *{animation:none!important}.wf-file,.wf-drop-group,.wf-board-group,.wf-scan{opacity:0}.wf-layers,.wf-chips{opacity:1;transform:none}.wf-shadow{opacity:.07;transform:none}}
