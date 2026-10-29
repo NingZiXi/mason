@@ -152,7 +152,8 @@ export function useGerberStencil() {
       throw new Error("锡膏层未解析到任何焊盘,请检查文件");
     }
 
-    const anyPads = topResult?.pads.length ? topResult.pads : bottomResult!.pads;
+    // Both sides share one origin and board boundary, including fallback imports.
+    const allPads = [...(topResult?.pads ?? []), ...(bottomResult?.pads ?? [])];
 
     // 板框:优先用 outline 层,否则用 pads 的 bbox 生成矩形
     let outline: GerberOutline;
@@ -160,10 +161,10 @@ export function useGerberStencil() {
       outline = extractOutline(outlineText, { panel: true });
       if (outline.points.length < 3) {
         // 板框解析失败,回退到 pads bbox
-        outline = bboxToOutline(anyPads);
+        outline = bboxToOutline(allPads);
       }
     } else {
-      outline = bboxToOutline(anyPads);
+      outline = bboxToOutline(allPads);
     }
 
     // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同

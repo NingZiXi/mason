@@ -18,7 +18,7 @@ export interface PanelVariant {
   outlinePoints: Array<[number, number]>;
   /** 内孔(已居中) */
   outlineHoles: Array<Array<[number, number]>>;
-  /** 锡膏焊盘(已居中);纯板框导入时为 undefined(表示不改动已有焊盘) */
+  /** 锡膏焊盘(已居中);纯板框导入时为 undefined，应用时清除旧焊盘 */
   topPads?: PadPolygon[];
   bottomPads?: PadPolygon[];
   width: number;

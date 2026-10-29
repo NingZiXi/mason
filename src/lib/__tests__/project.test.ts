@@ -120,3 +120,55 @@ describe("project save/load", () => {
     expect(store.projectConfig()).toEqual(before);
   });
 });
+
+describe("Gerber replacement", () => {
+  it.each(["panel", "single"] as const)(
+    "clears both preceding pad layers when importing an outline-only %s scope",
+    async (mode) => {
+      const store = useConfigStore();
+      store.applyGerberImport({
+        filename: "A.zip", isPanel: true, hasPads: true, mode: "panel",
+        variants: {
+          panel: { ...variant(90), bottomPads: [pad] },
+          single: { ...variant(40), bottomPads: [pad] },
+        },
+      });
+      await nextTick();
+      const outlineOnly = (width: number): PanelVariant => ({
+        ...variant(width), topPads: undefined, bottomPads: undefined,
+      });
+      store.applyGerberImport({
+        filename: "B.gko", isPanel: true, hasPads: false, mode,
+        variants: { panel: outlineOnly(120), single: outlineOnly(50) },
+      });
+      await nextTick();
+      store.setMode("stencil");
+      expect(store.config.gerberFilename).toBe("B.gko");
+      expect(store.config.stencilPadsTop).toEqual([]);
+      expect(store.config.stencilPadsBottom).toEqual([]);
+      store.setPanelMode(mode === "single" ? "panel" : "single");
+      expect(store.config.stencilPadsTop).toEqual([]);
+      expect(store.config.stencilPadsBottom).toEqual([]);
+
+      const saved = JSON.parse(JSON.stringify(store.projectConfig()));
+      await store.restoreProject(saved, "B.gko");
+      expect(store.config.stencilPadsTop).toEqual([]);
+      expect(store.config.stencilPadsBottom).toEqual([]);
+    }
+  );
+
+  it("replaces both layers when the next ZIP only contains bottom paste", () => {
+    const store = useConfigStore();
+    store.applyGerberImport({
+      filename: "A.zip", isPanel: false, hasPads: true, mode: "panel",
+      variants: { panel: variant(90), single: variant(90) },
+    });
+    const bottomOnly = { ...variant(60), topPads: [], bottomPads: [pad] };
+    store.applyGerberImport({
+      filename: "B.zip", isPanel: false, hasPads: true, mode: "panel",
+      variants: { panel: bottomOnly, single: bottomOnly },
+    });
+    expect(store.config.stencilPadsTop).toEqual([]);
+    expect(store.config.stencilPadsBottom).toEqual([pad]);
+  });
+});

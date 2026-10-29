@@ -81,6 +81,30 @@ def test_grid_pad_geom_threshold_sensitivity():
     assert out_lo.area < geom.area
 
 
+@pytest.mark.parametrize("side", ["top", "bottom"])
+def test_image_clear_polarity_restores_stencil_material(side):
+    """Image-level LPC restores a 2 x 2 mm island inside a dark opening."""
+    def pad(half, polarity):
+        return {"polarity": polarity, "parts": [{
+            "polarity": "D",
+            "points": [[-half, -half], [half, -half], [half, half],
+                       [-half, half], [-half, -half]],
+        }]}
+
+    params = dict(BASE_PARAMS, pcb_size_x=20, pcb_size_y=20,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                  stencil_frame_width=4, stencil_thickness=0.3,
+                  pad_shrink=0, stencil_filter_test_points=False,
+                  pry_notch_sides=[])
+    key = f"stencil_pads_{side}"
+    params[key] = [pad(3, "D")]
+    dark_volume = jg.build_stencil(params, side).volume
+    params[key].append(pad(1, "C"))
+    clear_volume = jg.build_stencil(params, side).volume
+    # Steel below the pocket is thickness - 0.05 mm in the current geometry.
+    assert clear_volume - dark_volume == pytest.approx(4 * (0.3 - 0.05), abs=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # 3. 端到端冒烟(生成 STL)
 # ---------------------------------------------------------------------------

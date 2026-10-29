@@ -6,6 +6,9 @@ import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import { useUiStore } from "../stores/ui";
+import { buildScadParams as createScadParams, modelParamsHash } from "../lib/model-params";
+import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cache";
+import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -51,83 +54,12 @@ const animationId = ref<number | null>(null);
 // 切换 tab 时如果参数没变,直接用缓存的 bytes 跳过 Python 调用
 // bytes 是 ArrayBuffer(Rust 端 tauri::ipc::Response 二进制通道,避免 JSON 数字数组膨胀)
 // geometry 是解析后的 BufferGeometry(切 tab 复用,零解析开销);整体替换写入,用 shallowRef
-const stlCache = shallowRef<Record<string, { bytes: ArrayBuffer; paramsHash: string; geometry?: THREE.BufferGeometry }>>({});
+const stlCache = shallowRef<Record<string, StlCacheEntry<THREE.BufferGeometry>>>({});
+let disposed = false;
+let cacheGeneration = 0;
 
-// 计算当前参数的 hash(用于判断是否需要重新生成)
-function paramsHash() {
-  const c = store.config;
-  // 只 hash 跟几何相关的参数(避免无关改动触发重渲染)
-  // pcbOutlinePoints 用完整点列表:同点数的异形板框也要正确失效
-  // mode 必须入 hash:钢网/治具模式下同一钢网尺寸生成不同外框
-  return JSON.stringify({
-    mode: appMode.value,
-    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY],
-    screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight],
-    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.postClearance, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap],
-    notch: [c.pryNotchSides, c.pryNotchScale],
-    stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
-      c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
-      c.stencilFilterTestPoints, c.stencilTestPointMaxDia, c.stencilTestPointIsolation,
-      c.stencilGrid, c.stencilGridSize, c.stencilGridBar,
-      c.stencilPadsTop.map((p) => p.parts), c.stencilPadsBottom.map((p) => p.parts)],
-  });
-}
-
-function buildScadParams() {
-  const c = store.config;
-  return {
-    pcb_size_x: c.pcbSizeX,
-    pcb_size_y: c.pcbSizeY,
-    pcb_thickness: c.pcbThickness,
-    pcb_pocket_clearance: c.pcbPocketClearance,
-    pcb_outline_points: c.pcbOutlinePoints,
-    pcb_outline_holes: c.pcbOutlineHoles,
-    // 治具模式:钢网外缘由 X/Y 两轴给定(可为矩形),凸台/窗口逐轴推导;
-    // 钢网模式:独立钢网外框由 板框+边框宽/外框形状 推导,两轴置 0
-    // (compute_frame_poly 里 stencil_size_x/y > 0 会短路,忽略 frame_shape/frame_width)
-    stencil_size_x: appMode.value === "stencil" ? 0 : c.stencilSizeX,
-    stencil_size_y: appMode.value === "stencil" ? 0 : c.stencilSizeY,
-    screw_spacing: c.screwSpacing,
-    screw_spec: c.screwSpec,
-    base_height: c.baseHeight,
-    top_cover_height: c.topCoverHeight,
-    jig_size: c.jigSize,
-    insert_height: c.insertHeight,
-    platter_height: c.platterHeight,
-    stencil_lip: c.stencilLip,
-    window_gap: c.windowGap,
-    platter_corner_radius: c.platterCornerRadius,
-    eject_slot_width: c.ejectSlotWidth,
-    pry_notch_sides: c.pryNotchSides,
-    pry_notch_scale: c.pryNotchScale,
-    corner_screw_d: c.cornerScrewD,
-    post_clearance: c.postClearance,
-    peri_screw_d: c.periScrewD,
-    outer_corner_radius: c.outerCornerRadius,
-    use_hex_nut: c.useHexNut,
-    nut_across_flats: c.nutAcrossFlats,
-    nut_height: c.nutHeight,
-    // PCB 钢网(一体式)参数
-    stencil_thickness: c.stencilThickness,
-    pad_shrink: c.padShrink,
-    stencil_frame_width: c.stencilFrameWidth,
-    stencil_corner_radius: c.stencilCornerRadius,
-    stencil_frame_shape: c.stencilFrameShape,
-    pocket_clearance: c.pocketClearance,
-    stencil_taper: c.stencilTaper,
-    stencil_stagger: c.stencilStagger,
-    stencil_stagger_gap: c.stencilStaggerGap,
-    stencil_stagger_offset: c.stencilStaggerOffset,
-    stencil_filter_test_points: c.stencilFilterTestPoints,
-    stencil_test_point_max_dia: c.stencilTestPointMaxDia,
-    stencil_test_point_isolation: c.stencilTestPointIsolation,
-    stencil_grid: c.stencilGrid,
-    stencil_grid_size: c.stencilGridSize,
-    stencil_grid_bar: c.stencilGridBar,
-    stencil_pads_top: c.stencilPadsTop.map((p) => p.parts),
-    stencil_pads_bottom: c.stencilPadsBottom.map((p) => p.parts),
-  };
-}
+const paramsHash = () => modelParamsHash(store.config);
+const buildScadParams = () => createScadParams(store.config);
 
 function initThreeScene() {
   if (!canvasEl.value) return;
@@ -193,11 +125,13 @@ function initThreeScene() {
 let needsRender = true;
 
 function invalidate() {
+  if (disposed) return;
   needsRender = true;
   if (animationId.value === null) animate();
 }
 
 function animate() {
+  if (disposed) return;
   animationId.value = requestAnimationFrame(animate);
   if (!scene.value || !camera.value || !renderer.value) return;
   const moved = controls.value ? controls.value.update() : false;
@@ -216,6 +150,7 @@ function animate() {
 
 function disposeMesh() {
   clearMeasure();
+  resetTopology();
   if (currentMesh.value) {
     scene.value?.remove(currentMesh.value);
     // geometry 由 stlCache 持有(切 tab 时复用),不在此释放
@@ -232,7 +167,8 @@ function disposeMesh() {
 // 渲染序号:切 tab / 参数变化后,丢弃仍在途的旧请求结果,防止旧模型覆盖新 tab
 let renderSeq = 0;
 
-async function renderCurrent() {
+async function renderCurrent(force = false) {
+  if (disposed) return;
   if (!scene.value || !store.pythonDetected) {
     if (!store.pythonDetected) {
       errorMsg.value = t("preview.noPythonRender");
@@ -250,36 +186,40 @@ async function renderCurrent() {
   }
 
   const seq = ++renderSeq;
+  const generation = cacheGeneration;
   const partName = activePart.value; // 捕获请求发起时的部件,await 后不再读响应式值
 
   // 查缓存:同 part + 同 params → 直接用缓存 bytes,跳过 Python 调用
   const cached = stlCache.value[partName];
   const hash = paramsHash();
-  if (cached && cached.paramsHash === hash) {
+  if (!force && cached && cached.paramsHash === hash) {
     applyStlToMesh(getOrParseGeometry(partName, cached.bytes, hash));
     // 接管 loading:本次渲染已同步完成,而在途的旧请求(seq 已过期)
     // 的 finally 不会清 loading —— 不接管会永久转圈
     loading.value = false;
     errorMsg.value = null;
+    schedulePreload();
     return;
   }
 
   loading.value = true;
   errorMsg.value = null;
-  disposeMesh();
+  let rendered = false;
 
   try {
     const params = buildScadParams();
     const part = PART_TO_RUST[partName];
     const bytes = await invoke<ArrayBuffer>("generate_stl", { params, part });
 
+    if (!canCacheResult(hash, generation)) return;
     // 缓存 bytes:key 用捕获的 partName(结果属于发起请求的部件)
-    cachePart(partName, bytes, hash);
+    cachePart(partName, bytes, hash, force);
 
     // 过期检查:期间用户已切 tab / 参数已变 → 不应用,由新的渲染负责
     if (seq !== renderSeq || activePart.value !== partName) return;
 
     applyStlToMesh(getOrParseGeometry(partName, bytes, hash));
+    rendered = true;
   } catch (e) {
     if (seq === renderSeq) {
       errorMsg.value = t("preview.renderFailed", { msg: e instanceof Error ? e.message : String(e) });
@@ -287,6 +227,7 @@ async function renderCurrent() {
   } finally {
     if (seq === renderSeq) {
       loading.value = false;
+      if (rendered) schedulePreload();
     }
   }
 }
@@ -303,11 +244,12 @@ function getOrParseGeometry(partName: string, bytes: ArrayBuffer, hash: string):
 }
 
 // 写入/覆盖部件缓存;hash 变化时释放旧 geometry 防显存泄漏
-function cachePart(partName: string, bytes: ArrayBuffer, hash: string) {
-  const old = stlCache.value[partName];
-  if (old && old.paramsHash !== hash) old.geometry?.dispose();
-  const geometry = old && old.paramsHash === hash ? old.geometry : undefined;
-  stlCache.value = { ...stlCache.value, [partName]: { bytes, paramsHash: hash, geometry } };
+function cachePart(partName: string, bytes: ArrayBuffer, hash: string, replaceSameHash = false) {
+  stlCache.value = cacheStlPart(stlCache.value, partName, bytes, hash, replaceSameHash);
+}
+
+function canCacheResult(hash: string, generation: number) {
+  return !disposed && generation === cacheGeneration && store.pythonDetected && hasData.value && paramsHash() === hash;
 }
 
 // 把 geometry 应用到 mesh(独立函数,缓存命中时直接用)
@@ -1375,13 +1317,19 @@ const hashSource = computed(() => {
 
 // 参数稳定 1.2s 后后台预热其它部件,之后切 tab 直接命中缓存
 let preloadTimer: number | null = null;
-watch(hashSource, () => {
-  scheduleRender();
+function schedulePreload(delay = 1200) {
   if (preloadTimer !== null) window.clearTimeout(preloadTimer);
+  if (disposed) return;
   preloadTimer = window.setTimeout(() => {
     preloadTimer = null;
-    if (store.pythonDetected) void preloadAllParts();
-  }, 1200);
+    if (store.pythonDetected && !loading.value) void preloadAllParts();
+  }, delay);
+}
+
+watch(hashSource, () => {
+  ++renderSeq; // Invalidate immediately, including during the render debounce.
+  scheduleRender();
+  schedulePreload();
 });
 
 // 监听 Python 检测状态
@@ -1390,8 +1338,6 @@ watch(
   (detected) => {
     if (detected) {
       renderCurrent();
-      // 后台预热所有 3 个部件,首次切 tab 不再卡
-      preloadAllParts();
     }
   }
 );
@@ -1420,7 +1366,7 @@ watch(
 );
 
 // 预生成当前模式的所有部件(后台),填满缓存
-const preloading = ref<Set<string>>(new Set());
+const preloading = ref<Map<string, { hash: string; generation: number }>>(new Map());
 const allParts = computed<PartName[]>(() =>
   appMode.value === "stencil"
     ? partTabs.value.map((tab) => tab.name)
@@ -1429,85 +1375,99 @@ const allParts = computed<PartName[]>(() =>
 
 async function preloadAllParts() {
   // 未导入数据不预热(不浪费 Python 调用,导入后 hashSource 变化会自动触发)
-  if (!hasData.value) return;
+  if (disposed || !store.pythonDetected || !hasData.value) return;
   const hash = paramsHash();
-  // 并行生成各部件(spawn + build123d 导入开销重叠,总耗时约等于单件)
-  await Promise.all(
-    allParts.value.map(async (part) => {
-      // 已缓存或正在加载的跳过
-      if (stlCache.value[part]?.paramsHash === hash) return;
-      if (preloading.value.has(part)) return;
+  const generation = cacheGeneration;
+  const params = buildScadParams();
+  for (const part of allParts.value) {
+    if (disposed || loading.value || generation !== cacheGeneration || paramsHash() !== hash) return;
+    if (stlCache.value[part]?.paramsHash === hash) continue;
+    const pending = preloading.value.get(part);
+    if (pending?.hash === hash && pending.generation === generation) continue;
 
-      preloading.value.add(part);
-      try {
-        const rustPart = PART_TO_RUST[part];
-        const params = buildScadParams();
-        const bytes = await invoke<ArrayBuffer>("generate_stl", { params, part: rustPart });
-        stlCache.value = {
-          ...stlCache.value,
-          [part]: { bytes, paramsHash: hash },
-        };
-        console.log(`[preload] ${part} ready (${(bytes.byteLength / 1024).toFixed(0)} KB)`);
-      } catch (e) {
-        console.warn(`[preload] ${part} failed:`, e);
-      } finally {
-        preloading.value.delete(part);
-      }
-    })
-  );
+    const request = { hash, generation };
+    preloading.value.set(part, request);
+    try {
+      const rustPart = PART_TO_RUST[part];
+      const bytes = await invoke<ArrayBuffer>("generate_stl", { params, part: rustPart });
+      if (!canCacheResult(hash, generation)) return;
+      cachePart(part, bytes, hash);
+      console.log(`[preload] ${part} ready (${(bytes.byteLength / 1024).toFixed(0)} KB)`);
+    } catch (e) {
+      if (canCacheResult(hash, generation)) console.warn(`[preload] ${part} failed:`, e);
+    } finally {
+      const current = preloading.value.get(part);
+      if (current?.hash === hash && current.generation === generation) preloading.value.delete(part);
+    }
+  }
 }
 
 // 手动刷新:清缓存 + 重新生成所有 3 个部件
 const refreshing = ref(false);
 async function refreshAll() {
+  if (disposed || refreshing.value) return;
   refreshing.value = true;
-  stlCache.value = {};
-  await preloadAllParts();
-  // 触发当前 tab 重新渲染
-  await renderCurrent();
-  refreshing.value = false;
+  ++cacheGeneration;
+  ++renderSeq;
+  if (renderTimer !== null) window.clearTimeout(renderTimer);
+  if (preloadTimer !== null) window.clearTimeout(preloadTimer);
+  renderTimer = preloadTimer = null;
+  preloading.value.clear();
+  const active = activePart.value;
+  const activeCache = stlCache.value[active];
+  const staleCache = Object.fromEntries(
+    Object.entries(stlCache.value).filter(([part]) => part !== active)
+  );
+  clearStlCache(staleCache);
+  stlCache.value = activeCache ? { [active]: activeCache } : {};
+  try {
+    await renderCurrent(true);
+    await preloadAllParts();
+  } finally {
+    refreshing.value = false;
+  }
 }
 
 // —— 打印信息(体积/用料估算) ——
 // 体积由 Python 端 build123d 精确计算;克重按 PLA 密度 1.24 g/cm³ 估算
 const PLA_DENSITY_G_CM3 = 1.24;
 const showMetrics = ref(false);
-const metricsLoading = ref(false);
-const metricsHash = ref<string | null>(null);
-const metrics = shallowRef<Record<string, { volume_mm3: number; area_mm2: number }>>({});
+const printMetrics = usePartMetrics(
+  () => store.pythonDetected && hasData.value
+    ? { hash: paramsHash(), params: buildScadParams(), parts: [...allParts.value] }
+    : null,
+  hash => store.pythonDetected && hasData.value && paramsHash() === hash,
+  (part, params) => invoke<PartMetrics>("part_metrics", { params, part: PART_TO_RUST[part as PartName] }),
+);
+const { metrics, loading: metricsLoading, load: loadMetrics } = printMetrics;
+let metricsTimer: number | null = null;
+
+function scheduleMetrics() {
+  if (metricsTimer !== null) window.clearTimeout(metricsTimer);
+  metricsTimer = null;
+  if (!showMetrics.value || disposed) return;
+  metricsTimer = window.setTimeout(() => {
+    metricsTimer = null;
+    void loadMetrics();
+  }, 300);
+}
+
+watch([hashSource, () => store.pythonDetected], () => {
+  printMetrics.invalidate();
+  scheduleMetrics();
+});
+watch(showMetrics, visible => {
+  if (metricsTimer !== null) window.clearTimeout(metricsTimer);
+  metricsTimer = null;
+  if (visible) void loadMetrics();
+});
 
 function massGrams(volMm3: number): number {
   return (volMm3 / 1000) * PLA_DENSITY_G_CM3;
 }
 
-async function loadMetrics() {
-  const hash = paramsHash();
-  // 同参数已算过就复用(切 tab / 重新打开不重复 build)
-  if (metricsHash.value === hash && Object.keys(metrics.value).length > 0) return;
-  metricsHash.value = hash;
-  metricsLoading.value = true;
-  try {
-    const params = buildScadParams();
-    const entries = await Promise.all(
-      allParts.value.map(async (pn) => {
-        const m = await invoke<{ volume_mm3: number; area_mm2: number }>(
-          "part_metrics",
-          { params, part: PART_TO_RUST[pn] }
-        );
-        return [pn, m] as const;
-      })
-    );
-    metrics.value = Object.fromEntries(entries);
-  } catch (e) {
-    console.warn("[metrics] failed:", e);
-  } finally {
-    metricsLoading.value = false;
-  }
-}
-
 function toggleMetrics() {
   showMetrics.value = !showMetrics.value;
-  if (showMetrics.value) void loadMetrics();
 }
 
 const metricsRows = computed(() =>
@@ -1520,7 +1480,9 @@ const metricsRows = computed(() =>
 );
 
 const totalMass = computed(() =>
-  metricsRows.value.reduce((s, r) => s + (r.m ? massGrams(r.m.volume_mm3) : 0), 0)
+  metricsRows.value.length > 0 && metricsRows.value.every(r => r.m)
+    ? metricsRows.value.reduce((s, r) => s + massGrams(r.m!.volume_mm3), 0)
+    : null
 );
 
 // 视图快捷切换:front 正视 / top 俯视 / iso 等轴(保持当前缩放距离)
@@ -1570,6 +1532,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  ++cacheGeneration;
+  ++renderSeq;
+  printMetrics.dispose();
+  if (metricsTimer !== null) window.clearTimeout(metricsTimer);
+  if (renderTimer !== null) window.clearTimeout(renderTimer);
   window.removeEventListener("keydown", onMeasureKeyDown);
   if (hoverRafId !== null) cancelAnimationFrame(hoverRafId);
   hoverRafId = null;
@@ -1577,7 +1545,8 @@ onBeforeUnmount(() => {
   containerObserver = null;
   if (animationId.value !== null) cancelAnimationFrame(animationId.value);
   disposeMesh();
-  for (const e of Object.values(stlCache.value)) e.geometry?.dispose();
+  clearStlCache(stlCache.value);
+  stlCache.value = {};
   if (preloadTimer !== null) window.clearTimeout(preloadTimer);
   controls.value?.dispose();
   renderer.value?.dispose();
@@ -1775,7 +1744,7 @@ watch(partTabs, (tabs) => {
       </div>
     </div>
 
-    <div ref="containerEl" class="canvas-container" :class="{ measuring: measureMode }">
+    <div ref="containerEl" class="canvas-container" :class="{ measuring: measureMode, 'has-preview': !!currentMesh }">
       <canvas
         ref="canvasEl"
         @pointerdown="onCanvasPointerDown"
@@ -1876,7 +1845,7 @@ watch(partTabs, (tabs) => {
           </ul>
           <div class="metrics-foot">
             <span>{{ t('preview.total') }}</span>
-            <span class="metrics-total">{{ totalMass.toFixed(1) }} g</span>
+            <span class="metrics-total">{{ totalMass === null ? '—' : `${totalMass.toFixed(1)} g` }}</span>
           </div>
         </template>
         <div class="metrics-note">{{ t('preview.metricsDensity') }}</div>
@@ -2344,6 +2313,15 @@ html.dark .empty-card {
   font-size: 13px;
   pointer-events: none;
   backdrop-filter: blur(4px);
+}
+
+.canvas-container.has-preview .overlay {
+  background: rgba(245, 245, 245, 0.28);
+  backdrop-filter: blur(1px);
+}
+
+html.dark .canvas-container.has-preview .overlay {
+  background: rgba(35, 35, 37, 0.3);
 }
 
 .overlay.warning {

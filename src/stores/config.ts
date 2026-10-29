@@ -644,10 +644,9 @@ export const useConfigStore = defineStore("config", () => {
     c.pcbSizeY = Math.round(v.height * 100) / 100;
     c.pcbOutlinePoints = v.outlinePoints;
     c.pcbOutlineHoles = v.outlineHoles;
-    if (cached.hasPads) {
-      c.stencilPadsTop = v.topPads ?? [];
-      c.stencilPadsBottom = v.bottomPads ?? [];
-    }
+    // 板框与焊盘必须来自同一次导入；没有锡膏层时清除上一块板的数据。
+    c.stencilPadsTop = cached.hasPads ? v.topPads ?? [] : [];
+    c.stencilPadsBottom = cached.hasPads ? v.bottomPads ?? [] : [];
 
     // 钢网尺寸:口径切换会改变板子长宽,逐轴只放大不缩小
     //   下界 = ceil((板边+20)/10)*10(与 watch 同式)
