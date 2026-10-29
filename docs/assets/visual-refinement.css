@@ -105,17 +105,25 @@ nav.is-scrolled{box-shadow:0 3px 8px #243d3003,0 12px 26px #243d3006}
   background:radial-gradient(ellipse at 77% 40%,#e4efe7 0%,#f2f7f3 33%,transparent 65%),var(--paper);
   border-bottom-color:transparent;
 }
-.hero-bg,.hero-grid-overlay{
+.hero-grid-overlay{
   -webkit-mask-image:radial-gradient(ellipse 43% 62% at 80% 42%,#000 0%,transparent 100%);
   mask-image:radial-gradient(ellipse 43% 62% at 80% 42%,#000 0%,transparent 100%);
 }
-.hero-canvas{opacity:.075}
+.hero-canvas{opacity:.22}
 .hero-grid-overlay{opacity:.045;background-size:48px 48px}
 .pcb-trace{
   opacity:.09;
   -webkit-mask-image:linear-gradient(90deg,transparent 42%,#000 72%,transparent);
   mask-image:linear-gradient(90deg,transparent 42%,#000 72%,transparent);
 }
+.hero .pcb-trace{
+  top:150px;
+  z-index:0;
+  opacity:.2;
+  -webkit-mask-image:none;
+  mask-image:none;
+}
+.hero-inner{position:relative;z-index:1}
 .story-sec{
   background:linear-gradient(var(--paper),#f5f7f2 22%,#f5f7f2 74%,var(--paper));
   border-bottom-color:transparent;
@@ -148,11 +156,13 @@ footer{border-top-color:transparent;background:linear-gradient(var(--paper),#f8f
 }
 @media(max-width:900px){
   .hero{background:radial-gradient(ellipse at 50% 72%,#e8f0e8,transparent 62%),var(--paper)}
-  .hero-bg,.hero-grid-overlay{
+  .hero-grid-overlay{
     -webkit-mask-image:radial-gradient(ellipse 68% 33% at 50% 76%,#000,transparent);
     mask-image:radial-gradient(ellipse 68% 33% at 50% 76%,#000,transparent);
   }
-  .pcb-trace{opacity:.055; -webkit-mask-image:linear-gradient(transparent 48%,#000 78%,transparent);mask-image:linear-gradient(transparent 48%,#000 78%,transparent)}
+  .hero-canvas{opacity:.19}
+  .hero .pcb-trace{top:128px;opacity:.15}
+  .pcb-trace:not(.hero-circuit-trace){opacity:.055; -webkit-mask-image:linear-gradient(transparent 48%,#000 78%,transparent);mask-image:linear-gradient(transparent 48%,#000 78%,transparent)}
   .wrap{padding-inline:28px}
   section{padding-block:72px}
   .hero-inner{padding:66px 28px 64px;gap:38px}
