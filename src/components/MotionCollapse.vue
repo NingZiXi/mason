@@ -43,11 +43,6 @@ function move(el: Element, done: () => void, opening: boolean) {
   // Measure natural content, not the clipped/animated parent.
   const content = node.firstElementChild as HTMLElement;
   const to = opening ? props.height ?? content.scrollHeight : 0;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    restoreHeight(node);
-    done();
-    return;
-  }
   animation = node.animate([
     { height: `${from}px`, opacity },
     { height: `${to}px`, opacity: opening ? 1 : 0 },

@@ -168,6 +168,4 @@ input[type='radio']:focus-visible {
 .el-message-box .el-input__wrapper { background: var(--surface-well); }
 .el-message { border-radius: var(--radius-popover); corner-shape: var(--corner-shape); }
 
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
-}
+/* Desktop motion is always enabled, independently of the OS animation setting. */

@@ -1156,9 +1156,4 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-shell.is-animating, .sidebar-toggle, .sidebar-toggle.is-animating, .sidebar-toggle-arrow, .chevron,
-  .mode-switch .mode-indicator, .mode-btn, .card-slot { transition: none; }
-  .mode-card, .subtitle { animation: none; }
-}
 </style>

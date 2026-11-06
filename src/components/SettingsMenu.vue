@@ -85,7 +85,8 @@ function onSettingsClosed() {
     </svg>
   </button>
 
-  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" align-center :z-index="3000" class="settings-dialog" @closed="onSettingsClosed">
+  <!-- Escape the header stacking context so the mask covers all preview controls. -->
+  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" append-to-body align-center :z-index="3000" class="settings-dialog" @closed="onSettingsClosed">
     <div class="dialog-root">
       <!-- 顶部栏 -->
       <div class="dialog-header">

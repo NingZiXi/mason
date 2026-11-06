@@ -31,11 +31,10 @@ async function revealStencilSize() {
   const section = stencilSizeSection.value;
   const sidebar = section?.closest<HTMLElement>(".app-sidebar");
   if (!section || !sidebar || !showStencilSizeGuide.value) return;
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // Scroll only the parameter sidebar, leaving the 3D view and keyboard focus alone.
   const top = Math.max(0, Math.min(sidebar.scrollHeight - sidebar.clientHeight,
     sidebar.scrollTop + section.getBoundingClientRect().top - sidebar.getBoundingClientRect().top - 16));
-  if (!reducedMotion && Math.abs(sidebar.scrollTop - top) > 1) {
+  if (Math.abs(sidebar.scrollTop - top) > 1) {
     await new Promise<void>((resolve) => {
       const finish = () => {
         sidebar.removeEventListener("scrollend", finish);
@@ -57,10 +56,10 @@ async function revealStencilSize() {
   const style = getComputedStyle(guide);
   const highlight = { backgroundColor: "rgba(232, 187, 62, .30)", borderColor: "rgba(198, 153, 37, .65)" };
   const clear = { backgroundColor: style.backgroundColor, borderColor: style.borderColor };
-  // Two gentle amber pulses; reduced motion gets one static highlight instead.
-  guideAnimation = guide.animate(reducedMotion ? [highlight, highlight] : [clear, highlight, clear], {
-    duration: reducedMotion ? 1600 : 800,
-    iterations: reducedMotion ? 1 : 2,
+  // Two gentle amber pulses, independent of the OS animation setting.
+  guideAnimation = guide.animate([clear, highlight, clear], {
+    duration: 800,
+    iterations: 2,
     easing: "ease-in-out",
   });
 }

@@ -167,8 +167,7 @@ function animate() {
   let exploding = false;
   if (currentAssembly.value && displayedExplosion !== targetExplosion) {
     const dt = explosionFrameTime === null ? 16 : Math.min(now - explosionFrameTime, 50);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    displayedExplosion += (targetExplosion - displayedExplosion) * (reducedMotion ? 1 : 1 - Math.exp(-dt / 65));
+    displayedExplosion += (targetExplosion - displayedExplosion) * (1 - Math.exp(-dt / 65));
     if (Math.abs(displayedExplosion - targetExplosion) < 0.0005) displayedExplosion = targetExplosion;
     setJigExplosion(currentAssembly.value, displayedExplosion);
     needsRender = true;
@@ -2085,10 +2084,6 @@ watch(partTabs, (tabs) => {
 .is-layout-animating .preview-overlays {
   transition: left var(--sidebar-duration) var(--sidebar-ease);
 }
-@media (prefers-reduced-motion: reduce) {
-  .is-layout-animating .scene-layer, .is-layout-animating .preview-header,
-  .is-layout-animating .preview-overlays { transition: none; }
-}
 
 /* Header */
 .preview-header {
@@ -2193,10 +2188,6 @@ watch(partTabs, (tabs) => {
   outline-offset: 2px;
 }
 .tab-btn:active, .assembly-mode-btn:active { transform: scale(.97); }
-@media (prefers-reduced-motion: reduce) {
-  .tab-btn, .tab-dot, .assembly-mode-btn { transition: none; }
-  .tab-btn:active, .assembly-mode-btn:active { transform: none; }
-}
 
 .tab-dot {
   width: 6px;
@@ -2310,9 +2301,6 @@ watch(partTabs, (tabs) => {
 .viewport-tool-divider { width: 1px; height: 18px; background: var(--surface-line); }
 .viewport-tools button:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
 .viewport-tools button:active:not(:disabled) { transform: scale(.95); }
-@media (prefers-reduced-motion: reduce) {
-  .viewport-tools button:active:not(:disabled) { transform: none; }
-}
 
 .view-btns {
   display: flex;

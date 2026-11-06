@@ -76,7 +76,7 @@ export const useUiStore = defineStore("ui", () => {
 
   // 初始化时应用一次
   applyTheme();
-  // Clear the former in-app override; motion now follows the OS preference.
+  // Clear the former in-app override; desktop motion stays enabled independently of the OS.
   document.documentElement.classList.toggle("reduce-motion", false);
   i18n.global.locale.value = locale.value;
 
