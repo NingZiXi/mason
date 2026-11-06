@@ -7,7 +7,7 @@ import type { PanelVariant } from "../gerber/panel";
 
 const ring: Array<[number, number]> = [[0, 0], [6, 0], [6, 4], [0, 0]];
 const pad: PadPolygon = {
-  type: "circle", cx: 3, cy: 2, polarity: "C",
+  type: "circle", cx: 3, cy: 2, polarity: "C", padRole: "component",
   parts: [{ polarity: "D", points: ring, holes: [ring] }],
 };
 const variant = (width: number): PanelVariant => ({
@@ -31,7 +31,7 @@ describe("project save/load", () => {
     });
     await nextTick();
     // Advanced overrides must survive a load that also changes screwSpec/baseHeight.
-    Object.assign(store.config, { periScrewD: 5.7, nutAcrossFlats: 8.3, nutHeight: 4.2 });
+    Object.assign(store.config, { periScrewD: 5.7, nutAcrossFlats: 8.3, nutHeight: 4.2, nutPocketClearance: 0.35 });
     await nextTick();
     const expected = JSON.parse(JSON.stringify(store.config));
     // Exercise the real JSON boundary used by IPC and project files.

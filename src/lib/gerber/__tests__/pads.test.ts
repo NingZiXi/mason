@@ -8,6 +8,42 @@ const ring = (pad: { parts: { polarity: string; points: Array<[number, number]> 
   pad.parts.find((p) => p.polarity === "D")!.points;
 
 describe("extractPads 标准光圈", () => {
+  it("reads X2 aperture roles at definition time without leaking them across TD", () => {
+    const result = extractPads(HEADER + [
+      "%TA.AperFunction,TestPad*%", "%ADD10C,0.8*%", "%TD*%",
+      "%TA.AperFunction,SMDPad,CuDef*%", "%ADD11C,0.8*%", "%TD.AperFunction*%",
+      "%ADD12C,0.8*%", "D10*", "X0Y0D03*", "D11*", "X20000Y0D03*",
+      "D12*", "X40000Y0D03*", "D10*", "X60000Y0D03*", "M02*",
+    ].join("\n"));
+    expect(result.pads.map((p) => p.padRole)).toEqual(["testpoint", "component", undefined, "testpoint"]);
+  });
+
+  it("uses X2 object pins to preserve component pads and resets only the named attribute", () => {
+    const result = extractPads(HEADER + [
+      "%ADD10C,0.8*%", "D10*", "%TO.P,U1,A1*%", "X0Y0D03*",
+      "%TD.N*%", "X20000Y0D03*", "%TD.P*%", "X40000Y0D03*",
+      "%TO.P,J1,1*%", "%TD*%", "X60000Y0D03*", "M02*",
+    ].join("\n"));
+    expect(result.pads.map((p) => p.padRole)).toEqual(["component", "component", undefined, undefined]);
+  });
+
+  it("preserves X2 role metadata across step-repeat copies", () => {
+    const result = extractPads(HEADER + [
+      "%TA.AperFunction,BGAPad*%", "%ADD10C,0.4*%", "%TD*%", "D10*",
+      "%SRX2Y1I2J0*%", "X0Y0D03*", "%SR*%", "M02*",
+    ].join("\n"));
+    expect(result.pads).toHaveLength(2);
+    expect(result.pads.map((p) => p.padRole)).toEqual(["component", "component"]);
+  });
+  it("keeps 0402 and smaller paste apertures with their original size and type", () => {
+    const result = extractPads(HEADER + [
+      "%ADD10R,0.5X0.45*%", "%ADD11R,0.2X0.18*%", "%ADD12C,0.25*%",
+      "D10*", "X0Y0D03*", "D11*", "X10000Y0D03*", "D12*", "X20000Y0D03*", "M02*",
+    ].join("\n"));
+    expect(result.pads.map((p) => p.type)).toEqual(["rect", "rect", "circle"]);
+    expect(result.skippedFlashes).toBe(0);
+    expect(ring(result.pads[1])[1][0] - ring(result.pads[1])[0][0]).toBeCloseTo(0.2);
+  });
   it("C/R/O flash 全部解析", () => {
     const g = HEADER + [
       "%ADD10C,0.5*%",

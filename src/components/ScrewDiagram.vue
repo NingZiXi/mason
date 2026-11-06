@@ -2,6 +2,8 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore, windowHalf, windowHalfXY, SCREW_SPECS } from "../stores/config";
+import MotionCollapse from "./MotionCollapse.vue";
+import InlineHelp from "./InlineHelp.vue";
 
 const { t } = useI18n();
 const store = useConfigStore();
@@ -188,7 +190,7 @@ const showAdvanced = ref(false);
     </div>
 
     <div class="field">
-      <label class="field-label">{{ t('config.screwSpec') }}</label>
+      <InlineHelp id="config-screwSpecHint" :label="t('config.screwSpec')" :text="t('config.screwSpecHint')"><span class="field-label">{{ t('config.screwSpec') }}</span></InlineHelp>
       <el-select v-model="c.screwSpec" style="width: 100%">
         <el-option
           v-for="opt in SCREW_SPEC_OPTIONS"
@@ -197,13 +199,6 @@ const showAdvanced = ref(false);
           :value="opt.value"
         />
       </el-select>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('config.screwSpecHint') }}</span>
-      </div>
     </div>
 
     <!-- 高级参数(默认折叠) -->
@@ -214,7 +209,7 @@ const showAdvanced = ref(false);
       </svg>
     </button>
 
-    <div v-show="showAdvanced" class="advanced-body">
+    <MotionCollapse :open="showAdvanced"><div class="advanced-body">
       <div class="field-row">
         <div class="field">
           <label class="field-label">{{ t('config.periScrewD') }}</label>
@@ -257,6 +252,14 @@ const showAdvanced = ref(false);
           />
         </div>
       </div>
+      <div v-if="c.useHexNut" class="field">
+        <InlineHelp id="screw-nutPocketClearanceHint" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')"><span class="field-label">{{ t('config.nutPocketClearance') }}</span></InlineHelp>
+        <el-input-number
+          v-model="c.nutPocketClearance"
+          :min="0" :max="1" :step="0.05" :precision="2"
+          size="small" style="width: 100%"
+        />
+      </div>
       <div v-if="c.useHexNut" class="auto-hint">
         <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
@@ -264,7 +267,7 @@ const showAdvanced = ref(false);
         </svg>
         <span>{{ t('config.useHexNutHint') }}</span>
       </div>
-    </div>
+    </div></MotionCollapse>
   </div>
 </template>
 
@@ -285,7 +288,7 @@ const showAdvanced = ref(false);
   max-width: 100%;
   height: auto;
   background: var(--brand-grey-50);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   padding: 8px;
 }
 
@@ -327,7 +330,7 @@ const showAdvanced = ref(false);
 .field-value {
   float: right;
   color: var(--text-tertiary);
-  font-weight: var(--font-weight-regular);
+  font-weight: var(--font-weight-default);
 }
 
 .checkbox-field {
@@ -342,7 +345,7 @@ const showAdvanced = ref(false);
 .checkbox-label {
   font-size: 13px;
   font-weight: var(--font-weight-medium);
-  color: var(--text-primary);
+  color: var(--text-default);
 }
 
 .auto-hint {
@@ -352,7 +355,7 @@ const showAdvanced = ref(false);
   margin: 8px 0 0 0;
   padding: 8px 12px;
   background: var(--bg-brand-popup);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 18px;
@@ -387,13 +390,13 @@ const showAdvanced = ref(false);
   gap: 6px;
   padding: 7px 12px;
   border: 1px dashed var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: transparent;
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease;
+  transition: var(--control-transition);
   margin: 4px 0 8px 0;
 }
 
@@ -403,7 +406,7 @@ const showAdvanced = ref(false);
 }
 
 .advanced-toggle .chevron {
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--motion-panel) var(--ease-out);
 }
 
 .advanced-toggle .chevron.is-open {

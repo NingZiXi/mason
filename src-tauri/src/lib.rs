@@ -3,6 +3,7 @@
 
 mod commands;
 mod error;
+mod generation;
 mod python_detect;
 mod scad;
 
@@ -20,6 +21,7 @@ pub fn run() {
             commands::install_python,
             commands::set_python_path,
             commands::generate_stl,
+            commands::cancel_generation,
             commands::part_metrics,
             commands::export_stl,
             commands::save_project,

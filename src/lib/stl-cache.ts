@@ -6,15 +6,16 @@ export interface StlCacheEntry<G extends { dispose(): void }> {
 
 export function cacheStlPart<G extends { dispose(): void }>(
   entries: Record<string, StlCacheEntry<G>>, part: string, bytes: ArrayBuffer, paramsHash: string, replaceSameHash = false,
+  release: (geometry: G) => void = geometry => geometry.dispose(),
 ): Record<string, StlCacheEntry<G>> {
   const previous = entries[part];
   // A duplicate preload must keep the geometry already used by the foreground.
   if (previous?.paramsHash === paramsHash && !replaceSameHash) return entries;
-  previous?.geometry?.dispose();
+  if (previous?.geometry) release(previous.geometry);
   return { ...entries, [part]: { bytes, paramsHash } };
 }
 
-export function clearStlCache<G extends { dispose(): void }>(entries: Record<string, StlCacheEntry<G>>) {
+export function clearStlCache<G extends { dispose(): void }>(entries: Record<string, StlCacheEntry<G>>, release: (geometry: G) => void = geometry => geometry.dispose()) {
   const geometries = new Set(Object.values(entries).flatMap(entry => entry.geometry ? [entry.geometry] : []));
-  geometries.forEach(geometry => geometry.dispose());
+  geometries.forEach(release);
 }

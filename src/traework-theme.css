@@ -53,6 +53,15 @@
   --radius-16: 16px;
   --radius-full: 999px;
 
+  /* Nested geometry: roomy surfaces, tighter controls, circular actions. */
+  --corner-shape: round;
+  --corner-scale: 1;
+  --radius-control: calc(10px * var(--corner-scale));
+  --radius-inner: calc(7px * var(--corner-scale));
+  --radius-panel: calc(20px * var(--corner-scale));
+  --radius-dialog: calc(24px * var(--corner-scale));
+  --radius-popover: calc(14px * var(--corner-scale));
+
   /* Spacers */
   --spacer-2: 2px;
   --spacer-4: 4px;
@@ -84,6 +93,19 @@
   --bg-overlay-l4: rgba(115, 115, 115, 0.20);
   --bg-menu: #FFFFFF;
   --bg-invert: #262626;
+
+  /* Workspace surfaces: a quiet well, a raised card, and a floating control. */
+  --surface-sidebar: #F0F2F1;
+  --surface-raised: #FFFFFF;
+  --surface-well: #F2F4F3;
+  --surface-selected: #FFFFFF;
+  --surface-line: rgba(37, 48, 42, .08);
+  --surface-card-heading: var(--surface-raised);
+  --surface-highlight: rgba(255, 255, 255, .85);
+  --shadow-card: 0 1px 2px rgba(28, 40, 33, .025);
+  --shadow-card-hover: 0 2px 6px rgba(28, 40, 33, .035);
+  --shadow-control: 0 1px 2px rgba(28, 40, 33, .055), 0 0 0 1px rgba(28, 40, 33, .025);
+  --shadow-float: 0 16px 48px rgba(23, 38, 30, .14), 0 3px 10px rgba(23, 38, 30, .06);
 
   /* Brand */
   --bg-brand: #3E7D62;
@@ -232,8 +254,8 @@
   --el-bg-color-overlay: #FFFFFF;
 
   /* Border radius */
-  --el-border-radius-base: 8px;
-  --el-border-radius-small: 6px;
+  --el-border-radius-base: var(--radius-control);
+  --el-border-radius-small: var(--radius-inner);
   --el-border-radius-round: 999px;
 
   /* Font */
@@ -248,6 +270,11 @@
   --el-disabled-bg-color: rgba(115, 115, 115, 0.08);
   --el-disabled-text-color: #A1A1A1;
   --el-disabled-border-color: rgba(115, 115, 115, 0.12);
+}
+
+/* Older WebViews keep normal rounded corners without a script or polyfill. */
+@supports (corner-shape: superellipse(1.5)) {
+  :root { --corner-shape: superellipse(1.5); --corner-scale: 1.3; }
 }
 
 /* ===== Element Plus Component Refinements ===== */
@@ -327,10 +354,11 @@
 
 /* Inputs: subtle border, focus uses brand */
 .el-input__wrapper {
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
   box-shadow: 0 0 0 1px var(--border-neutral-l2) inset;
   background: var(--bg-base-default);
-  transition: box-shadow 0.12s ease;
+  transition: box-shadow var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out);
 }
 
 .el-input__wrapper:hover {
@@ -472,7 +500,8 @@
 
 /* Dialog:TraeWork 化(设置窗口/项目保存等) */
 .el-dialog {
-  border-radius: var(--radius-12);
+  border-radius: var(--radius-dialog);
+  corner-shape: var(--corner-shape);
   padding: 0;
 }
 
@@ -500,6 +529,17 @@
 /* ===== Dark Theme =====
    html.dark 由 ui store 切换;只覆盖会变的 token,语义色保持 */
 html.dark {
+  --surface-sidebar: #191D1B;
+  --surface-raised: #242826;
+  --surface-well: #1D211F;
+  --surface-selected: #343B37;
+  --surface-line: rgba(218, 231, 223, .085);
+  --surface-card-heading: var(--surface-raised);
+  --surface-highlight: rgba(255, 255, 255, .045);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .10);
+  --shadow-card-hover: 0 2px 6px rgba(0, 0, 0, .14);
+  --shadow-control: 0 1px 2px rgba(0, 0, 0, .16), inset 0 1px rgba(255, 255, 255, .035);
+  --shadow-float: 0 20px 60px rgba(0, 0, 0, .38), 0 3px 10px rgba(0, 0, 0, .18);
   --bg-base-default: #1C1C1E;
   --bg-base-secondary: #141416;
   --bg-base-tertiary: #2A2A2D;

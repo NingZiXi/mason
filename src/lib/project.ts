@@ -66,7 +66,11 @@ function pads(value: unknown): PadPolygon[] {
     if (typeof cx !== "number" || !Number.isFinite(cx) || typeof cy !== "number" || !Number.isFinite(cy)) {
       throw new Error("Invalid pad center");
     }
-    return { type: type as PadPolygon["type"], cx, cy, polarity: polarity(pad?.polarity), parts };
+    const padRole = pad?.padRole;
+    if (padRole !== undefined && padRole !== "testpoint" && padRole !== "component") throw new Error("Invalid pad role");
+    return { type: type as PadPolygon["type"], cx, cy, polarity: polarity(pad?.polarity), parts,
+      ...(padRole ? { padRole } : {}),
+    };
   });
 }
 

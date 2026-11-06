@@ -20,6 +20,8 @@ jobs:
         run: npx vue-tsc --noEmit
       - name: 单元测试(Gerber 解析器等)
         run: npx vitest run
+      - name: 发布版本与更新清单回归测试
+        run: npm run test:release
 
   geometry:
     name: 几何验证(build123d 三部件几何 + TS/Python 布局一致性)
@@ -59,5 +61,5 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: 编译检查
         run: cargo check --manifest-path src-tauri/Cargo.toml
-      - name: 项目保存加载回归测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib project_tests
+      - name: 后端回归测试(项目保存、任务调度与进程隔离)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib

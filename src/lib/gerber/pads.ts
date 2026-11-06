@@ -30,13 +30,15 @@ export interface PadPart {
 }
 
 export interface PadPolygon {
-  /** 类型标识(诊断用) */
+  /** 原始光圈/图形类型,也用于可选测试点过滤;未知类型须保守保留 */
   type: "circle" | "rect" | "obround" | "line" | "polygon" | "region" | "roundrect" | "macro" | "arc";
   /** 焊盘包围盒中心(诊断显示用) */
   cx: number;
   cy: number;
   /** 图像极性(D=开孔 / C=擦除,%LPC 产生) */
   polarity: "D" | "C";
+  /** Gerber X2 attributes can explicitly distinguish test pads and component pins. */
+  padRole?: "testpoint" | "component";
   /** 部件列表(宏光圈可产生多个,含极性与内孔) */
   parts: PadPart[];
 }
@@ -663,6 +665,9 @@ export function extractPads(text: string): ExtractPadsResult {
   const pads: PadPolygon[] = [];
   const apertures = new Map<string, Aperture>();
   const macros = new Map<string, MacroDef>();
+  const apertureRoles = new Map<string, PadPolygon["padRole"]>();
+  let apertureRole: PadPolygon["padRole"];
+  let objectHasPin = false;
   let currentAperture: Aperture | null = null;
 
   // 格式
@@ -811,7 +816,10 @@ export function extractPads(text: string): ExtractPadsResult {
         })
       ),
     }));
-    emit({ type: currentAperture.kind, cx: px, cy: py, polarity: imagePolarity, parts });
+    const padRole = apertureRoles.get(currentAperture.code) ?? (objectHasPin ? "component" : undefined);
+    emit({ type: currentAperture.kind, cx: px, cy: py, polarity: imagePolarity, parts,
+      ...(padRole ? { padRole } : {}),
+    });
     flashCount++;
   };
 
@@ -893,6 +901,22 @@ export function extractPads(text: string): ExtractPadsResult {
 
     // --- 扩展命令 ---
     if (line.startsWith("%")) {
+      // X2 attribute scopes: TA is attached when ADD defines an aperture;
+      // TO.P is modal object pin metadata. TD clears attribute state, not
+      // the attributes already attached to previously defined apertures.
+      const af = rawLine.match(/%TA\.AperFunction,([^*%]+)\*%/i);
+      if (af) {
+        const fn = af[1].split(",")[0].trim().toLowerCase();
+        apertureRole = fn === "testpad" ? "testpoint"
+          : ["smdpad", "bgapad", "connectorpad", "componentpad", "heatsinkpad"].includes(fn) ? "component" : undefined;
+      }
+      if (/%TO\.P,[^,*%]+,[^,*%]+(?:,[^*%]*)?\*%/i.test(rawLine)) objectHasPin = true;
+      const td = rawLine.match(/%TD([^*%]*)\*%/i);
+      if (td) {
+        const name = td[1].trim().toLowerCase();
+        if (!name || name === ".aperfunction") apertureRole = undefined;
+        if (!name || name === ".p") objectHasPin = false;
+      }
       const fsMatch = rawLine.match(/%FS([LT])?AX(\d)(\d)Y(\d)(\d)\*%/);
       if (fsMatch) places = [parseInt(fsMatch[2], 10), parseInt(fsMatch[3], 10)];
       const moMatch = rawLine.match(/%MO(IN|MM)\*%/i);
@@ -935,7 +959,10 @@ export function extractPads(text: string): ExtractPadsResult {
       }
       // %ADD 光圈定义(其余 % 命令忽略)
       const ap = parseAperture(rawLine, macros);
-      if (ap) apertures.set(ap.code, ap);
+      if (ap) {
+        apertures.set(ap.code, ap);
+        apertureRoles.set(ap.code, apertureRole);
+      }
       continue;
     }
 

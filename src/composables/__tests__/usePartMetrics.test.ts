@@ -27,6 +27,38 @@ function setup() {
 }
 
 describe("print metrics request lifecycle", () => {
+  it("reuses unaffected part measurements across parameter revisions", async () => {
+    let nut = 0.2;
+    const fetch = vi.fn(async () => metric(100));
+    const state = usePartMetrics(
+      () => ({ hash: String(nut), params: { nut }, parts: ["base", "cover"] }),
+      hash => hash === String(nut), fetch,
+      (part, params) => part === "base" ? String(params.nut) : "cover-unchanged",
+    );
+    await state.load();
+    nut = 0.4;
+    state.invalidate();
+    await state.load();
+    expect(fetch.mock.calls).toHaveLength(3);
+    expect(state.metrics.value.cover.volume_mm3).toBe(100);
+  });
+  it("submits parts one at a time and aborts the remainder when hidden or invalidated", async () => {
+    const first = deferred<PartMetrics>();
+    let signal: AbortSignal | undefined;
+    const fetch = vi.fn((_part: string, _params: object, requestSignal: AbortSignal) => {
+      signal = requestSignal;
+      return first.promise;
+    });
+    const state = usePartMetrics(() => ({ hash: "a", params: {}, parts: ["base", "insert", "cover"] }), () => true, fetch);
+    const load = state.load();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    state.invalidate();
+    expect(signal?.aborted).toBe(true);
+    first.resolve(metric(1));
+    await load;
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(state.metrics.value).toEqual({});
+  });
   it("deduplicates pending requests and reuses successful results", async () => {
     const { state, fetch, requests } = setup();
     const first = state.load();

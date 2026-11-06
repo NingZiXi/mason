@@ -3,6 +3,8 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
+import MotionCollapse from "./MotionCollapse.vue";
+import InlineHelp from "./InlineHelp.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -253,7 +255,7 @@ const showAdvanced = ref(false);
       </svg>
     </button>
 
-    <div v-show="showAdvanced" class="advanced-body">
+    <MotionCollapse :open="showAdvanced"><div class="advanced-body">
       <div class="field-row">
         <div class="field">
           <label class="field-label">{{ t('stencil.frameWidth') }}</label>
@@ -280,7 +282,7 @@ const showAdvanced = ref(false);
           />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('stencil.pocketClearance') }}</label>
+          <InlineHelp id="stencil-pocketClearanceHint" :label="t('stencil.pocketClearance')" :text="t('stencil.pocketClearanceHint')"><span class="field-label">{{ t('stencil.pocketClearance') }}</span></InlineHelp>
           <el-input-number
             v-model="c.pocketClearance"
             :min="0"
@@ -292,20 +294,13 @@ const showAdvanced = ref(false);
           />
         </div>
       </div>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('stencil.pocketClearanceHint') }}</span>
-      </div>
 
       <!-- 焊盘后处理 -->
       <div class="section-label">{{ t('stencil.postProcess') }}</div>
 
       <!-- 密脚错排 -->
       <div class="field">
-        <el-checkbox v-model="c.stencilStagger">{{ t('stencil.stagger') }}</el-checkbox>
+        <InlineHelp id="stencil-staggerHint" :label="t('stencil.stagger')" :text="t('stencil.staggerHint')"><el-checkbox v-model="c.stencilStagger">{{ t('stencil.stagger') }}</el-checkbox></InlineHelp>
         <template v-if="c.stencilStagger">
           <div class="field-row">
             <div class="field">
@@ -334,13 +329,6 @@ const showAdvanced = ref(false);
             </div>
           </div>
         </template>
-        <div class="auto-hint">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('stencil.staggerHint') }}</span>
-        </div>
       </div>
 
       <!-- 测试点过滤 -->
@@ -385,7 +373,7 @@ const showAdvanced = ref(false);
 
       <!-- 大孔开网格 -->
       <div class="field">
-        <el-checkbox v-model="c.stencilGrid">{{ t('stencil.grid') }}</el-checkbox>
+        <InlineHelp id="stencil-gridHint" :label="t('stencil.grid')" :text="t('stencil.gridHint')"><el-checkbox v-model="c.stencilGrid">{{ t('stencil.grid') }}</el-checkbox></InlineHelp>
         <template v-if="c.stencilGrid">
           <div class="field-row">
             <div class="field">
@@ -414,15 +402,8 @@ const showAdvanced = ref(false);
             </div>
           </div>
         </template>
-        <div class="auto-hint">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('stencil.gridHint') }}</span>
-        </div>
       </div>
-    </div>
+    </div></MotionCollapse>
   </div>
 </template>
 
@@ -460,7 +441,7 @@ const showAdvanced = ref(false);
   margin: 8px 0 0 0;
   padding: 8px 12px;
   background: var(--bg-brand-popup);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 18px;
@@ -472,7 +453,7 @@ const showAdvanced = ref(false);
   margin: 8px 0 0 0;
   padding: 0 12px;
   background: var(--bg-brand-popup);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
 }
 .info-row {
   display: flex;
@@ -510,10 +491,10 @@ const showAdvanced = ref(false);
   align-items: center;
   padding: 8px 4px;
   border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: var(--bg-secondary, transparent);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: var(--control-transition);
 }
 .preset-btn:hover {
   border-color: var(--brand-500);
@@ -522,7 +503,7 @@ const showAdvanced = ref(false);
   border-color: var(--brand-500);
   background: var(--brand-50, #E8F1EC);
 }
-.preset-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.preset-name { font-size: 12px; font-weight: 600; color: var(--text-default); }
 .preset-val { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
 .slider-row { padding: 0 4px; }
@@ -537,13 +518,13 @@ const showAdvanced = ref(false);
   gap: 8px;
   padding: 9px 4px;
   border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: var(--bg-secondary, transparent);
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: var(--control-transition);
 }
 .shape-btn:hover { border-color: var(--brand-500); }
 .shape-btn.active {
@@ -567,11 +548,11 @@ const showAdvanced = ref(false);
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: var(--bg-secondary, transparent);
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: var(--control-transition);
 }
 .notch-btn:hover {
   border-color: var(--border-neutral-l3);
@@ -598,7 +579,7 @@ const showAdvanced = ref(false);
 .field-value {
   float: right;
   color: var(--text-tertiary);
-  font-weight: var(--font-weight-regular);
+  font-weight: var(--font-weight-default);
 }
 
 /* 高级参数折叠(与 ConfigForm 同款) */
@@ -610,13 +591,13 @@ const showAdvanced = ref(false);
   gap: 6px;
   padding: 7px 12px;
   border: 1px dashed var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: transparent;
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease;
+  transition: var(--control-transition);
   margin: 4px 0 8px 0;
 }
 .advanced-toggle:hover {
@@ -624,7 +605,7 @@ const showAdvanced = ref(false);
   border-color: var(--border-neutral-l3);
 }
 .advanced-toggle .chevron {
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--motion-panel) var(--ease-out);
 }
 .advanced-toggle .chevron.is-open {
   transform: rotate(180deg);

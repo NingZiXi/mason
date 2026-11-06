@@ -1,11 +1,18 @@
 @import "./traework-theme.css";
 
 :root {
+  --motion-fast: 160ms;
+  --motion-panel: 300ms;
+  --motion-press: 85ms;
+  --motion-release: 280ms;
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-settle: cubic-bezier(.2, 1.2, .32, 1);
+  --control-transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow 200ms var(--ease-out), scale var(--motion-release) var(--ease-settle);
   font-family: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 14px;
   line-height: 20px;
   font-weight: 400;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 
   color: var(--text-default);
   background-color: var(--bg-base-secondary);
@@ -82,4 +89,85 @@ input[type='radio']:focus-visible {
   border: 1px solid var(--border-neutral-l2);
   pointer-events: none;
   z-index: 2147483647;
+}
+
+/* Consistent, short control feedback. Large CAD canvases do not animate. */
+.el-button { border-radius: var(--radius-control); corner-shape: var(--corner-shape); transition: var(--control-transition); }
+
+/* Independent scale leaves positioned controls and sliding indicators intact.
+   Press is immediate; release settles gently without reflow or JS listeners. */
+.app-shell :is(.el-button, .mode-btn, .settings-btn, .preset-btn, .shape-btn, .notch-btn, .advanced-toggle, .reset-btn, .tab-btn, .action-btn, .view-btn),
+.settings-dialog :is(.nav-item, .seg-btn, .close-btn, .setting-switch),
+.el-message-box .el-button { scale: 1; -webkit-tap-highlight-color: transparent; }
+.app-shell :is(.el-button, .mode-btn, .settings-btn, .preset-btn, .shape-btn, .notch-btn, .advanced-toggle, .reset-btn, .tab-btn, .action-btn, .view-btn):active:not(:disabled):not(.is-disabled),
+.settings-dialog :is(.nav-item, .seg-btn, .close-btn, .setting-switch):active:not(:disabled),
+.el-message-box .el-button:active:not(:disabled) { scale: .965; transition-duration: var(--motion-press); transition-timing-function: var(--ease-out); }
+
+/* Form surfaces share the same geometry and focus treatment across both modes. */
+.app-sidebar .el-input__wrapper, .app-sidebar .el-select__wrapper {
+  background: var(--surface-well);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
+  box-shadow: inset 0 0 0 1px var(--surface-line);
+  transition: box-shadow var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out);
+}
+.app-sidebar .el-input__wrapper.is-focus, .app-sidebar .el-select__wrapper.is-focused {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--bg-brand), 0 0 0 3px var(--status-success-surface-l1);
+}
+.app-sidebar .el-input__inner { font-variant-numeric: tabular-nums; }
+.app-sidebar .el-input__wrapper:hover, .app-sidebar .el-select__wrapper:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-brand) 32%, var(--surface-line)); }
+.app-sidebar .el-input__wrapper.is-focus:hover, .app-sidebar .el-select__wrapper.is-focused:hover { box-shadow: inset 0 0 0 1px var(--bg-brand), 0 0 0 3px var(--status-success-surface-l1); }
+.app-sidebar .section-label { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); }
+.app-sidebar .section-label::after { content: ''; height: 1px; flex: 1; background: var(--surface-line); }
+.app-sidebar .section-help { margin-bottom: 12px; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
+.app-sidebar .inline-help .field-label { margin-bottom: 0; }
+.app-sidebar .el-slider__button { box-shadow: 0 2px 5px rgba(28,46,36,.12); transition: transform 160ms ease, box-shadow 160ms ease; }
+.app-sidebar .el-slider__button:hover, .app-sidebar .el-slider__button.dragging { box-shadow: 0 0 0 4px var(--status-success-surface-l1), 0 2px 5px rgba(28,46,36,.12); }
+.app-sidebar .el-input-number__increase, .app-sidebar .el-input-number__decrease {
+  background: transparent;
+  color: var(--text-tertiary);
+  border-color: var(--surface-line);
+}
+.app-sidebar .advanced-toggle {
+  border-style: solid;
+  border-color: var(--surface-line);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-well);
+}
+.app-sidebar .preset-btn.active, .app-sidebar .shape-btn.active, .app-sidebar .notch-btn.active {
+  background: var(--status-success-surface-l1);
+  border-color: color-mix(in srgb, var(--bg-brand) 24%, transparent);
+  color: var(--text-brand);
+}
+.app-sidebar .preset-btn, .app-sidebar .shape-btn {
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-well);
+  border-color: transparent;
+  transition: var(--control-transition);
+}
+.app-sidebar .preset-btn:not(.active):hover, .app-sidebar .shape-btn:not(.active):hover { background: var(--surface-selected); border-color: var(--surface-line); }
+.app-sidebar .outline-preview { background: var(--surface-well); }
+.app-header .project-menu__actions .el-button { height: 30px; padding-inline: 12px; }
+
+/* Floating surfaces share the same geometry, including teleported menus. */
+.el-popper.is-light, .el-select__popper.el-popper, .el-dropdown__popper.el-popper {
+  border-color: var(--surface-line);
+  border-radius: var(--radius-popover);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+}
+.el-dropdown__popper.el-popper .el-dropdown-menu { padding: 5px; border-radius: var(--radius-popover); corner-shape: var(--corner-shape); background: var(--surface-raised); }
+.el-dropdown__popper.el-popper .el-dropdown-menu__item { min-height: 32px; border-radius: var(--radius-inner); corner-shape: var(--corner-shape); transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out); }
+.el-select-dropdown__item { margin-inline: 5px; border-radius: var(--radius-inner); corner-shape: var(--corner-shape); transition: background-color var(--motion-fast) var(--ease-out); }
+.el-select-dropdown__item.is-selected { background: var(--status-success-surface-l1); color: var(--text-brand); }
+.el-message-box { border-radius: var(--radius-dialog); corner-shape: var(--corner-shape); border-color: var(--surface-line); background: var(--surface-raised); box-shadow: var(--shadow-float); }
+.el-message-box .el-input__wrapper { background: var(--surface-well); }
+.el-message { border-radius: var(--radius-popover); corner-shape: var(--corner-shape); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

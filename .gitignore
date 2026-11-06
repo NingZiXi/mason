@@ -44,6 +44,9 @@ test_params.json
 # 本地测试产物
 test_out/
 
+# 本地动效视频与制作素材
+/films/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

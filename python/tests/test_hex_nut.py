@@ -3,7 +3,7 @@
 
 设计:
 - 底面 (z = 0) 开口,深度 = nut_height + 0.2
-- 形状:正六边形,内切圆 = nut_across_flats / 2(对边=直径)
+- 形状:正六边形,内切圆 = nut_across_flats / 2 + nut_pocket_clearance(默认单侧 0.2mm)
 - 开启时:周圈螺丝位 z<nut_height+0.2 应空;关闭时:同样位置应实体
 
 用 OCC BRepClass3d_SolidClassifier 验证(几何真值),跟 test_holes 同套路。

@@ -9,6 +9,7 @@
 //! 相比每次 spawn 的旧方案,省掉 Python + build123d 重复导入(~0.5-1s/次)。
 use crate::commands::{Part, ScadParams};
 use crate::error::AppError;
+use crate::generation;
 use crate::python_detect;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,6 +38,8 @@ struct ServerRequest<'a> {
     format: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<&'a ScadParams>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<&'a str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -72,8 +75,10 @@ struct Server {
     log_path: PathBuf,
 }
 
-/// 全局唯一的常驻 server;互斥锁同时把请求串行化(单进程 Python 顺序执行)
+/// Preview/metrics warm worker; admission order is controlled by generation.rs.
 static SERVER: OnceLock<Mutex<Option<Server>>> = OnceLock::new();
+// Export has a separate warm process: stopping preview never kills an export.
+static EXPORT_SERVER: OnceLock<Mutex<Option<Server>>> = OnceLock::new();
 
 fn server_cell() -> &'static Mutex<Option<Server>> {
     SERVER.get_or_init(|| Mutex::new(None))
@@ -106,6 +111,7 @@ async fn spawn_server(
     cmd.arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
         .arg(script_path)
         .arg("--server")
+        .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log_file));
@@ -179,6 +185,7 @@ impl Server {
         part: Option<&str>,
         format: Option<&str>,
         params: Option<&ScadParams>,
+        output: Option<&str>,
     ) -> Result<ServerResponse, AppError> {
         self.next_id += 1;
         let id = self.next_id;
@@ -191,6 +198,7 @@ impl Server {
             part,
             format,
             params,
+            output,
         };
         let mut line = serde_json::to_string(&req)
             .map_err(|e| AppError::Other(format!("序列化请求失败: {}", e)))?;
@@ -352,8 +360,8 @@ async fn ensure_server(
     if guard.is_none() {
         let mut server = spawn_server(python, script_path, log_path).await?;
         // 启动 ping:快速暴露依赖缺失(import 失败 → 进程退出 → 响应通道关闭)
-        if let Err(e) = server.request("ping", None, None, None).await {
-            let _ = server.child.start_kill();
+        if let Err(e) = server.request("ping", None, None, None, None).await {
+            let _ = server.child.kill().await;
             return Err(e);
         }
         *guard = Some(server);
@@ -384,30 +392,96 @@ fn resolve_runtime(
     Ok((python, script_path, log_path))
 }
 
-/// 发送 generate 请求(必要时拉起 server);传输失败时杀掉 server,下次请求重新拉起
-async fn request_generate(
+/// Admit preview work by priority. Exports use an independent serialized worker.
+async fn request_model(
     app: &AppHandle,
     configured_python: Option<&str>,
     params: &ScadParams,
     part: Part,
-    format: &str,
+    cmd: &str,
+    format: Option<&str>,
+    output: Option<&str>,
+    request_id: Option<String>,
+    priority: u8,
+    export: bool,
 ) -> Result<ServerResponse, AppError> {
+    let ticket = if export {
+        None
+    } else {
+        Some(generation::preview().register(request_id, priority))
+    };
+    if let Some(ticket) = &ticket {
+        ticket.acquire().await?;
+    }
     let (python, script_path, log_path) = resolve_runtime(app, configured_python)?;
-
-    let cell = server_cell();
+    let log_path = if export {
+        log_path.with_file_name("mason-python-export.log")
+    } else {
+        log_path
+    };
+    let cell = if export {
+        EXPORT_SERVER.get_or_init(|| Mutex::new(None))
+    } else {
+        server_cell()
+    };
     let mut guard = cell.lock().await;
-    ensure_server(&mut guard, &python, &script_path, &log_path).await?;
+    run_server_request(
+        &mut guard, &python, &script_path, &log_path, cmd,
+        Some(part.to_str()), format, Some(params), output, ticket.as_ref(),
+    ).await
+}
 
-    let server = guard.as_mut().unwrap();
-    match server
-        .request("generate", Some(part.to_str()), Some(format), Some(params))
-        .await
-    {
-        Ok(resp) => Ok(resp),
+async fn run_server_request(
+    guard: &mut Option<Server>,
+    python: &str,
+    script_path: &std::path::Path,
+    log_path: &std::path::Path,
+    cmd: &str,
+    part: Option<&str>,
+    format: Option<&str>,
+    params: Option<&ScadParams>,
+    output: Option<&str>,
+    ticket: Option<&generation::Ticket<'_>>,
+) -> Result<ServerResponse, AppError> {
+    let work = async {
+        ensure_server(guard, python, script_path, log_path).await?;
+        // Runtime settings may change while the application is open.
+        if guard.as_ref().is_some_and(|s| s.python != python) {
+            if let Some(mut server) = guard.take() {
+                let _ = server.child.kill().await;
+            }
+            ensure_server(guard, python, script_path, log_path).await?;
+        }
+        if let Some(ticket) = ticket {
+            ticket.check()?;
+        }
+        guard.as_mut().unwrap().request(cmd, part, format, params, output).await
+    };
+    let result = if let Some(ticket) = ticket {
+        tokio::select! {
+            biased;
+            _ = ticket.interrupted() => Err(AppError::Cancelled),
+            result = work => result,
+        }
+    } else {
+        work.await
+    };
+    match result {
+        Ok(resp) => {
+            if let Some(ticket) = ticket {
+                ticket.check()?;
+            }
+            Ok(resp)
+        }
         Err(e) => {
-            // 传输层失败(超时/进程死亡):kill + 清空,下次请求重新拉起
-            if let Some(mut s) = guard.take() {
-                let _ = s.child.start_kill();
+            // Reap before releasing admission; otherwise a cancelled OCC process
+            // could continue consuming CPU beside its replacement.
+            // A soft cancellation noticed after startup has no calculation to
+            // stop. Preserve this freshly warmed process for the latest job.
+            if !matches!(e, AppError::Cancelled) || ticket.as_ref().is_some_and(|t| t.is_interrupted()) {
+                if let Some(mut s) = guard.take() {
+                    let _ = s.child.kill().await;
+                }
             }
             Err(e)
         }
@@ -420,29 +494,15 @@ pub async fn part_metrics(
     configured_python: Option<&str>,
     params: &ScadParams,
     part: Part,
+    request_id: Option<String>,
 ) -> Result<(f64, f64), AppError> {
-    let (python, script_path, log_path) = resolve_runtime(app, configured_python)?;
-
-    let cell = server_cell();
-    let mut guard = cell.lock().await;
-    ensure_server(&mut guard, &python, &script_path, &log_path).await?;
-
-    let server = guard.as_mut().unwrap();
-    match server
-        .request("stats", Some(part.to_str()), None, Some(params))
-        .await
-    {
+    match request_model(app, configured_python, params, part, "stats", None, None, request_id, 2, false).await {
         Ok(resp) if resp.ok => Ok((resp.volume.unwrap_or(0.0), resp.area.unwrap_or(0.0))),
         Ok(resp) => Err(AppError::RenderFailed(format!(
             "Python 计算体积失败: {}",
             resp.error.unwrap_or_default()
         ))),
-        Err(e) => {
-            if let Some(mut s) = guard.take() {
-                let _ = s.child.start_kill();
-            }
-            Err(e)
-        }
+        Err(e) => Err(e),
     }
 }
 
@@ -452,8 +512,12 @@ pub async fn render_to_stl(
     configured_python: Option<&str>,
     params: &ScadParams,
     part: Part,
+    request_id: Option<String>,
+    background: bool,
 ) -> Result<Vec<u8>, AppError> {
-    let resp = request_generate(app, configured_python, params, part, "stl").await?;
+    let artifact = TempArtifact::new("stl");
+    let output = artifact.0.to_string_lossy();
+    let resp = request_model(app, configured_python, params, part, "generate", Some("stl"), Some(&output), request_id, if background { 1 } else { 0 }, false).await?;
     if !resp.ok {
         return Err(AppError::RenderFailed(format!(
             "Python 生成失败: {}",
@@ -484,7 +548,9 @@ pub async fn render_to_file(
         .and_then(|s| s.to_str())
         .unwrap_or("stl");
 
-    let resp = request_generate(app, configured_python, params, part, ext).await?;
+    let artifact = TempArtifact::new(ext);
+    let output = artifact.0.to_string_lossy();
+    let resp = request_model(app, configured_python, params, part, "generate", Some(ext), Some(&output), None, 0, true).await?;
     if !resp.ok {
         return Err(AppError::RenderFailed(format!(
             "Python 生成失败: {}",
@@ -500,4 +566,80 @@ pub async fn render_to_file(
         .map_err(|e| AppError::Io(e.to_string()))?;
     let _ = tokio::fs::remove_file(&src).await;
     Ok(())
+}
+
+/// Known before computation starts, so cancellation can remove partial output.
+struct TempArtifact(PathBuf);
+impl TempArtifact {
+    fn new(ext: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        Self(std::env::temp_dir().join(format!("mason-{}-{id}.{ext}", std::process::id())))
+    }
+}
+impl Drop for TempArtifact {
+    fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancelling_a_running_preview_reaps_it_and_preserves_export_worker() {
+        let Some(python) = bundled_python(None).or_else(python_detect::find_python_in_path) else { return; };
+        let script = TempArtifact::new("py");
+        std::fs::write(&script.0, r#"
+import json, sys, time
+from pathlib import Path
+for line in sys.stdin:
+    r = json.loads(line)
+    if r['cmd'] == 'generate':
+        Path(r['output']).write_text('started')
+        time.sleep(1 if r.get('part') == 'export' else 30)
+    print(json.dumps({'id': r['id'], 'ok': True}), flush=True)
+"#).unwrap();
+        let preview_log = TempArtifact::new("preview.log");
+        let export_log = TempArtifact::new("export.log");
+        let mut preview_server = Some(spawn_server(&python, &script.0, &preview_log.0).await.unwrap());
+        let mut export_server = Some(spawn_server(&python, &script.0, &export_log.0).await.unwrap());
+        preview_server.as_mut().unwrap().request("ping", None, None, None, None).await.unwrap();
+        export_server.as_mut().unwrap().request("ping", None, None, None, None).await.unwrap();
+        let export_pid = export_server.as_ref().unwrap().child.id();
+        let scheduler = generation::Scheduler::default();
+        let ticket = scheduler.register(Some("preview".into()), 0);
+        ticket.acquire().await.unwrap();
+        let partial = TempArtifact::new("partial.stl");
+        let exported = TempArtifact::new("export.stl");
+        let output = partial.0.to_string_lossy();
+        let export_output = exported.0.to_string_lossy();
+        let cancel = async {
+            timeout(Duration::from_secs(5), async {
+                while !partial.0.exists() { tokio::time::sleep(Duration::from_millis(5)).await; }
+            }).await.unwrap();
+            scheduler.cancel(&["preview".into()], true);
+        };
+        let (preview, export, _) = tokio::join!(
+            run_server_request(&mut preview_server, &python, &script.0, &preview_log.0,
+                "generate", Some("preview"), Some("stl"), None, Some(&output), Some(&ticket)),
+            run_server_request(&mut export_server, &python, &script.0, &export_log.0,
+                "generate", Some("export"), Some("stl"), None, Some(&export_output), None),
+            cancel,
+        );
+        assert!(matches!(preview, Err(AppError::Cancelled)));
+        assert!(preview_server.is_none());
+        assert!(export.unwrap().ok);
+        assert_eq!(export_server.as_ref().unwrap().child.id(), export_pid);
+        assert!(exported.0.exists());
+        drop(partial);
+        drop(ticket);
+        let next = scheduler.register(None, 0);
+        next.acquire().await.unwrap();
+        assert!(run_server_request(&mut preview_server, &python, &script.0, &preview_log.0,
+            "ping", None, None, None, None, Some(&next)).await.unwrap().ok);
+        for server in [&mut preview_server, &mut export_server] {
+            if let Some(mut server) = server.take() { server.child.kill().await.unwrap(); }
+        }
+    }
 }

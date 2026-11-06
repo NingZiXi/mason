@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "mason"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "regex",
  "serde",

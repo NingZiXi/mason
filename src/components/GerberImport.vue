@@ -397,6 +397,7 @@ const outlinePath = computed(() => {
       :title="t('gerber.panelDialogTitle')"
       width="420"
       align-center
+      append-to-body
       :close-on-click-modal="false"
     >
       <p class="dialog-desc">
@@ -436,12 +437,14 @@ const outlinePath = computed(() => {
 
 /* Dropzone */
 .dropzone {
-  border: 1.5px dashed var(--border-neutral-l2);
-  border-radius: var(--radius-12);
+  border: 1px dashed var(--border-neutral-l2);
+  background: var(--surface-well);
+  border-radius: var(--radius-popover);
+  corner-shape: var(--corner-shape);
   padding: 32px 16px;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -450,7 +453,8 @@ const outlinePath = computed(() => {
 
 .dropzone:hover {
   border-color: var(--bg-brand);
-  background: var(--bg-brand-popup);
+  background: color-mix(in srgb, var(--bg-brand) 6%, var(--surface-well));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-brand) 12%, transparent);
 }
 
 /* 拖文件悬停/解析中:品牌橙提示"投入信号"(与 hover 的绿区分) */
@@ -464,11 +468,12 @@ const outlinePath = computed(() => {
 }
 
 .drop-icon {
-  color: var(--text-tertiary);
-  transition: color 0.15s ease;
+  color: var(--bg-brand);
+  transition: color var(--motion-fast) var(--ease-out), transform var(--motion-release) var(--ease-settle);
 }
 
 .dropzone:hover .drop-icon {
+  transform: translateY(-2px);
   color: var(--bg-brand);
 }
 

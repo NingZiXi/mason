@@ -753,9 +753,12 @@ def build_base(p):
     # 5. 周圈螺母反沉孔(可选):从底面开口,深 = nut_h + 0.2,
     #    配合机丝螺丝 + 螺母锁紧(替代自攻);六边形适配螺母外形,防转
     if p.get("use_hex_nut", True):
-        nut_gap = 0.2                                      # 装配间隙 0.2mm
-        # 六边形顶点在外接圆上,对边距 = r_hex * √3,故 r_hex = nut_across / √3
-        r_hex = nut_across / math.sqrt(3)
+        nut_gap = 0.2                                      # 深度余量 0.2mm
+        nut_clearance = float(p.get("nut_pocket_clearance", 0.2))
+        if not math.isfinite(nut_clearance) or not 0 <= nut_clearance <= 1:
+            raise ValueError("螺母槽单侧间隙必须在 0~1 mm 之间")
+        # 每个平面向外留装配间隙,槽对边 = 螺母对边 + 2 × 单侧间隙。
+        r_hex = (nut_across + 2 * nut_clearance) / math.sqrt(3)
         hex_pts = [
             (r_hex * math.cos(i * math.pi / 3.0),
              r_hex * math.sin(i * math.pi / 3.0))
@@ -860,10 +863,11 @@ def _shapely_face(g, z):
             mkh.Add(gp_Pnt(x, y, z))
         mkh.Close()
         if not mkh.IsDone():
-            continue
+            return None
         mkf2 = BRepBuilderAPI_MakeFace(face, mkh.Wire())
-        if mkf2.IsDone():
-            face = mkf2.Face()
+        if not mkf2.IsDone():
+            return None
+        face = mkf2.Face()
     return face
 
 
@@ -882,30 +886,13 @@ def _ocp_prisms(geoms, z0, height):
     for g in polys:
         if g.geom_type != "Polygon" or g.area < 1e-6:
             continue
-        g = shapely_orient(g, 1.0)
-        mk = BRepBuilderAPI_MakePolygon()
-        for x, y in _ring_coords(g.exterior):
-            mk.Add(gp_Pnt(x, y, z0))
-        mk.Close()
-        if not mk.IsDone():
-            continue
-        mkf = BRepBuilderAPI_MakeFace(mk.Wire())
-        if not mkf.IsDone():
-            continue
-        face = mkf.Face()
-        for hole in g.interiors:
-            mkh = BRepBuilderAPI_MakePolygon()
-            for x, y in _ring_coords(hole):
-                mkh.Add(gp_Pnt(x, y, z0))
-            mkh.Close()
-            if not mkh.IsDone():
-                continue
-            mkf2 = BRepBuilderAPI_MakeFace(face, mkh.Wire())
-            if mkf2.IsDone():
-                face = mkf2.Face()
+        face = _shapely_face(g, z0)
+        if face is None:
+            raise RuntimeError("钢网轮廓或开孔构建失败")
         prism = BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, height))
-        if prism.IsDone():
-            shapes.append(prism.Shape())
+        if not prism.IsDone():
+            raise RuntimeError("钢网挤出失败")
+        shapes.append(prism.Shape())
     return shapes
 
 
@@ -1097,6 +1084,123 @@ def _grid_pad_geom(geom, size_thr, bar_w):
     return out
 
 
+def _is_test_point_candidate(pad, geom, max_dia):
+    """An unlabelled, solid circular flash, before shrink/simplify.
+
+    Paste geometry cannot prove a pad is a test point. Unknown/legacy shapes,
+    rounded rectangles, multipart macros and circles with holes must be kept.
+    """
+    if (not isinstance(pad, dict) or pad.get("padRole") in ("component", "testpoint")
+            or pad.get("type") != "circle"
+            or str(pad.get("polarity", "D")).upper() != "D"
+            or geom.geom_type != "Polygon" or len(geom.interiors) != 0):
+        return False
+    parts = pad.get("parts", [])
+    if (len(parts) != 1 or parts[0].get("polarity", "D") != "D"
+            or parts[0].get("holes")):
+        return False
+    x0, y0, x1, y1 = geom.bounds
+    w, h = x1 - x0, y1 - y0
+    if min(w, h) <= 1e-6 or max(w, h) > max_dia or max(w, h) / min(w, h) > 1.02:
+        return False
+    # A true circle has uniform vertex radii. Area alone also matches many
+    # rounded squares; do not infer circularity from an area/bounds ratio.
+    center = geom.centroid
+    radii = [math.hypot(x - center.x, y - center.y) for x, y in geom.exterior.coords[:-1]]
+    return (len(radii) >= 12 and min(radii) > 1e-6
+            and max(radii) / min(radii) <= 1.02
+            and 0.76 <= geom.area / (w * h) <= 0.80)
+
+
+def _filter_test_point_pads(pad_geoms, sources, candidates, isolation, roles=None):
+    """Use explicit X2 roles first, then conservative geometry for unlabelled pads.
+
+    Large neighbouring pads can have distant centroids; shrinking a pad must not
+    turn it into an isolated candidate either. Regular rows protect sparse
+    connector pins even when their pitch exceeds the isolation setting.
+    """
+    roles = roles or [None] * len(pad_geoms)
+    centers = [(g.centroid.x, g.centroid.y) for g in sources]
+    sizes = [(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) for g in sources]
+    # A local index bounds the row search; no board-wide all-pairs array search.
+    search_radius = 10.0  # up to two 5mm connector pitches
+    buckets = {}
+    edge_buckets = {}
+    rotated_sizes = {}
+
+    def same_size(i, j):
+        w, h = sizes[j]
+        width, height = sizes[i]
+        if min(w, h) <= 1e-6:
+            return False
+        if max(w / width, width / w, h / height, height / h) <= 1.15:
+            return True
+        # A connector's square first pin can be rotated relative to the axes.
+        # Only compute its oriented dimensions when the cheap bounds test fails.
+        if j not in rotated_sizes:
+            points = list(sources[j].minimum_rotated_rectangle.exterior.coords)
+            rotated_sizes[j] = sorted([math.dist(points[0], points[1]), math.dist(points[1], points[2])])
+        w, h = rotated_sizes[j]
+        return min(w, h) > 1e-6 and max(w / width, width / w, h / height, height / h) <= 1.15
+
+    def cells(bounds, margin=0):
+        x0, y0, x1, y1 = bounds
+        for bx in range(math.floor((x0 - margin) / search_radius), math.floor((x1 + margin) / search_radius) + 1):
+            for by in range(math.floor((y0 - margin) / search_radius), math.floor((y1 + margin) / search_radius) + 1):
+                yield bx, by
+
+    for i, (cx, cy) in enumerate(centers):
+        key = (math.floor(cx / search_radius), math.floor(cy / search_radius))
+        buckets.setdefault(key, []).append(i)
+        for cell in cells(sources[i].bounds):
+            edge_buckets.setdefault(cell, []).append(i)
+
+    def in_regular_row(i):
+        cx, cy = centers[i]
+        bx, by = math.floor(cx / search_radius), math.floor(cy / search_radius)
+        neighbours = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in buckets.get((bx + dx, by + dy), []):
+                    if i == j or pad_geoms[j][1] != "D":
+                        continue
+                    other = sources[j]
+                    if other.geom_type != "Polygon" or len(other.interiors):
+                        continue
+                    if not same_size(i, j):
+                        continue
+                    vx, vy = centers[j][0] - cx, centers[j][1] - cy
+                    distance = math.hypot(vx, vy)
+                    if 1e-6 < distance <= search_radius:
+                        neighbours.append((distance, vx, vy))
+        neighbours.sort()
+        neighbours = neighbours[:16]
+        for length, vx, vy in neighbours:
+            # At least three equally spaced, same-size pads. Support arbitrary
+            # rotation, middle/end pins and a square first pin in a circular row.
+            for _, wx, wy in neighbours:
+                for multiple in (-1, 2):
+                    tolerance = max(0.03, length * abs(multiple) * 0.05)
+                    if math.hypot(wx - multiple * vx, wy - multiple * vy) <= tolerance:
+                        return True
+        return False
+
+    kept = []
+    for i, entry in enumerate(pad_geoms):
+        if entry[1] == "D" and roles[i] == "testpoint":
+            continue  # Explicit TestPad is stronger evidence than a geometric pattern.
+        isolated = False
+        if roles[i] != "component" and candidates[i] and len(pad_geoms) >= 2 and isolation > 0:
+            nearby = {j for cell in cells(sources[i].bounds, isolation)
+                      for j in edge_buckets.get(cell, []) if i != j}
+            isolated = not any(sources[i].distance(sources[j]) <= isolation for j in nearby)
+            if isolated and in_regular_row(i):
+                isolated = False
+        if not isolated:
+            kept.append(entry)
+    return kept
+
+
 def build_stencil(p, side="top"):
     """PCB 钢网:外框 + 顶面 PCB 卡槽 + 槽底薄钢网层(焊盘开孔只穿这一层)
 
@@ -1133,9 +1237,9 @@ def build_stencil(p, side="top"):
     do_stagger = bool(p.get("stencil_stagger", False))      # 密脚错排
     stagger_gap = float(p.get("stencil_stagger_gap", 0.55))
     stagger_off = float(p.get("stencil_stagger_offset", 0.15))
-    # 测试点过滤:小圆形孤立焊盘(测试探针点)不开锡膏孔,匹配嘉立创行为
+    # 默认过滤测试点:优先 X2 用途属性,否则结合圆形、尺寸、孤立性与排列。
     filter_tp = bool(p.get("stencil_filter_test_points", True))
-    tp_max_dia = float(p.get("stencil_test_point_max_dia", 1.2))
+    tp_max_dia = float(p.get("stencil_test_point_max_dia", 1.9))
     tp_iso = float(p.get("stencil_test_point_isolation", 1.5))
     do_grid = bool(p.get("stencil_grid", False))           # 大孔开网格
     grid_size = float(p.get("stencil_grid_size", 2.0))
@@ -1274,6 +1378,7 @@ def build_stencil(p, side="top"):
 
         # 3. 焊盘解析(多部件极性/镜像/收缩/简化)
         pad_geoms = []  # [(shapely geom, 焊盘极性)]
+        tp_sources, tp_candidates, tp_roles = [], [], []
         for pad in pads_list:
             parts, pad_pol = _pad_to_parts(pad)
             if not parts:
@@ -1306,6 +1411,8 @@ def build_stencil(p, side="top"):
                 geom = geom.difference(shapely_union(clear))
             if geom.is_empty or geom.area < 1e-6:
                 continue
+            source_geom = geom
+            tp_candidate = filter_tp and _is_test_point_candidate(pad, geom, tp_max_dia)
             if pad_shrink > 0:
                 s = max(0.05, 1.0 - pad_shrink)
                 geom = shapely_scale_aff(geom, xfact=s, yfact=s, origin="centroid")
@@ -1349,39 +1456,13 @@ def build_stencil(p, side="top"):
             if geom.is_empty or geom.area < 1e-6:
                 continue
             pad_geoms.append((geom, pad_pol))
+            if filter_tp:
+                tp_sources.append(source_geom)
+                tp_candidates.append(tp_candidate)
+                tp_roles.append(pad.get("padRole") if isinstance(pad, dict) else None)
 
-        # 测试点过滤:小圆形 + 孤立的焊盘 = 测试探针点,不开锡膏孔。
-        # 区分于 BGA 焊盘(也是小圆但成阵列,间距 < tp_iso)。
-        if filter_tp and len(pad_geoms) >= 2:
-            cents = [(g.centroid.x, g.centroid.y) for g, _ in pad_geoms]
-            iso2 = tp_iso * tp_iso
-            kept = []
-            for i, (g, pol) in enumerate(pad_geoms):
-                is_tp = False
-                if pol == "D" and g.geom_type == "Polygon":
-                    bx0, by0, bx1, by1 = g.bounds
-                    bw, bh = bx1 - bx0, by1 - by0
-                    dia = max(bw, bh)
-                    # 圆度:圆面积 / 外接矩形面积 = π/4 ≈ 0.785
-                    if (dia <= tp_max_dia and min(bw, bh) > 1e-6
-                            and bw / bh < 1.1):
-                        circ = g.area / (bw * bh)
-                        if 0.65 < circ < 0.90:
-                            # 孤立检查:tp_iso 内无其他焊盘中心
-                            cx, cy = cents[i]
-                            isolated = True
-                            for j in range(len(pad_geoms)):
-                                if j == i:
-                                    continue
-                                dx = cents[j][0] - cx
-                                dy = cents[j][1] - cy
-                                if dx * dx + dy * dy < iso2:
-                                    isolated = False
-                                    break
-                            is_tp = isolated
-                if not is_tp:
-                    kept.append((g, pol))
-            pad_geoms = kept
+        if filter_tp:
+            pad_geoms = _filter_test_point_pads(pad_geoms, tp_sources, tp_candidates, tp_iso, tp_roles)
 
         # 密脚错排(隔位 ±法向偏移)
         if do_stagger and len(pad_geoms) >= 3:
@@ -1462,17 +1543,11 @@ def build_stencil(p, side="top"):
     try:
         return _build_full()
     except Exception as e:
-        # 降级:只生成外框 + 卡槽(无焊盘/缺口/倒角),保证不崩溃
+        # 不能用无开孔外框冒充生成成功:让预览/导出显示失败,保留异常原因。
         if os.environ.get("JIG_DEBUG"):
             import traceback
             traceback.print_exc()
-        part = poly_solid(frame_poly.exterior.coords, total_h)
-        if part is None:
-            raise
-        pocket_solid = poly_solid(pocket_poly.exterior.coords, pcb_t + 0.1)
-        if pocket_solid is not None:
-            part = part - pocket_solid.moved(bd.Location((0, 0, stencil_t)))
-        return part
+        raise RuntimeError(f"钢网生成失败，已停止生成以避免遗漏开孔: {e}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -1625,9 +1700,11 @@ def _write_stl_fast(output, layers, occ_solids):
         f.write(rec.tobytes())
 
 
-def generate_to_file(params, part_name, output_path, fmt="stl"):
+def generate_to_file(params, part_name, output_path, fmt="stl", on_model=None):
     """生成单个部件并导出到 output_path(CLI 与 server 模式共用)"""
     part = build_part(params, part_name)
+    if on_model is not None:
+        on_model(part)
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1662,6 +1739,47 @@ def generate_to_file(params, part_name, output_path, fmt="stl"):
     return output
 
 
+class MetricsCache:
+    """Retain at most three recent models for lazy stats, plus numeric results.
+
+    Calculating OCC area/volume eagerly delays every preview; keep that work in
+    the low-priority stats request. Models are never reused for further export.
+    """
+    def __init__(self, limit=8):
+        from collections import OrderedDict
+        self.values = OrderedDict()
+        self.models = OrderedDict()
+        self.limit = limit
+
+    def key(self, params, part):
+        return json.dumps([part, params], sort_keys=True, separators=(",", ":"))
+
+    def get(self, key):
+        value = self.values.get(key)
+        if value is None and key in self.models:
+            part = self.models.pop(key)
+            value = (float(part.volume), float(part.area))
+            self.put(key, *value)
+        if value is not None:
+            self.values.move_to_end(key)
+        return value
+
+    def remember_model(self, key, part):
+        if key in self.values:
+            return
+        self.models[key] = part
+        self.models.move_to_end(key)
+        while len(self.models) > min(3, self.limit):
+            self.models.popitem(last=False)
+
+    def put(self, key, volume, area):
+        self.models.pop(key, None)
+        self.values[key] = (volume, area)
+        self.values.move_to_end(key)
+        while len(self.values) > self.limit:
+            self.values.popitem(last=False)
+
+
 def serve():
     """常驻服务模式:stdin 读 JSON 请求行,stdout 回 JSON 响应行。
 
@@ -1677,6 +1795,7 @@ def serve():
     """
     import tempfile
     import uuid as _uuid
+    metrics = MetricsCache()
 
     def respond(obj):
         sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -1697,15 +1816,25 @@ def serve():
                 respond({"id": rid, "ok": True, "pong": True})
             elif cmd == "generate":
                 fmt = req.get("format", "stl")
-                out = Path(tempfile.gettempdir()) / f"jig-{_uuid.uuid4()}.{fmt}"
-                generate_to_file(req["params"], req["part"], out, fmt)
+                out = Path(req["output"]) if req.get("output") else Path(tempfile.gettempdir()) / f"jig-{_uuid.uuid4()}.{fmt}"
+                key = metrics.key(req["params"], req["part"])
+                try:
+                    generate_to_file(req["params"], req["part"], out, fmt,
+                                     lambda model: metrics.remember_model(key, model))
+                except Exception:
+                    out.unlink(missing_ok=True)
+                    raise
                 respond({"id": rid, "ok": True, "path": str(out)})
             elif cmd == "stats":
                 # 体积/表面积(不写文件):供前端"打印信息卡"估算耗材克重
-                _part = build_part(req["params"], req["part"])
+                key = metrics.key(req["params"], req["part"])
+                result = metrics.get(key)
+                if result is None:
+                    _part = build_part(req["params"], req["part"])
+                    result = (float(_part.volume), float(_part.area))
+                    metrics.put(key, *result)
                 respond({"id": rid, "ok": True,
-                         "volume": float(_part.volume),
-                         "area": float(_part.area)})
+                         "volume": result[0], "area": result[1]})
             elif cmd == "shutdown":
                 respond({"id": rid, "ok": True})
                 break

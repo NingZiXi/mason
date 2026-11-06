@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useUiStore } from "../stores/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -10,13 +10,17 @@ import { useUpdaterStore } from "../stores/updater";
 import { version } from "../../package.json";
 
 const { t } = useI18n();
+const emit = defineEmits<{ startTour: [] }>();
+const replayTour = ref(false);
 const ui = useUiStore();
 const updater = useUpdaterStore();
 const canUpdate = isTauri() && !import.meta.env.DEV;
 const confirmingUpdate = ref(false);
 const showSettings = ref(false);
 const appVersion = ref("");
-const activeTab = ref<"about" | "appearance" | "general">("about");
+const activeTab = ref<"about" | "general">("about");
+const contentEl = ref<HTMLElement | null>(null);
+watch(activeTab, () => { if (contentEl.value) contentEl.value.scrollTop = 0; });
 
 onMounted(async () => {
   try {
@@ -24,7 +28,7 @@ onMounted(async () => {
   } catch {
     appVersion.value = version;
   }
-  if (canUpdate) {
+  if (canUpdate && ui.checkUpdatesOnStartup) {
     await updater.checkForUpdates();
     if (updater.update) {
       ElNotification({
@@ -63,10 +67,16 @@ function openLink(url: string) {
 function closeSettings() {
   showSettings.value = false;
 }
+
+function onSettingsClosed() {
+  if (!replayTour.value) return;
+  replayTour.value = false;
+  emit("startTour");
+}
 </script>
 
 <template>
-  <button class="settings-btn" :title="t('settings.button')" @click="showSettings = true">
+  <button class="settings-btn" :title="t('settings.button')" :aria-label="t('settings.button')" aria-haspopup="dialog" :aria-expanded="showSettings" @click="showSettings = true">
     <span v-if="updater.update" class="update-dot" :title="t('updates.title')" />
     <svg viewBox="0 0 24 24" width="15" height="15">
       <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2" />
@@ -75,7 +85,7 @@ function closeSettings() {
     </svg>
   </button>
 
-  <el-dialog v-model="showSettings" width="540px" :show-close="false" align-center :z-index="3000" class="settings-dialog">
+  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" align-center :z-index="3000" class="settings-dialog" @closed="onSettingsClosed">
     <div class="dialog-root">
       <!-- 顶部栏 -->
       <div class="dialog-header">
@@ -96,10 +106,12 @@ function closeSettings() {
 
       <!-- 主体:左菜单 + 右内容 -->
       <div class="dialog-body">
-        <nav class="sidebar">
+        <nav class="sidebar" :aria-label="t('settings.button')">
+          <span class="nav-indicator" :class="{ 'is-general': activeTab === 'general' }" aria-hidden="true" />
           <button
             class="nav-item"
             :class="{ active: activeTab === 'about' }"
+            :aria-current="activeTab === 'about' ? 'page' : undefined"
             @click="activeTab = 'about'"
           >
             <svg viewBox="0 0 16 16" width="15" height="15">
@@ -110,19 +122,8 @@ function closeSettings() {
           </button>
           <button
             class="nav-item"
-            :class="{ active: activeTab === 'appearance' }"
-            @click="activeTab = 'appearance'"
-          >
-            <svg viewBox="0 0 16 16" width="15" height="15">
-              <circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.3" />
-              <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M13 3l-1.4 1.4M4.4 11.6L3 13"
-                fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" />
-            </svg>
-            <span>{{ t('settings.appearance') }}</span>
-          </button>
-          <button
-            class="nav-item"
             :class="{ active: activeTab === 'general' }"
+            :aria-current="activeTab === 'general' ? 'page' : undefined"
             @click="activeTab = 'general'"
           >
             <svg viewBox="0 0 16 16" width="15" height="15">
@@ -133,9 +134,9 @@ function closeSettings() {
           </button>
         </nav>
 
-        <div class="content">
+        <div ref="contentEl" class="content">
           <!-- 关于 -->
-          <div v-show="activeTab === 'about'" class="pane">
+          <div v-show="activeTab === 'about'" class="pane" :class="{ 'is-active': activeTab === 'about' }">
             <div class="about-hero">
               <div class="app-logo">
                 <svg viewBox="0 0 64 64" width="36" height="36">
@@ -164,7 +165,7 @@ function closeSettings() {
                 <p v-else-if="updater.status === 'installing'">{{ t('updates.installing') }}</p>
                 <p v-else-if="updater.status === 'ready'">{{ t('updates.ready') }}</p>
                 <p v-else-if="updater.update">{{ t('updates.available', { version: updater.update.version }) }}</p>
-                <p v-else>{{ t('updates.automatic') }}</p>
+                <p v-else>{{ t(ui.checkUpdatesOnStartup ? 'updates.automatic' : 'updates.manualOnly') }}</p>
                 <el-progress v-if="updater.status === 'downloading' && updater.total" :percentage="updater.progress" />
                 <pre v-if="updater.update?.body" class="update-notes">{{ updater.update.body }}</pre>
                 <p v-if="updater.error" class="update-error">{{ t('updates.failed') }}<br>{{ updater.error }}</p>
@@ -217,16 +218,20 @@ function closeSettings() {
             </div>
           </div>
 
-          <!-- 外观 -->
-          <div v-show="activeTab === 'appearance'" class="pane">
+          <!-- 通用:界面与工作习惯 -->
+          <div v-show="activeTab === 'general'" class="pane" :class="{ 'is-active': activeTab === 'general' }">
+            <section class="setting-section">
+              <h3 class="section-title">{{ t('settings.interface') }}</h3>
             <div class="setting-row">
               <div class="setting-label">
                 <span class="label-text">{{ t('settings.theme') }}</span>
               </div>
-              <div class="seg-group">
+              <div class="seg-group" role="group" :aria-label="t('settings.theme')"
+                :style="{ '--segment-count': 3, '--segment-index': ui.theme === 'light' ? 0 : ui.theme === 'dark' ? 1 : 2 }">
+                <span class="seg-indicator" aria-hidden="true" />
                 <button
                   class="seg-btn"
-                  :class="{ active: ui.theme === 'light' }"
+                  :class="{ active: ui.theme === 'light' }" :aria-pressed="ui.theme === 'light'"
                   @click="ui.setTheme('light')"
                 >
                   <svg viewBox="0 0 16 16" width="14" height="14">
@@ -238,7 +243,7 @@ function closeSettings() {
                 </button>
                 <button
                   class="seg-btn"
-                  :class="{ active: ui.theme === 'dark' }"
+                  :class="{ active: ui.theme === 'dark' }" :aria-pressed="ui.theme === 'dark'"
                   @click="ui.setTheme('dark')"
                 >
                   <svg viewBox="0 0 16 16" width="14" height="14">
@@ -247,29 +252,71 @@ function closeSettings() {
                   </svg>
                   {{ t('settings.dark') }}
                 </button>
+                <button class="seg-btn" :class="{ active: ui.theme === 'system' }"
+                  :aria-pressed="ui.theme === 'system'" @click="ui.setTheme('system')">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+                    <rect x="1.5" y="2.5" width="13" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3" />
+                    <path d="M8 11.5v2M5.5 13.5h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+                  </svg>
+                  {{ t('settings.system') }}
+                </button>
               </div>
             </div>
-          </div>
-
-          <!-- 通用 -->
-          <div v-show="activeTab === 'general'" class="pane">
             <div class="setting-row">
               <div class="setting-label">
                 <span class="label-text">{{ t('settings.language') }}</span>
               </div>
-              <div class="seg-group">
+              <div class="seg-group" :style="{ '--segment-index': ui.locale === 'zh' ? 0 : 1 }">
+                <span class="seg-indicator" aria-hidden="true" />
                 <button
                   class="seg-btn"
-                  :class="{ active: ui.locale === 'zh' }"
+                  :class="{ active: ui.locale === 'zh' }" :aria-pressed="ui.locale === 'zh'"
                   @click="ui.setLocale('zh')"
                 >中文</button>
                 <button
                   class="seg-btn"
-                  :class="{ active: ui.locale === 'en' }"
+                  :class="{ active: ui.locale === 'en' }" :aria-pressed="ui.locale === 'en'"
                   @click="ui.setLocale('en')"
                 >English</button>
               </div>
             </div>
+            </section>
+            <section class="setting-section">
+              <h3 class="section-title">{{ t('settings.workflow') }}</h3>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">{{ t('settings.startupUpdates') }}</span>
+                  <p id="startup-updates-hint" class="setting-hint">{{ t('settings.startupUpdatesHint') }}</p>
+                </div>
+                <button type="button" class="setting-switch" :class="{ 'is-on': ui.checkUpdatesOnStartup }"
+                  role="switch" :aria-checked="ui.checkUpdatesOnStartup" :aria-label="t('settings.startupUpdates')"
+                  aria-describedby="startup-updates-hint" @click="ui.checkUpdatesOnStartup = !ui.checkUpdatesOnStartup"><span /></button>
+              </div>
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">{{ t('settings.defaultExport') }}</span>
+                  <p class="setting-hint">{{ t('settings.defaultExportHint') }}</p>
+                </div>
+                <div class="seg-group" role="group" :aria-label="t('settings.defaultExport')"
+                  :style="{ '--segment-index': ui.defaultExportFormat === 'stl' ? 0 : 1 }">
+                  <span class="seg-indicator" aria-hidden="true" />
+                  <button class="seg-btn" :class="{ active: ui.defaultExportFormat === 'stl' }"
+                    :aria-pressed="ui.defaultExportFormat === 'stl'" @click="ui.defaultExportFormat = 'stl'">STL</button>
+                  <button class="seg-btn" :class="{ active: ui.defaultExportFormat === 'step' }"
+                    :aria-pressed="ui.defaultExportFormat === 'step'" @click="ui.defaultExportFormat = 'step'">STEP</button>
+                </div>
+              </div>
+            </section>
+            <section class="setting-section">
+              <div class="setting-row">
+                <div class="setting-label">
+                  <span class="label-text">{{ t('onboarding.replayTitle') }}</span>
+                  <p class="setting-hint">{{ t('onboarding.replayHint') }}</p>
+                </div>
+                <el-button size="small" @click="replayTour = true; closeSettings()">{{ t('onboarding.replay') }}</el-button>
+              </div>
+            </section>
+            <p class="save-hint">{{ t('settings.savedAutomatically') }}</p>
           </div>
         </div>
       </div>
@@ -286,11 +333,12 @@ function closeSettings() {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
   background: var(--bg-base-default);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  transition: var(--control-transition);
 }
 .settings-btn:hover {
   background: var(--bg-overlay-l1);
@@ -299,12 +347,15 @@ function closeSettings() {
 
 /* 对话框根容器 */
 .dialog-root {
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 /* 顶部栏 */
 .dialog-header {
+  background: var(--surface-raised);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -336,24 +387,24 @@ function closeSettings() {
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  border-radius: var(--radius-6);
+  border-radius: 50%;
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition: var(--control-transition);
 }
 .close-btn:hover {
   background: var(--bg-overlay-l1);
   color: var(--text-default);
 }
 
-/* 主体 — 固定高度确保三个标签页窗口大小一致 */
+/* The dialog frame stays fixed; each page scrolls inside the same content area. */
 .dialog-body {
   display: flex;
-  min-height: 380px;
-  max-height: min(600px, 75vh);
+  flex: 1;
+  min-height: 0;
 }
 
 .update-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-brand); }
-.update-card { padding: 12px; border: 1px solid var(--border-neutral-l1); border-radius: var(--radius-6); font-size: 12px; color: var(--text-secondary); }
+.update-card { padding: 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-popover); corner-shape: var(--corner-shape); background: var(--surface-well); font-size: 12px; color: var(--text-secondary); }
 .update-card p { margin: 8px 0; line-height: 1.6; }
 .update-notes { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; }
 .update-error { color: var(--el-color-danger); overflow-wrap: anywhere; }
@@ -362,35 +413,57 @@ function closeSettings() {
 
 /* 侧边栏 */
 .sidebar {
+  position: relative;
+  background: var(--surface-sidebar);
   width: 132px;
   flex-shrink: 0;
   padding: 10px 8px;
   border-right: 1px solid var(--border-neutral-l1);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
+.nav-indicator {
+  position: absolute;
+  top: 10px;
+  left: 8px;
+  right: 8px;
+  height: 36px;
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
+  background: var(--status-success-surface-l1);
+  box-shadow: none;
+  transform: translateY(0);
+  transition: transform 320ms var(--ease-out);
+  pointer-events: none;
+}
+.nav-indicator.is-general { transform: translateY(40px); }
 .nav-item {
+  position: relative;
+  z-index: 1;
+  height: 36px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
   border: none;
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
   background: transparent;
   color: var(--text-secondary);
   font-size: 13px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   text-align: left;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition: var(--control-transition);
 }
 .nav-item:hover {
   background: var(--bg-overlay-l1);
   color: var(--text-default);
 }
 .nav-item.active {
-  background: var(--bg-brand-popup);
+  background: transparent;
   color: var(--text-brand);
   font-weight: var(--font-weight-strong);
 }
@@ -399,13 +472,22 @@ function closeSettings() {
 .content {
   flex: 1;
   min-width: 0;
-  padding: 18px 20px;
+  min-height: 0;
+  scrollbar-gutter: stable;
+  padding: 22px 24px;
+  background: var(--surface-raised);
   overflow-y: auto;
 }
 .pane {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.pane.is-active { animation: settings-arrive 180ms var(--ease-out) both; }
+@keyframes settings-arrive {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* 关于页 - 头部 */
@@ -501,8 +583,18 @@ a.link-row:hover .link-label {
   padding: 4px 0;
 }
 .setting-label {
-  flex-shrink: 0;
+  min-width: 0;
+  flex: 1;
 }
+.setting-section { display: flex; flex-direction: column; gap: 12px; }
+.setting-section + .setting-section { border-top: 1px solid var(--border-neutral-l1); padding-top: 16px; }
+.section-title { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: var(--text-tertiary); }
+.setting-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-tertiary); }
+.save-hint { margin: 0; padding-top: 2px; font-size: 11px; line-height: 1.6; color: var(--text-tertiary); }
+.setting-switch { flex: 0 0 36px; width: 36px; height: 22px; padding: 3px; border: 0; border-radius: 99px; background: var(--border-neutral-l2); cursor: pointer; transition: var(--control-transition); }
+.setting-switch span { display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); transform: translateX(0); transition: transform var(--motion-release) var(--ease-settle); }
+.setting-switch.is-on { background: var(--bg-brand); }
+.setting-switch.is-on span { transform: translateX(14px); }
 .label-text {
   font-size: 13px;
   color: var(--text-secondary);
@@ -511,13 +603,33 @@ a.link-row:hover .link-label {
 
 /* 分段控件 */
 .seg-group {
-  display: inline-flex;
-  gap: 2px;
-  background: var(--bg-overlay-l1);
-  border-radius: var(--radius-6);
-  padding: 2px;
+  --segment-count: 2;
+  --segment-index: 0;
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-grid;
+  grid-template-columns: repeat(var(--segment-count), minmax(0, 1fr));
+  background: var(--surface-well);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-full);
+  padding: 3px;
+}
+.seg-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--segment-count));
+  border-radius: var(--radius-full);
+  background: var(--surface-selected);
+  box-shadow: var(--shadow-control);
+  transform: translateX(calc(var(--segment-index) * 100%));
+  transition: transform 320ms var(--ease-out);
+  pointer-events: none;
 }
 .seg-btn {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -525,30 +637,34 @@ a.link-row:hover .link-label {
   padding: 5px 14px;
   min-width: 64px;
   border: none;
-  border-radius: var(--radius-4);
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition: var(--control-transition);
 }
 .seg-btn:hover {
   color: var(--text-default);
 }
 .seg-btn.active {
-  background: var(--bg-base-default);
-  color: var(--text-default);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  background: transparent;
+  color: var(--text-brand);
 }
 </style>
 
 <style>
 /* settings-dialog 专用覆盖（非 scoped，因对话框 teleport 到 body，scoped :deep() 无法命中） */
 .settings-dialog.el-dialog {
+  height: min(560px, calc(100vh - 48px));
+  max-width: calc(100vw - 32px);
   margin: 0 auto !important;
   padding: 0 !important;
-  border-radius: var(--radius-12);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-dialog);
+  corner-shape: var(--corner-shape);
+  box-shadow: var(--shadow-float);
   overflow: hidden;
   align-self: center;
   z-index: 3001 !important;
@@ -564,6 +680,8 @@ a.link-row:hover .link-label {
   border: none;
 }
 .settings-dialog .el-dialog__body {
+  height: 100%;
+  min-height: 0;
   padding: 0 !important;
   margin: 0;
 }

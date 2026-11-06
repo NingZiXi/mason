@@ -2,7 +2,9 @@ import type { AppConfig } from "../stores/config";
 import type { PadPolygon } from "./gerber/pads";
 
 // Image polarity applies to the whole pad; part polarity and holes apply inside it.
-const enginePads = (pads: PadPolygon[]) => pads.map(({ polarity, parts }) => ({ polarity, parts }));
+const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole }) => ({
+  type, polarity, parts, ...(padRole ? { padRole } : {}),
+}));
 
 // 计算当前参数的 hash(用于判断是否需要重新生成)
 export function modelParamsHash(c: AppConfig) {
@@ -12,7 +14,7 @@ export function modelParamsHash(c: AppConfig) {
   return JSON.stringify({
     mode: c.appMode,
     pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY],
-    screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight],
+    screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight, c.nutPocketClearance],
     dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.postClearance, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap],
     notch: [c.pryNotchSides, c.pryNotchScale],
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
@@ -55,6 +57,7 @@ export function buildScadParams(c: AppConfig) {
     use_hex_nut: c.useHexNut,
     nut_across_flats: c.nutAcrossFlats,
     nut_height: c.nutHeight,
+    nut_pocket_clearance: c.nutPocketClearance,
     // PCB 钢网(一体式)参数
     stencil_thickness: c.stencilThickness,
     pad_shrink: c.padShrink,
@@ -75,4 +78,24 @@ export function buildScadParams(c: AppConfig) {
     stencil_pads_top: enginePads(c.stencilPadsTop),
     stencil_pads_bottom: enginePads(c.stencilPadsBottom),
   };
+}
+
+/** Conservative part keys: changes in the other manufacturing mode/PCB side
+ * cannot invalidate this mesh. Keep shared outline and notch inputs. */
+export function scadPartHash(params: ReturnType<typeof buildScadParams>, part: string) {
+  const stencil = part.startsWith("stencil_");
+  const stencilShared = new Set(["pcb_size_x", "pcb_size_y", "pcb_thickness", "pcb_outline_points", "pcb_outline_holes",
+    "outer_corner_radius", "pry_notch_sides", "pry_notch_scale", "pocket_clearance", "pad_shrink"]);
+  const unusedJigInputs = new Set(part === "insert"
+    ? ["screw_spacing", "screw_spec", "peri_screw_d", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance", "post_clearance", "platter_height"]
+    : ["insert_height", "platter_height", "pcb_thickness", "pcb_outline_holes", "eject_slot_width", "pry_notch_sides", "pry_notch_scale",
+      ...(part === "cover" ? ["base_height", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance"] : ["top_cover_height"])]);
+  return JSON.stringify(Object.fromEntries(Object.entries(params).filter(([key]) => {
+    if (stencil) {
+      if (key === (part === "stencil_top" ? "stencil_pads_bottom" : "stencil_pads_top")) return false;
+      return key.startsWith("stencil_") || stencilShared.has(key);
+    }
+    return (!key.startsWith("stencil_") || ["stencil_size_x", "stencil_size_y", "stencil_corner_radius", "stencil_frame_width", "stencil_frame_shape"].includes(key))
+      && key !== "pad_shrink" && !unusedJigInputs.has(key);
+  })));
 }

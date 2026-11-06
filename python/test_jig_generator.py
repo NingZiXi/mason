@@ -16,6 +16,9 @@ import pytest
 pytest.importorskip("build123d")
 
 from shapely.geometry import box as shapely_box  # noqa: E402
+from shapely.geometry import Point as ShapelyPoint  # noqa: E402
+from shapely.affinity import translate as shapely_translate  # noqa: E402
+from shapely.affinity import rotate as shapely_rotate  # noqa: E402
 
 import jig_generator as jg  # noqa: E402
 
@@ -35,6 +38,61 @@ BASE_PARAMS = {
 # ---------------------------------------------------------------------------
 # 1. 螺丝/螺母参数
 # ---------------------------------------------------------------------------
+
+def test_server_reuses_generation_metrics_and_cleans_failed_output(monkeypatch, tmp_path, capsys):
+    import io
+    import json
+    import sys
+    from types import SimpleNamespace
+    out = tmp_path / "preview.stl"
+    failed = tmp_path / "failed.stl"
+    builds = []
+
+    def build(params, part):
+        builds.append((params, part))
+        return SimpleNamespace(volume=10, area=20)
+
+    def generate(params, part, path, fmt, on_model):
+        path.write_bytes(b"partial")
+        if params.get("fail"):
+            raise RuntimeError("CAD failure")
+        model = build(params, part)
+        on_model(model)
+
+    monkeypatch.setattr(jg, "generate_to_file", generate)
+    monkeypatch.setattr(jg, "build_part", build)
+    requests = [
+        dict(id=1, cmd="generate", params={"value": 1}, part="insert", output=str(out)),
+        dict(id=2, cmd="stats", params={"value": 1}, part="insert"),
+        dict(id=3, cmd="stats", params={"value": 2}, part="insert"),
+        dict(id=4, cmd="generate", params={"fail": True}, part="insert", output=str(failed)),
+    ]
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(map(json.dumps, requests))))
+    jg.serve()
+    responses = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [item[0] for item in builds] == [{"value": 1}, {"value": 2}]
+    assert responses[1]["volume"] == 10
+    assert responses[1]["area"] == 20
+    assert responses[3]["ok"] is False
+    assert not failed.exists()
+    assert out.exists()
+
+
+def test_metrics_cache_is_bounded_and_keeps_recent_results():
+    cache = jg.MetricsCache(limit=2)
+    cache.put("a", 1, 2)
+    cache.put("b", 2, 4)
+    assert cache.get("a") == (1, 2)
+    cache.put("c", 3, 6)
+    assert cache.get("b") is None
+    assert len(cache.values) == 2
+    from types import SimpleNamespace
+    model = SimpleNamespace(volume=4, area=8)
+    for key in ["d", "e", "f"]:
+        cache.remember_model(key, model)
+    assert len(cache.models) == 2
+    assert cache.get("e") == (4, 8)
+    assert "e" not in cache.models
 
 def test_peri_screw_params_m3():
     dia, across, height = jg.peri_screw_params({"screw_spec": "M3"})
@@ -58,6 +116,42 @@ def test_nut_hex_across_flats_matches_gb6170():
 # ---------------------------------------------------------------------------
 # 2. 大孔开网格(_grid_pad_geom)
 # ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("spec", ["M2.5", "M3", "M5"])
+def test_nut_pocket_print_clearance_in_real_solid(spec):
+    """All six flats have printing allowance, without cutting through the pocket roof."""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.gp import gp_Pnt
+    from OCP.TopAbs import TopAbs_IN
+
+    params = dict(BASE_PARAMS, screw_spec=spec, jig_size=200, base_height=7)
+    default = jg.build_base(params)  # Legacy projects also get the default allowance.
+    tight = jg.build_base(dict(params, nut_pocket_clearance=0))
+    custom = jg.build_base(dict(params, nut_pocket_clearance=0.35))
+    _, across, nut_h = jg.peri_screw_params(params)
+    window = jg.get_polys(params)[2]
+    cx, cy = jg.compute_perimeter_screw_positions(200, window, params["screw_spacing"])[0]
+
+    def inside(part, distance, angle, z):
+        point = gp_Pnt(cx + distance * math.cos(angle), cy + distance * math.sin(angle), z)
+        for solid in part.solids():
+            classifier = BRepClass3d_SolidClassifier(solid.wrapped)
+            classifier.Perform(point, 1e-6)
+            if classifier.State() == TopAbs_IN:
+                return True
+        return False
+
+    for i in range(6):
+        normal = math.pi / 6 + i * math.pi / 3
+        # Sample either side of the nominal, default and custom flat boundaries.
+        assert inside(tight, across / 2 + 0.1, normal, 1)
+        assert not inside(default, across / 2 + 0.1, normal, 1)
+        assert inside(default, across / 2 + 0.25, normal, 1)
+        assert not inside(custom, across / 2 + 0.25, normal, 1)
+        assert inside(custom, across / 2 + 0.4, normal, 1)
+        assert inside(default, across / 2 - 0.1, normal, nut_h + 0.3)
+    assert tight.volume > default.volume > custom.volume
+
 
 def test_grid_pad_geom_large_pad_split():
     geom = shapely_box(0, 0, 5, 5)  # 5mm 大焊盘,单边 > 阈值 2.0
@@ -103,6 +197,163 @@ def test_image_clear_polarity_restores_stencil_material(side):
     clear_volume = jg.build_stencil(params, side).volume
     # Steel below the pocket is thickness - 0.05 mm in the current geometry.
     assert clear_volume - dark_volume == pytest.approx(4 * (0.3 - 0.05), abs=1e-5)
+
+
+def _paste_pad(geom, kind="circle", polarity="D"):
+    return {"type": kind, "polarity": polarity, "parts": [{
+        "polarity": "D", "points": list(geom.exterior.coords),
+        "holes": [list(h.coords) for h in geom.interiors],
+    }]}
+
+
+@pytest.mark.parametrize("side", ["top", "bottom"])
+def test_small_paste_openings_are_kept_by_default(side):
+    """0402/smaller rectangles and labelled circular component pins remain holes.
+    Compare actual OCC solid volumes, not just the number of parsed pads.
+    """
+    shapes = [
+        shapely_box(-5.25, -0.225, -4.75, 0.225),  # 0.5 x 0.45 mm
+        shapely_box(-0.1, -0.09, 0.1, 0.09),      # 0.2 x 0.18 mm
+        ShapelyPoint(5, 2).buffer(0.15, resolution=8),
+    ]
+    params = dict(BASE_PARAMS, pcb_size_x=20, pcb_size_y=20,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                  stencil_frame_width=4, stencil_thickness=0.3,
+                  pad_shrink=0, pry_notch_sides=[])
+    key = f"stencil_pads_{side}"
+    params[key] = []
+    blank_volume = jg.build_stencil(params, side).volume
+    for shape, kind in zip(shapes, ["rect", "rect", "circle"]):
+        params[key].append(_paste_pad(shape, kind))
+    params[key][-1]["padRole"] = "component"
+    opened_volume = jg.build_stencil(params, side).volume
+    expected_area = sum(g.simplify(0.02, preserve_topology=True).area for g in shapes)
+    assert blank_volume - opened_volume == pytest.approx(expected_area * 0.25, abs=1e-5)
+    params["stencil_filter_test_points"] = False
+    assert jg.build_stencil(params, side).volume == pytest.approx(opened_volume, abs=1e-5)
+
+
+def test_filter_retains_unknown_roundrect_holes_and_bga_pads():
+    circle = ShapelyPoint(0, 0).buffer(0.3, resolution=8)
+    unknown = shapely_translate(circle, xoff=5)
+    rounded = shapely_box(9.95, -0.05, 10.05, 0.05).buffer(0.2, resolution=8)
+    annulus = shapely_translate(circle.difference(ShapelyPoint(0, 0).buffer(0.1)), xoff=15)
+    bga1 = shapely_translate(circle, xoff=20)
+    bga2 = shapely_translate(circle, xoff=20.8)
+    geoms = [circle, unknown, rounded, annulus, bga1, bga2]
+    pads = [_paste_pad(g, kind) for g, kind in zip(geoms, ["circle", "macro", "roundrect", "circle", "circle", "circle"])]
+    candidates = [jg._is_test_point_candidate(pad, g, 1.9) for pad, g in zip(pads, geoms)]
+    assert candidates == [True, False, False, False, True, True]
+    entries = [(g, "D") for g in geoms]
+    kept = jg._filter_test_point_pads(entries, geoms, candidates, 1.5)
+    assert kept == entries[1:]  # Only the deliberately isolated known circle is removed.
+    # Image-level clear circles restore material and are never filter candidates.
+    assert not jg._is_test_point_candidate(_paste_pad(circle, polarity="C"), circle, 1.9)
+    assert not jg._is_test_point_candidate(list(circle.exterior.coords), circle, 1.9)
+    # A geometrically near-square shape is not a circle, even with bad metadata.
+    assert not jg._is_test_point_candidate(_paste_pad(rounded), rounded, 1.9)
+
+
+def test_filter_measures_original_pad_edges_not_centroids():
+    circle = ShapelyPoint(0, 0).buffer(0.3, resolution=8)
+    long_pad = shapely_box(1, -0.2, 30, 0.2)  # centroid is far outside the local circle's cell
+    entries = [(circle, "D"), (long_pad, "D")]
+    assert jg._filter_test_point_pads(entries, [circle, long_pad], [True, False], 1.5) == entries
+
+
+def test_default_filter_is_used_and_can_be_disabled_during_stencil_generation():
+    circle = ShapelyPoint(-5, 0).buffer(0.3, resolution=8)
+    rectangle = shapely_box(4.9, -0.1, 5.1, 0.1)
+    params = dict(BASE_PARAMS, pcb_size_x=20, pcb_size_y=20,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                  stencil_frame_width=4, stencil_thickness=0.3,
+                  pad_shrink=0, pry_notch_sides=[],
+                  stencil_pads_top=[_paste_pad(circle), _paste_pad(rectangle, "rect")])
+    filtered = jg.build_stencil(params).volume
+    params["stencil_filter_test_points"] = False
+    original = jg.build_stencil(params).volume
+    assert filtered - original == pytest.approx(circle.simplify(0.02).area * 0.25, abs=1e-5)
+
+
+@pytest.mark.parametrize("angle", [0, 37, 90])
+@pytest.mark.parametrize("square_first", [False, True])
+def test_filter_protects_sparse_regular_connector_rows(angle, square_first):
+    # 2.54mm pitch is outside the 1.5mm edge-isolation setting. All pins must
+    # survive, including row endpoints and a rectangular first pin.
+    geoms, pads = [], []
+    a = math.radians(angle)
+    for i in range(3):
+        x, y = -12 + i * 2.54 * math.cos(a), -10 + i * 2.54 * math.sin(a)
+        g = (shapely_rotate(shapely_box(x - 0.3, y - 0.3, x + 0.3, y + 0.3), angle) if square_first and i == 0
+             else ShapelyPoint(x, y).buffer(0.3, resolution=8))
+        geoms.append(g)
+        pads.append(_paste_pad(g, "rect" if square_first and i == 0 else "circle"))
+    candidates = [jg._is_test_point_candidate(p, g, 1.9) for p, g in zip(pads, geoms)]
+    entries = [(g, "D") for g in geoms]
+    assert jg._filter_test_point_pads(entries, geoms, candidates, 1.5) == entries
+
+
+def test_filter_does_not_mistake_irregular_round_test_points_for_an_array():
+    geoms = [ShapelyPoint(x, y).buffer(0.3, resolution=8) for x, y in [(0, 0), (3, 0), (7, 2)]]
+    entries = [(g, "D") for g in geoms]
+    assert jg._filter_test_point_pads(entries, geoms, [True] * 3, 1.5) == []
+
+
+def test_x2_roles_override_geometry_but_never_remove_clear_material():
+    geoms = [ShapelyPoint(x, 0).buffer(0.3, resolution=8) for x in [0, 0.8, 1.6, 10]]
+    entries = [(g, "D" if i < 3 else "C") for i, g in enumerate(geoms)]
+    roles = ["testpoint", "component", None, "testpoint"]
+    assert jg._filter_test_point_pads(entries, geoms, [False, False, True, False], 1.5, roles) == entries[1:]
+    assert not jg._is_test_point_candidate(dict(_paste_pad(geoms[1]), padRole="component"), geoms[1], 1.9)
+    # A solitary pad explicitly marked TestPad is removable without neighbours.
+    assert jg._filter_test_point_pads(entries[:1], geoms[:1], [False], 1.5, ["testpoint"]) == []
+
+
+@pytest.mark.parametrize("side", ["top", "bottom"])
+def test_x2_roles_are_applied_to_the_generated_stencil(side):
+    geom = ShapelyPoint(0, 0).buffer(0.3, resolution=8)
+    pad = dict(_paste_pad(geom), padRole="component")
+    params = dict(BASE_PARAMS, pcb_size_x=20, pcb_size_y=20,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                  stencil_frame_width=4, stencil_thickness=0.3,
+                  pad_shrink=0, pry_notch_sides=[])
+    params[f"stencil_pads_{side}"] = [pad]
+    opened = jg.build_stencil(params, side).volume
+    pad["padRole"] = "testpoint"
+    blank = jg.build_stencil(params, side).volume
+    assert blank - opened == pytest.approx(geom.simplify(0.02).area * 0.25, abs=1e-5)
+    params["stencil_filter_test_points"] = False
+    assert jg.build_stencil(params, side).volume == pytest.approx(opened, abs=1e-5)
+
+
+def test_failed_stencil_generation_does_not_export_a_blank_fallback(monkeypatch, tmp_path):
+    def fail(*args):
+        raise RuntimeError("aperture construction failed")
+    monkeypatch.setattr(jg, "_ocp_prisms", fail)
+    out = tmp_path / "invalid.stl"
+    with pytest.raises(RuntimeError, match="钢网生成失败.*aperture construction failed"):
+        jg.generate_to_file(dict(BASE_PARAMS), "stencil", out, "stl")
+    assert not out.exists()
+
+
+def test_failed_aperture_wire_is_not_silently_omitted(monkeypatch):
+    geom = shapely_box(-2, -2, 2, 2).difference(shapely_box(-0.1, -0.1, 0.1, 0.1))
+    original = jg.BRepBuilderAPI_MakePolygon
+    calls = 0
+
+    class FailedHoleWire:
+        def Add(self, *args): pass
+        def Close(self): pass
+        def IsDone(self): return False
+
+    def make_polygon():
+        nonlocal calls
+        calls += 1
+        return original() if calls == 1 else FailedHoleWire()
+
+    monkeypatch.setattr(jg, "BRepBuilderAPI_MakePolygon", make_polygon)
+    with pytest.raises(RuntimeError, match="钢网轮廓或开孔构建失败"):
+        jg._ocp_prisms([geom], 0, 0.25)
 
 
 # ---------------------------------------------------------------------------

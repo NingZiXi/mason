@@ -1,13 +1,77 @@
 <script setup lang="ts">
-import { computed, onBeforeMount, ref } from "vue";
+import { computed, onBeforeMount, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore, windowHalf, platterHalfXY, windowHalfXY, stencilLipMax, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
+import MotionCollapse from "./MotionCollapse.vue";
+import InlineHelp from "./InlineHelp.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
 const c = computed(() => store.config);
 const warnings = computed(() => store.warnings);
+const stencilSizeReviewed = ref(false);
+const showStencilSizeGuide = computed(() => !!c.value.gerberFilename && !stencilSizeReviewed.value);
+const stencilSizeSection = ref<HTMLElement | null>(null);
+const stencilSizeGuide = ref<HTMLElement | null>(null);
+let guideAnimation: Animation | undefined;
+let finishGuideScroll: (() => void) | undefined;
+let guideSequence = 0;
+
+function cancelStencilReveal() {
+  guideSequence++;
+  finishGuideScroll?.();
+  guideAnimation?.cancel();
+  guideAnimation = undefined;
+}
+
+async function revealStencilSize() {
+  cancelStencilReveal();
+  const sequence = guideSequence;
+  const section = stencilSizeSection.value;
+  const sidebar = section?.closest<HTMLElement>(".app-sidebar");
+  if (!section || !sidebar || !showStencilSizeGuide.value) return;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Scroll only the parameter sidebar, leaving the 3D view and keyboard focus alone.
+  const top = Math.max(0, Math.min(sidebar.scrollHeight - sidebar.clientHeight,
+    sidebar.scrollTop + section.getBoundingClientRect().top - sidebar.getBoundingClientRect().top - 16));
+  if (!reducedMotion && Math.abs(sidebar.scrollTop - top) > 1) {
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        sidebar.removeEventListener("scrollend", finish);
+        window.clearTimeout(timeout);
+        finishGuideScroll = undefined;
+        resolve();
+      };
+      // Fallback for WebViews without scrollend support.
+      const timeout = window.setTimeout(finish, 1000);
+      finishGuideScroll = finish;
+      sidebar.addEventListener("scrollend", finish, { once: true });
+      sidebar.scrollTo({ top, behavior: "smooth" });
+    });
+  } else {
+    sidebar.scrollTo({ top, behavior: "instant" });
+  }
+  const guide = stencilSizeGuide.value;
+  if (sequence !== guideSequence || !guide?.isConnected || !showStencilSizeGuide.value) return;
+  const style = getComputedStyle(guide);
+  const highlight = { backgroundColor: "rgba(232, 187, 62, .30)", borderColor: "rgba(198, 153, 37, .65)" };
+  const clear = { backgroundColor: style.backgroundColor, borderColor: style.borderColor };
+  // Two gentle amber pulses; reduced motion gets one static highlight instead.
+  guideAnimation = guide.animate(reducedMotion ? [highlight, highlight] : [clear, highlight, clear], {
+    duration: reducedMotion ? 1600 : 800,
+    iterations: reducedMotion ? 1 : 2,
+    easing: "ease-in-out",
+  });
+}
+
+defineExpose({ revealStencilSize });
+onBeforeUnmount(cancelStencilReveal);
+// A new board (including a same-name reimport) or new dimensions need a fresh review.
+watch(() => [c.value.gerberFilename, c.value.pcbOutlinePoints, c.value.stencilSizeX, c.value.stencilSizeY], () => {
+  cancelStencilReveal();
+  stencilSizeReviewed.value = false;
+});
 const windowSize = computed(() => (windowHalf(store.config) * 2).toFixed(1));
 
 // 组件 setup 之前先钳制异常值 —— 防止 ElementPlus InputNumber 在 setup 阶段抛
@@ -75,10 +139,11 @@ function resetAll() {
 }
 
 // 结构预设:一键套用(仅螺丝 + 结构高度,派生值由 store watch 联动)
-const appliedPreset = ref<string | null>(null);
+const appliedPreset = computed(() => STRUCTURE_PRESETS.find((preset) =>
+  Object.entries(preset.apply).every(([key, value]) => c.value[key as keyof typeof preset.apply] === value)
+)?.id ?? null);
 function applyPreset(id: string) {
   store.applyPreset(id);
-  appliedPreset.value = id;
 }
 </script>
 
@@ -101,7 +166,7 @@ function applyPreset(id: string) {
     </div>
 
     <!-- 结构预设:一键套用常用螺丝 + 结构高度组合 -->
-    <div class="section-label">{{ t('config.preset') }}</div>
+    <InlineHelp id="config-presetHint" class="section-help" :label="t('config.preset')" :text="t('config.presetHint')"><span>{{ t('config.preset') }}</span></InlineHelp>
     <div class="preset-group">
       <button
         v-for="p in STRUCTURE_PRESETS"
@@ -110,13 +175,6 @@ function applyPreset(id: string) {
         :class="{ active: appliedPreset === p.id }"
         @click="applyPreset(p.id)"
       >{{ t(p.label) }}</button>
-    </div>
-    <div class="auto-hint preset-hint">
-      <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-        <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-        <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-      <span>{{ t('config.presetHint') }}</span>
     </div>
 
     <!-- PCB(基本:拖入 Gerber 自动填,板厚需用户确认) -->
@@ -169,12 +227,15 @@ function applyPreset(id: string) {
     </div>
 
     <!-- 钢网(基本:按板子自动推荐,可改成实际购买的钢网尺寸;长宽独立可矩形) -->
+    <section ref="stencilSizeSection" class="stencil-size-section" :aria-label="t('config.stencil')">
     <div class="section-label">{{ t('config.stencil') }}</div>
     <div class="field-row">
       <div class="field">
         <label class="field-label">{{ t('config.stencilSizeX') }}</label>
         <el-input-number
           v-model="c.stencilSizeX"
+          :aria-label="t('config.stencilSizeX')"
+          :aria-describedby="showStencilSizeGuide ? 'stencil-size-guide' : undefined"
           :min="10"
           :max="290"
           :step="5"
@@ -187,6 +248,8 @@ function applyPreset(id: string) {
         <label class="field-label">{{ t('config.stencilSizeY') }}</label>
         <el-input-number
           v-model="c.stencilSizeY"
+          :aria-label="t('config.stencilSizeY')"
+          :aria-describedby="showStencilSizeGuide ? 'stencil-size-guide' : undefined"
           :min="10"
           :max="290"
           :step="5"
@@ -196,6 +259,23 @@ function applyPreset(id: string) {
         />
       </div>
     </div>
+    <MotionCollapse :open="showStencilSizeGuide">
+      <div ref="stencilSizeGuide" id="stencil-size-guide" class="stencil-size-guide">
+        <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+          <rect x="3" y="4.5" width="14" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" />
+          <path d="M6 5v3M9 5v2M12 5v3M15 5v2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+        </svg>
+        <div>
+          <strong>{{ t('config.stencilSizeGuideTitle') }}</strong>
+          <p>{{ t('config.stencilSizeGuide') }}</p>
+          <button type="button" class="stencil-size-reviewed" @click="stencilSizeReviewed = true">
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="m3.5 8 3 3 6-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            {{ t('config.stencilSizeReviewed') }}
+          </button>
+        </div>
+      </div>
+    </MotionCollapse>
+    </section>
     <div class="field">
       <label class="field-label">{{ t('config.pryNotch') }}</label>
       <div class="notch-picker">
@@ -266,7 +346,7 @@ function applyPreset(id: string) {
       </svg>
     </button>
 
-    <div v-show="showAdvanced" class="advanced-body">
+    <MotionCollapse :open="showAdvanced"><div class="advanced-body">
       <!-- 托盘几何:凸台/圆角/退件槽 -->
       <div class="section-label">{{ t('config.trayGeometry') }}</div>
       <div class="field-row field-row-3">
@@ -339,29 +419,15 @@ function applyPreset(id: string) {
           <el-input-number v-model="c.windowGap" :min="0" :max="5" :step="0.1" :precision="2" size="small" style="width: 100%" />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('config.pocketClearance') }}</label>
+          <InlineHelp id="config-pocketClearanceHint" :label="t('config.pocketClearance')" :text="t('config.pocketClearanceHint')"><span class="field-label">{{ t('config.pocketClearance') }}</span></InlineHelp>
           <el-input-number v-model="c.pcbPocketClearance" :min="0" :max="2" :step="0.05" :precision="2" size="small" style="width: 100%" />
         </div>
       </div>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('config.pocketClearanceHint') }}</span>
-      </div>
       <div class="field-row">
         <div class="field">
-          <label class="field-label">{{ t('config.postClearance') }}</label>
+          <InlineHelp id="config-postClearanceHint" :label="t('config.postClearance')" :text="t('config.postClearanceHint')"><span class="field-label">{{ t('config.postClearance') }}</span></InlineHelp>
           <el-input-number v-model="c.postClearance" :min="0" :max="1" :step="0.05" :precision="2" size="small" style="width: 100%" />
         </div>
-      </div>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('config.postClearanceHint') }}</span>
       </div>
 
       <!-- 夹具外形 -->
@@ -410,6 +476,14 @@ function applyPreset(id: string) {
           />
         </div>
       </div>
+      <div v-if="c.useHexNut" class="field">
+        <InlineHelp id="config-nutPocketClearanceHint" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')"><span class="field-label">{{ t('config.nutPocketClearance') }}</span></InlineHelp>
+        <el-input-number
+          v-model="c.nutPocketClearance"
+          :min="0" :max="1" :step="0.05" :precision="2"
+          size="small" style="width: 100%"
+        />
+      </div>
       <div v-if="c.useHexNut" class="auto-hint">
         <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
@@ -420,7 +494,7 @@ function applyPreset(id: string) {
 
       <!-- 重置(只重置高级参数,基础区保留) -->
       <button class="reset-btn" @click="resetAll">{{ t('config.reset') }}</button>
-    </div>
+    </div></MotionCollapse>
   </div>
 </template>
 
@@ -494,6 +568,34 @@ function applyPreset(id: string) {
   gap: 12px;
 }
 
+.stencil-size-section {
+  display: flow-root;
+  margin-top: 20px;
+  border-radius: var(--radius-control);
+}
+
+.stencil-size-guide {
+  --guide-ink: #946817;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-control);
+  background: rgba(232, 187, 62, .14);
+  border: 1px solid rgba(198, 153, 37, .18);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 18px;
+}
+.stencil-size-guide > svg { flex-shrink: 0; margin-top: 1px; color: var(--guide-ink); }
+.stencil-size-guide strong { display: block; color: var(--guide-ink); font-weight: var(--font-weight-strong); }
+.stencil-size-guide p { margin: 3px 0 5px; color: var(--text-secondary); }
+.stencil-size-reviewed { display: inline-flex; align-items: center; gap: 3px; padding: 3px 5px; margin-left: -5px; border: none; border-radius: 6px; background: transparent; color: var(--guide-ink); font: inherit; font-weight: var(--font-weight-medium); cursor: pointer; transition: var(--control-transition); }
+.stencil-size-reviewed:hover { background: rgba(198, 153, 37, .12); }
+.stencil-size-reviewed:focus-visible { outline: 2px solid var(--guide-ink); outline-offset: 2px; }
+:global(html.dark) .stencil-size-guide { --guide-ink: #e4bd66; }
+
 .field-row > .field {
   flex: 1;
 }
@@ -518,7 +620,7 @@ function applyPreset(id: string) {
 .checkbox-label {
   font-size: 13px;
   font-weight: var(--font-weight-medium);
-  color: var(--text-primary);
+  color: var(--text-default);
 }
 
 .field-label {
@@ -537,7 +639,7 @@ function applyPreset(id: string) {
   margin: 0 0 12px 0;
   padding: 8px 12px;
   background: var(--bg-brand-popup);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 18px;
@@ -570,11 +672,11 @@ function applyPreset(id: string) {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: var(--bg-secondary, transparent);
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: var(--control-transition);
 }
 
 .notch-btn:hover {
@@ -605,7 +707,7 @@ function applyPreset(id: string) {
 .field-value {
   float: right;
   color: var(--text-tertiary);
-  font-weight: var(--font-weight-regular);
+  font-weight: var(--font-weight-default);
 }
 
 .advanced-toggle {
@@ -616,13 +718,13 @@ function applyPreset(id: string) {
   gap: 6px;
   padding: 7px 12px;
   border: 1px dashed var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: transparent;
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease;
+  transition: var(--control-transition);
   margin: 4px 0 8px 0;
 }
 
@@ -632,7 +734,7 @@ function applyPreset(id: string) {
 }
 
 .advanced-toggle .chevron {
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--motion-panel) var(--ease-out);
 }
 
 .advanced-toggle .chevron.is-open {
@@ -643,13 +745,13 @@ function applyPreset(id: string) {
   width: 100%;
   padding: 8px 12px;
   border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: var(--bg-base-default);
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition: var(--control-transition);
   margin-top: 8px;
 }
 
@@ -670,13 +772,13 @@ function applyPreset(id: string) {
   flex: 1;
   padding: 7px 8px;
   border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-6);
+  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
   background: var(--bg-secondary, transparent);
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: border-color 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+  transition: var(--control-transition);
 }
 
 .preset-btn:hover {
@@ -710,7 +812,7 @@ function applyPreset(id: string) {
 .platter-lip-slider .lbl-r {
   font-size: 12px;
   font-weight: var(--font-weight-medium);
-  color: var(--text-primary);
+  color: var(--text-default);
 }
 
 .platter-lip-slider .lbl-title {
@@ -775,7 +877,7 @@ function applyPreset(id: string) {
 .slider-readout .rd-v {
   font-size: 13px;
   font-weight: var(--font-weight-medium);
-  color: var(--text-primary);
+  color: var(--text-default);
 }
 
 .slider-readout .rd-eq {

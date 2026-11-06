@@ -85,6 +85,9 @@ pub struct ScadParams {
     /// 六角螺母高度(mm)
     #[serde(default = "default_nut_height")]
     pub nut_height: f64,
+    /// 六角螺母槽单侧装配间隙(mm),独立于螺母标称尺寸。
+    #[serde(default = "default_nut_pocket_clearance")]
+    pub nut_pocket_clearance: f64,
     /// 外缘圆角半径
     #[serde(default = "default_outer_corner_radius")]
     pub outer_corner_radius: f64,
@@ -119,7 +122,7 @@ pub struct ScadParams {
     /// 密脚错排偏移量(mm)
     #[serde(default = "default_stencil_stagger_offset")]
     pub stencil_stagger_offset: f64,
-    /// 测试点过滤开关(默认开)
+    /// 测试点过滤开关(默认开启,结合用途属性及几何特征)
     #[serde(default = "default_stencil_filter_test_points")]
     pub stencil_filter_test_points: bool,
     /// 测试点最大直径(mm)
@@ -164,6 +167,7 @@ fn default_peri_screw_d() -> f64 { 3.5 }
 fn default_use_hex_nut() -> bool { true }
 fn default_nut_across_flats() -> f64 { 5.5 }
 fn default_nut_height() -> f64 { 2.7 }
+fn default_nut_pocket_clearance() -> f64 { 0.2 }
 fn default_outer_corner_radius() -> f64 { 5.0 }
 fn default_stencil_thickness() -> f64 { 0.3 }
 fn default_pad_shrink() -> f64 { 0.0 }
@@ -473,6 +477,8 @@ pub async fn generate_stl(
     app: AppHandle,
     params: ScadParams,
     part: Part,
+    request_id: Option<String>,
+    background: Option<bool>,
 ) -> Result<tauri::ipc::Response, AppError> {
     let configured = app
         .store(STORE_FILE)
@@ -483,8 +489,13 @@ pub async fn generate_stl(
 
     // 返回原始字节(Response 走二进制通道):Vec<u8> 走 JSON 数字数组会把
     // 数 MB 的 STL 膨胀成几十 MB 文本,序列化/传输/解析全部变慢
-    let bytes = scad::render_to_stl(&app, configured.as_deref(), &params, part).await?;
+    let bytes = scad::render_to_stl(&app, configured.as_deref(), &params, part, request_id, background.unwrap_or(false)).await?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+pub fn cancel_generation(request_ids: Vec<String>, interrupt: bool) {
+    crate::generation::preview().cancel(&request_ids, interrupt);
 }
 
 /// 单个部件体积(mm³)/表面积(mm²),供前端"打印信息卡"估算耗材克重
@@ -499,6 +510,7 @@ pub async fn part_metrics(
     app: AppHandle,
     params: ScadParams,
     part: Part,
+    request_id: Option<String>,
 ) -> Result<PartMetrics, AppError> {
     let configured = app
         .store(STORE_FILE)
@@ -508,7 +520,7 @@ pub async fn part_metrics(
         .filter(|s| !s.is_empty());
 
     let (volume_mm3, area_mm2) =
-        scad::part_metrics(&app, configured.as_deref(), &params, part).await?;
+        scad::part_metrics(&app, configured.as_deref(), &params, part, request_id).await?;
     Ok(PartMetrics { volume_mm3, area_mm2 })
 }
 
@@ -623,6 +635,25 @@ fn chrono_like_now() -> String {
 mod project_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn stencil_filter_defaults_on_and_respects_explicit_disable() {
+        let mut raw = json!({
+            "pcb_size_x": 20, "pcb_size_y": 20, "pcb_thickness": 1.6,
+            "pcb_pocket_clearance": 0.2, "screw_spacing": 40,
+            "base_height": 4, "top_cover_height": 4, "jig_size": 100,
+            "stencil_pads_top": [{"type": "circle", "polarity": "D", "parts": []}]
+        });
+        let defaults: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        assert!(defaults.stencil_filter_test_points);
+        assert_eq!(defaults.nut_pocket_clearance, 0.2);
+        assert_eq!(defaults.stencil_pads_top[0]["type"], "circle");
+        raw["stencil_filter_test_points"] = json!(false);
+        raw["nut_pocket_clearance"] = json!(0.35);
+        let explicit: ScadParams = serde_json::from_value(raw).unwrap();
+        assert!(!explicit.stencil_filter_test_points);
+        assert_eq!(explicit.nut_pocket_clearance, 0.35);
+    }
 
     #[test]
     fn save_load_preserves_project_state() {

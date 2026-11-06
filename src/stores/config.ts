@@ -10,6 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { PadPolygon } from "../lib/gerber/pads";
 import type { PanelMode, PanelVariant } from "../lib/gerber/panel";
 import { deserializeProjectConfig, serializeProjectConfig, type GerberVariants } from "../lib/project";
+import { readPresetSettings } from "../lib/config-presets";
+import { useParameterHistory } from "../composables/useParameterHistory";
 
 export type AppMode = "jig" | "stencil";
 
@@ -49,7 +51,7 @@ export interface AppConfig {
   stencilStaggerGap: number;
   /** 密脚错排偏移量(mm) */
   stencilStaggerOffset: number;
-  /** 测试点过滤开关:小圆形孤立焊盘(测试探针点)不开锡膏孔 */
+  /** 测试点过滤(默认开启):优先 X2 用途属性,否则按圆形、尺寸、孤立性及排列推测 */
   stencilFilterTestPoints: boolean;
   /** 测试点最大直径(mm):超过该值的圆焊盘不视为测试点 */
   stencilTestPointMaxDia: number;
@@ -116,6 +118,8 @@ export interface AppConfig {
   nutAcrossFlats: number;
   /** M3 螺母厚度 (mm,默认 2.7) */
   nutHeight: number;
+  /** 六角螺母槽单侧打印装配间隙(mm);槽对边 = 螺母对边 + 2×间隙 */
+  nutPocketClearance: number;
 
   // 夹具整体尺寸 (正方形,按 20mm 步进,自动从窗口推导)
   jigSize: number;
@@ -136,7 +140,7 @@ export interface AppConfig {
   panelGrid: { nx: number; ny: number } | null;
 }
 
-const DEFAULT: AppConfig = {
+export const DEFAULT: AppConfig = {
   appMode: "jig",
   pcbSizeX: 50,
   pcbSizeY: 50,
@@ -185,6 +189,7 @@ const DEFAULT: AppConfig = {
   useHexNut: true,
   nutAcrossFlats: 5.5,
   nutHeight: 2.4,
+  nutPocketClearance: 0.2,
   // 自动推导(computeJigSize,5mm 步进):钢网 100 → 角部孔位下限 131.4 → 135
   jigSize: 135,
   gerberFilename: null,
@@ -395,6 +400,7 @@ function computeJigSize(c: AppConfig): number {
 export const useConfigStore = defineStore("config", () => {
   const config = ref<AppConfig>(JSON.parse(JSON.stringify(DEFAULT)));
   let restoringProject = false;
+  const historyEpoch = ref(0);
 
   // 派生:周圈螺丝位置(与 Python compute_perimeter_screw_positions 同算法)
   // 孔带靠外:螺丝圆心距外缘 10mm,窗口→螺丝的内侧带完整留给钢网夹紧;
@@ -630,6 +636,26 @@ export const useConfigStore = defineStore("config", () => {
       await nextTick();
     } finally {
       restoringProject = false;
+      history.clear();
+    }
+  }
+
+  /** Apply manufacturing settings without replacing the imported board or letting
+   * screwSpec's queued watcher overwrite saved custom hole/nut dimensions. */
+  async function applyUserSettings(raw: unknown) {
+    const settings = readPresetSettings(raw, DEFAULT);
+    history.breakGroup();
+    restoringProject = true;
+    try {
+      Object.assign(config.value, settings);
+      const c = config.value;
+      c.platterHeight = c.baseHeight;
+      c.stencilLip = Math.max(0, Math.min(stencilLipMax(c), c.stencilLip));
+      c.platterMargin = effectivePlatterMargin(c);
+      c.jigSize = computeJigSize(c);
+      await nextTick();
+    } finally {
+      restoringProject = false;
     }
   }
 
@@ -671,6 +697,7 @@ export const useConfigStore = defineStore("config", () => {
     mode: PanelMode;
     variants: { panel: PanelVariant; single: PanelVariant };
   }) {
+    historyEpoch.value++;
     gerberVariants.value = {
       panel: payload.variants.panel,
       single: payload.variants.single,
@@ -691,6 +718,7 @@ export const useConfigStore = defineStore("config", () => {
 
   /** 丢弃拼版状态:切换工程 / 清除导入后不再持有该文件的两种口径 */
   function clearPanelScope() {
+    historyEpoch.value++;
     gerberVariants.value = null;
     config.value.panelAvailable = false;
     config.value.panelGrid = null;
@@ -707,6 +735,7 @@ export const useConfigStore = defineStore("config", () => {
   function applyPreset(id: string) {
     const preset = STRUCTURE_PRESETS.find((p) => p.id === id);
     if (!preset) return;
+    history.breakGroup();
     const c = config.value;
     c.screwSpec = preset.apply.screwSpec;
     c.screwSpacing = preset.apply.screwSpacing;
@@ -722,6 +751,7 @@ export const useConfigStore = defineStore("config", () => {
    *  pcbSizeX/Y 联动 watcher(数组引用变化被误判为值变化),
    *  把用户手填的钢网尺寸覆盖成自动推荐值 */
   function reset() {
+    history.breakGroup();
     Object.assign(config.value, {
       screwSpacing: DEFAULT.screwSpacing,
       screwSpec: DEFAULT.screwSpec,
@@ -738,6 +768,7 @@ export const useConfigStore = defineStore("config", () => {
       useHexNut: DEFAULT.useHexNut,
       nutAcrossFlats: DEFAULT.nutAcrossFlats,
       nutHeight: DEFAULT.nutHeight,
+      nutPocketClearance: DEFAULT.nutPocketClearance,
     });
     // 派生参数重算(margin 影响窗口→jig 尺寸;platterHeight 随 baseHeight)
     config.value.platterMargin = effectivePlatterMargin(config.value);
@@ -778,6 +809,24 @@ export const useConfigStore = defineStore("config", () => {
     }
   }
 
+  const history = useParameterHistory({
+    config: () => config.value,
+    context: () => {
+      const c = config.value;
+      return [historyEpoch.value, c.appMode, c.panelMode, c.gerberFilename, c.pcbOutlinePoints,
+        c.pcbOutlineHoles, c.stencilPadsTop, c.stencilPadsBottom, c.panelAvailable];
+    },
+    restore: async (snapshot) => {
+      // Replay all linked values together; screwSpec must not overwrite custom
+      // hole/nut sizes, and size watchers must not shrink a manually sized jig.
+      restoringProject = true;
+      try {
+        Object.assign(config.value, snapshot);
+        await nextTick();
+      } finally { restoringProject = false; }
+    },
+  });
+
   return {
     config,
     screwPositions,
@@ -793,9 +842,18 @@ export const useConfigStore = defineStore("config", () => {
     clearPanelScope,
     projectConfig,
     restoreProject,
+    applyUserSettings,
     setMode,
     applyPreset,
     reset,
     detectPython,
+    canUndo: history.canUndo,
+    canRedo: history.canRedo,
+    historyBusy: history.busy,
+    undo: history.undo,
+    redo: history.redo,
+    clearParameterHistory: history.clear,
+    beginParameterInteraction: history.beginInteraction,
+    endParameterInteraction: history.endInteraction,
   };
 });

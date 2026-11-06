@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 import { cacheStlPart, clearStlCache } from "../stl-cache";
 
 describe("STL cache geometry ownership", () => {
+  it("allows the scene to retain replaced geometry until a complete successor is ready", () => {
+    const geometry = { dispose: vi.fn() };
+    const retired = new Set<typeof geometry>();
+    const previous = { insert: { bytes: new ArrayBuffer(8), paramsHash: "old", geometry } };
+    const next = cacheStlPart(previous, "insert", new ArrayBuffer(16), "new", false, item => retired.add(item));
+    expect(next.insert.paramsHash).toBe("new");
+    expect(retired.has(geometry)).toBe(true);
+    expect(geometry.dispose).not.toHaveBeenCalled();
+    retired.forEach(item => item.dispose());
+    expect(geometry.dispose).toHaveBeenCalledOnce();
+  });
   it("keeps parsed geometry and its bytes when duplicate preload finishes", () => {
     const geometry = { dispose: vi.fn() };
     const entries = { insert: { bytes: new ArrayBuffer(8), paramsHash: "a", geometry } };

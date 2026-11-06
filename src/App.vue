@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useI18n } from "vue-i18n";
@@ -14,10 +14,17 @@ import ScrewDiagram from "./components/ScrewDiagram.vue";
 import StencilForm from "./components/StencilForm.vue";
 import PythonSetup from "./components/PythonSetup.vue";
 import ProjectMenu from "./components/ProjectMenu.vue";
+import HistoryControls from "./components/HistoryControls.vue";
 import SettingsMenu from "./components/SettingsMenu.vue";
+import ConfigPresets from "./components/ConfigPresets.vue";
+import MotionCollapse from "./components/MotionCollapse.vue";
+import { usePresetsStore } from "./stores/presets";
 import type { PanelMode } from "./lib/gerber/panel";
 
+const OnboardingTour = defineAsyncComponent(() => import("./components/OnboardingTour.vue"));
+
 const configStore = useConfigStore();
+void usePresetsStore().initialize();
 const ui = useUiStore();
 const { t } = useI18n();
 
@@ -75,8 +82,16 @@ const sidebarWidth = ref(480);
 const SIDEBAR_MIN = 340;
 const SIDEBAR_MAX = 800;
 const SIDEBAR_KEY = "psj_sidebar_width";
+const SIDEBAR_HIDDEN_KEY = "psj_sidebar_hidden";
+const sidebarHidden = ref(false);
+const sidebarShell = ref<HTMLElement | null>(null);
+const configFormRef = ref<InstanceType<typeof ConfigForm> | null>(null);
+let importGuideSequence = 0;
+const viewportWidth = ref(window.innerWidth);
+const visibleSidebarWidth = computed(() => Math.max(SIDEBAR_MIN,
+  Math.min(sidebarWidth.value, SIDEBAR_MAX, viewportWidth.value - 440)));
 // 拖拽过程中禁用 transition 保证跟手,松手后再启用,产生"惯性到位"效果
-const sidebarAnimating = ref(false);
+const sidebarAnimating = ref(true);
 
 // 每个卡片的高度
 const CARD_MIN = 140;
@@ -106,12 +121,50 @@ const collapsed = ref<Record<string, boolean>>({
   stencil: false,
 });
 
+const tourOpen = ref(false);
+let tourPreparing = false;
+let appDisposed = false;
+let tourLayout: { hidden: boolean; collapsed: Record<string, boolean>; auto: Record<string, boolean>; scroll: number } | undefined;
+
+async function startTour() {
+  if (tourOpen.value || tourPreparing || appDisposed) return;
+  tourPreparing = true;
+  onWidthUp();
+  onHeightUp();
+  const sidebar = sidebarShell.value?.querySelector<HTMLElement>(".app-sidebar");
+  tourLayout = { hidden: sidebarHidden.value, collapsed: { ...collapsed.value }, auto: { ...autoHeights.value }, scroll: sidebar?.scrollTop ?? 0 };
+  sidebarHidden.value = false;
+  collapsed.value = { ...collapsed.value, gerber: false, config: false, stencil: false };
+  autoHeights.value = { ...autoHeights.value, gerber: true, config: true, stencil: true };
+  await nextTick();
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await Promise.allSettled((sidebarShell.value?.getAnimations({ subtree: true }) ?? [])
+    .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+    .map((animation) => animation.finished));
+  tourPreparing = false;
+  if (!appDisposed) tourOpen.value = true;
+}
+
+async function finishTour() {
+  tourOpen.value = false;
+  ui.dismissOnboarding();
+  const layout = tourLayout;
+  tourLayout = undefined;
+  if (!layout) return;
+  sidebarHidden.value = layout.hidden;
+  collapsed.value = layout.collapsed;
+  autoHeights.value = layout.auto;
+  await nextTick();
+  sidebarShell.value?.querySelector<HTMLElement>(".app-sidebar")?.scrollTo({ top: layout.scroll, behavior: "instant" });
+}
+
 const HEIGHTS_KEY = "psj_card_heights";
 const AUTO_KEY = "psj_card_auto";
 const COLLAPSED_KEY = "psj_card_collapsed";
 
 // 从 localStorage 恢复
 try {
+  sidebarHidden.value = localStorage.getItem(SIDEBAR_HIDDEN_KEY) === "true";
   const w = localStorage.getItem(SIDEBAR_KEY);
   if (w) {
     const n = parseInt(w, 10);
@@ -143,6 +196,7 @@ try {
 function saveSettings() {
   try {
     localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth.value));
+    localStorage.setItem(SIDEBAR_HIDDEN_KEY, String(sidebarHidden.value));
     localStorage.setItem(HEIGHTS_KEY, JSON.stringify(cardHeights.value));
     localStorage.setItem(AUTO_KEY, JSON.stringify(autoHeights.value));
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed.value));
@@ -155,9 +209,10 @@ let widthStartX = 0;
 let widthStartW = 480;
 
 function onWidthDown(e: MouseEvent) {
+  if (sidebarHidden.value) return;
   isResizingWidth = true;
   widthStartX = e.clientX;
-  widthStartW = sidebarWidth.value;
+  widthStartW = visibleSidebarWidth.value;
   document.body.style.cursor = "col-resize";
   document.body.style.userSelect = "none";
   sidebarAnimating.value = false;
@@ -191,6 +246,18 @@ function resetSidebarWidth() {
   saveSettings();
 }
 
+function toggleSidebar() {
+  onWidthUp();
+  onHeightUp();
+  sidebarAnimating.value = true;
+  sidebarHidden.value = !sidebarHidden.value;
+  saveSettings();
+}
+
+function updateViewportWidth() {
+  viewportWidth.value = window.innerWidth;
+}
+
 // ===== 卡片高度拖动 =====
 let isResizingHeight = false;
 let heightCardId = "";
@@ -203,7 +270,7 @@ function onHeightDown(id: string, e: MouseEvent) {
   heightCardId = id;
   heightStartY = e.clientY;
   // 起点 = 卡片当前实际高度(自适应模式下没有存储值可用)
-  const slot = (e.currentTarget as HTMLElement).parentElement;
+  const slot = (e.currentTarget as HTMLElement).closest<HTMLElement>(".card-slot");
   heightStartH = slot ? slot.offsetHeight : cardHeights.value[id];
   document.body.style.cursor = "ns-resize";
   document.body.style.userSelect = "none";
@@ -280,24 +347,53 @@ function observeCardContent(id: string) {
 }
 
 // 卡片高度:折叠=固定条高;自适应=内容自然高度;手动拖过=锁定像素
-function slotStyle(id: string): Record<string, string> {
-  if (collapsed.value[id]) return { height: CARD_COLLAPSED + "px" };
-  if (autoHeights.value[id]) return { height: "auto" };
-  return { height: cardHeights.value[id] + "px" };
+function slotBodyHeight(id: string): number | undefined {
+  if (autoHeights.value[id]) return undefined;
+  return Math.max(0, cardHeights.value[id] - CARD_COLLAPSED - 2);
 }
 
-function onGerberLoaded(
+// Mode-specific forms are mounted after a mode change, so observe their new
+// content too (including advanced sections growing during a transition).
+watch(appMode, async () => {
+  importGuideSequence++;
+  await nextTick();
+  contentObserver?.disconnect();
+  for (const id of CARD_IDS) observeCardContent(id);
+});
+
+async function onGerberLoaded(
   payload: GerberImportPayload & { mode: PanelMode }
 ) {
   configStore.applyGerberImport(payload);
+  const sequence = ++importGuideSequence;
+  if (appMode.value !== "jig") return;
+  sidebarAnimating.value = true;
+  sidebarHidden.value = false;
+  collapsed.value.config = false;
+  autoHeights.value.config = true;
+  saveSettings();
+  await nextTick();
+  // Wait for the sidebar/card to open before measuring the target position.
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  const animations = sidebarShell.value?.getAnimations({ subtree: true }) ?? [];
+  await Promise.allSettled(animations
+    .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+    .map((animation) => animation.finished));
+  if (sequence !== importGuideSequence || appMode.value !== "jig" || sidebarHidden.value || collapsed.value.config) return;
+  await configFormRef.value?.revealStencilSize();
 }
 
 onMounted(() => {
   configStore.detectPython();
+  if (!ui.onboardingSeen) void startTour();
+  window.addEventListener("resize", updateViewportWidth);
   document.addEventListener("mousemove", onWidthMove);
   document.addEventListener("mouseup", onWidthUp);
   document.addEventListener("mousemove", onHeightMove);
   document.addEventListener("mouseup", onHeightUp);
+  window.addEventListener("pointerup", configStore.endParameterInteraction);
+  window.addEventListener("pointercancel", configStore.endParameterInteraction);
+  window.addEventListener("blur", configStore.endParameterInteraction);
   // 内容高度变化复查(等首帧渲染完再挂,避免初始布局抖动误判)
   void nextTick(() => {
     contentObserver = new ResizeObserver(() => {
@@ -308,10 +404,16 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  appDisposed = true;
+  importGuideSequence++;
+  window.removeEventListener("resize", updateViewportWidth);
   document.removeEventListener("mousemove", onWidthMove);
   document.removeEventListener("mouseup", onWidthUp);
   document.removeEventListener("mousemove", onHeightMove);
   document.removeEventListener("mouseup", onHeightUp);
+  window.removeEventListener("pointerup", configStore.endParameterInteraction);
+  window.removeEventListener("pointercancel", configStore.endParameterInteraction);
+  window.removeEventListener("blur", configStore.endParameterInteraction);
   contentObserver?.disconnect();
   contentObserver = null;
 });
@@ -365,8 +467,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="spacer" data-tauri-drag-region />
+      <HistoryControls />
       <ProjectMenu />
-      <SettingsMenu />
+      <SettingsMenu @start-tour="startTour" />
 
       <!-- 窗口控制(与页眉融合,替代系统标题栏) -->
       <div class="window-controls">
@@ -404,11 +507,18 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <main class="app-main">
-      <aside class="app-sidebar" :class="{ 'is-animating': sidebarAnimating }" :style="{ width: sidebarWidth + 'px' }">
+    <main class="app-main" :class="{ 'is-sidebar-hidden': sidebarHidden }"
+      :style="{ '--preview-inset': (sidebarHidden ? 0 : visibleSidebarWidth + 5) + 'px' }">
+      <div ref="sidebarShell" class="sidebar-shell" :class="{ 'is-animating': sidebarAnimating, 'is-hidden': sidebarHidden }"
+        :style="{ width: (visibleSidebarWidth + 5) + 'px' }"
+        :inert="sidebarHidden" :aria-hidden="sidebarHidden">
+      <aside id="parameters-sidebar" class="app-sidebar" :aria-label="t('layout.parameters')"
+        @pointerdown.capture="configStore.beginParameterInteraction()"
+        :style="{ width: visibleSidebarWidth + 'px' }">
+        <ConfigPresets />
         <!-- Python Environment -->
-        <div id="slot-python" class="card-slot" :style="slotStyle('python')">
-          <div class="slot-header" @click="toggleCollapse('python')">
+        <div id="slot-python" class="card-slot">
+          <button class="slot-header" :aria-expanded="!collapsed.python" aria-controls="body-python" @click="toggleCollapse('python')">
             <div class="slot-label">
               <span class="slot-step-dot" data-icon="py" :class="{ 'is-done': configStore.pythonDetected }">Py</span>
               <span class="slot-title">{{ t('cards.python') }}</span>
@@ -424,22 +534,23 @@ onBeforeUnmount(() => {
                 <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </div>
-          </div>
-          <div v-show="!collapsed.python" class="slot-body">
+          </button>
+          <MotionCollapse id="body-python" :open="!collapsed.python" :height="slotBodyHeight('python')">
+          <div class="slot-body">
             <PythonSetup />
           </div>
           <div
-            v-if="!collapsed.python"
             class="drag-handle"
             title="拖动调整高度,双击恢复自适应"
             @mousedown="onHeightDown('python', $event)"
             @dblclick="onHandleDblClick('python')"
           />
+          </MotionCollapse>
         </div>
 
         <!-- Gerber Import (两种模式共用) -->
-        <div id="slot-gerber" class="card-slot" :style="slotStyle('gerber')">
-          <div class="slot-header" @click="toggleCollapse('gerber')">
+        <div id="slot-gerber" class="card-slot">
+          <button class="slot-header" :aria-expanded="!collapsed.gerber" aria-controls="body-gerber" @click="toggleCollapse('gerber')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="1" :class="{ 'is-done': gerberDone }">{{ gerberDone ? '✓' : '1' }}</span>
               <span class="slot-title">{{ appMode === 'stencil' ? t('stencil.import') : t('cards.gerber') }}</span>
@@ -447,25 +558,26 @@ onBeforeUnmount(() => {
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.gerber }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-          </div>
-          <div v-show="!collapsed.gerber" class="slot-body">
+          </button>
+          <MotionCollapse id="body-gerber" :open="!collapsed.gerber" :height="slotBodyHeight('gerber')">
+          <div class="slot-body">
             <GerberImport :mode="appMode" @gerber-loaded="onGerberLoaded" />
           </div>
           <div
-            v-if="!collapsed.gerber"
             class="drag-handle"
             title="拖动调整高度,双击恢复自适应"
             @mousedown="onHeightDown('gerber', $event)"
             @dblclick="onHandleDblClick('gerber')"
           />
+          </MotionCollapse>
         </div>
 
         <!-- Gerber Import (jig mode) -->
         <template v-if="appMode === 'jig'">
 
         <!-- Config Form -->
-        <div id="slot-config" class="card-slot" :style="slotStyle('config')">
-          <div class="slot-header" @click="toggleCollapse('config')">
+        <div id="slot-config" class="card-slot mode-card">
+          <button class="slot-header" :aria-expanded="!collapsed.config" aria-controls="body-config" @click="toggleCollapse('config')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="2">2</span>
               <span class="slot-title">{{ t('cards.config') }}</span>
@@ -473,22 +585,23 @@ onBeforeUnmount(() => {
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.config }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-          </div>
-          <div v-show="!collapsed.config" class="slot-body">
-            <ConfigForm />
+          </button>
+          <MotionCollapse id="body-config" :open="!collapsed.config" :height="slotBodyHeight('config')">
+          <div class="slot-body">
+            <ConfigForm ref="configFormRef" />
           </div>
           <div
-            v-if="!collapsed.config"
             class="drag-handle"
             title="拖动调整高度,双击恢复自适应"
             @mousedown="onHeightDown('config', $event)"
             @dblclick="onHandleDblClick('config')"
           />
+          </MotionCollapse>
         </div>
 
         <!-- Screw Diagram -->
-        <div id="slot-screw" class="card-slot" :style="slotStyle('screw')">
-          <div class="slot-header" @click="toggleCollapse('screw')">
+        <div id="slot-screw" class="card-slot mode-card">
+          <button class="slot-header" :aria-expanded="!collapsed.screw" aria-controls="body-screw" @click="toggleCollapse('screw')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="3">3</span>
               <span class="slot-title">{{ t('cards.screw') }}</span>
@@ -496,24 +609,25 @@ onBeforeUnmount(() => {
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.screw }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-          </div>
-          <div v-show="!collapsed.screw" class="slot-body">
+          </button>
+          <MotionCollapse id="body-screw" :open="!collapsed.screw" :height="slotBodyHeight('screw')">
+          <div class="slot-body">
             <ScrewDiagram />
           </div>
           <div
-            v-if="!collapsed.screw"
             class="drag-handle"
             title="拖动调整高度,双击恢复自适应"
             @mousedown="onHeightDown('screw', $event)"
             @dblclick="onHandleDblClick('screw')"
           />
+          </MotionCollapse>
         </div>
         </template>
 
         <!-- Stencil Card (stencil mode) -->
         <template v-if="appMode === 'stencil'">
-        <div id="slot-stencil" class="card-slot" :style="slotStyle('stencil')">
-          <div class="slot-header" @click="toggleCollapse('stencil')">
+        <div id="slot-stencil" class="card-slot mode-card">
+          <button class="slot-header" :aria-expanded="!collapsed.stencil" aria-controls="body-stencil" @click="toggleCollapse('stencil')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="1">1</span>
               <span class="slot-title">{{ t('cards.stencil') }}</span>
@@ -521,17 +635,18 @@ onBeforeUnmount(() => {
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.stencil }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-          </div>
-          <div v-show="!collapsed.stencil" class="slot-body">
+          </button>
+          <MotionCollapse id="body-stencil" :open="!collapsed.stencil" :height="slotBodyHeight('stencil')">
+          <div class="slot-body">
             <StencilForm />
           </div>
           <div
-            v-if="!collapsed.stencil"
             class="drag-handle"
             title="拖动调整高度,双击恢复自适应"
             @mousedown="onHeightDown('stencil', $event)"
             @dblclick="onHandleDblClick('stencil')"
           />
+          </MotionCollapse>
         </div>
         </template>
       </aside>
@@ -542,11 +657,22 @@ onBeforeUnmount(() => {
         @dblclick="resetSidebarWidth"
         title="拖动调整侧栏宽度,双击重置"
       />
+      </div>
+
+      <button class="sidebar-toggle" :class="{ 'is-animating': sidebarAnimating, 'is-hidden': sidebarHidden }"
+        :title="sidebarHidden ? t('layout.expandSidebar') : t('layout.collapseSidebar')"
+        :aria-label="sidebarHidden ? t('layout.expandSidebar') : t('layout.collapseSidebar')"
+        :aria-expanded="!sidebarHidden" aria-controls="parameters-sidebar" @click="toggleSidebar">
+        <svg viewBox="0 0 20 20" width="20" height="20" fill="none" aria-hidden="true">
+          <path class="sidebar-toggle-arrow" d="m11.5 6-4 4 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
 
       <section class="app-preview">
-        <ModelPreview />
+        <ModelPreview :class="{ 'is-layout-animating': sidebarAnimating }" />
       </section>
     </main>
+    <OnboardingTour v-if="tourOpen" :mode="appMode" @close="finishTour" />
   </div>
   </el-config-provider>
 </template>
@@ -561,10 +687,15 @@ onBeforeUnmount(() => {
 }
 
 /* ===== Header ===== */
+/* Keep the mode switch and history actions clear at smaller window widths. */
+@media (max-width: 1400px) {
+  .app-header :deep(.project-menu__filename) { display: none; }
+}
+
 .app-header {
   flex: 0 0 auto;
   height: 56px;
-  padding: 0 0 0 24px; /* 右侧留白交给窗口控制按钮区 */
+  padding: 0 0 0 24px;
   background: var(--bg-base-default);
   border-bottom: 1px solid var(--border-neutral-l1);
   display: flex;
@@ -572,6 +703,8 @@ onBeforeUnmount(() => {
   gap: 16px;
   user-select: none;
   position: relative;
+  box-shadow: 0 1px 0 var(--surface-highlight);
+  z-index: 6;
 }
 
 /* ===== 窗口控制(融合标题栏) ===== */
@@ -581,6 +714,35 @@ onBeforeUnmount(() => {
   margin-left: auto;
   align-self: stretch;
 }
+
+.sidebar-toggle {
+  position: absolute;
+  left: 0;
+  transform: translateX(var(--preview-inset));
+  top: 72px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border-neutral-l1);
+  border-left: none;
+  border-radius: 0 12px 12px 0;
+  corner-shape: var(--corner-shape);
+  color: var(--text-tertiary);
+  background: var(--bg-base-default);
+  box-shadow: 2px 1px 5px rgba(0, 0, 0, .04);
+  cursor: pointer;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast);
+}
+.sidebar-toggle.is-animating { transition: transform var(--sidebar-duration) var(--sidebar-ease), background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast); }
+.sidebar-toggle:hover, .sidebar-toggle:focus-visible { background: var(--status-success-surface-l1); border-color: var(--bg-brand); color: var(--bg-brand); }
+.sidebar-toggle:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
+.sidebar-toggle:active svg { scale: .94; }
+.sidebar-toggle-arrow { transform-origin: 10px 10px; transition: transform var(--motion-panel) var(--ease-out); }
+.sidebar-toggle.is-hidden .sidebar-toggle-arrow { transform: rotate(180deg); }
 
 .win-btn {
   width: 46px;
@@ -618,9 +780,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   /* mode-switch 已用绝对定位脱离 flex 流;这里 max-width 控制不要撞到 mode-switch */
-  max-width: 460px;
+  max-width: 300px;
   min-width: 0;
-  overflow: hidden;
   flex-shrink: 1;
 }
 
@@ -628,12 +789,18 @@ onBeforeUnmount(() => {
   width: 28px;
   height: 28px;
   flex-shrink: 0;
+  background: var(--status-success-surface-l1);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
+  box-shadow: 0 0 0 4px var(--status-success-surface-l1);
 }
 
 .header-titles {
   display: flex;
   flex-direction: column;
   gap: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .app-header h1 {
@@ -642,7 +809,7 @@ onBeforeUnmount(() => {
   line-height: 22px;
   margin: 0;
   color: var(--text-default);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.035em;
 }
 
 .subtitle {
@@ -665,14 +832,16 @@ onBeforeUnmount(() => {
   top: 50%;
   transform: translateY(-50%);
   z-index: 1;
-  display: inline-flex;
-  background: rgba(62, 125, 98, 0.10);
-  border: 1px solid rgba(62, 125, 98, 0.22);
-  border-radius: 999px;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  background: var(--surface-well);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-full);
   padding: 3px;
   gap: 0;
   /* 关键:模式按钮不允许被挤压消失 */
   flex-shrink: 0;
+  box-shadow: none;
 }
 /* 滑动指示器:宽度 = 容器宽度的一半,根据 active 状态左右平移 */
 .mode-switch .mode-indicator {
@@ -681,12 +850,10 @@ onBeforeUnmount(() => {
   left: 3px;
   width: calc(50% - 3px);
   height: calc(100% - 6px);
-  border-radius: 999px;
-  background: var(--brand-500);
-  box-shadow:
-    0 1px 2px rgba(62, 125, 98, 0.20),
-    0 2px 6px rgba(62, 125, 98, 0.18);
-  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: var(--radius-full);
+  background: var(--surface-selected);
+  box-shadow: var(--shadow-control);
+  transition: transform 340ms var(--ease-out);
   pointer-events: none;
 }
 .mode-switch .mode-indicator.pos-stencil {
@@ -702,11 +869,11 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--text-secondary);
   font-size: 13px;
-  font-weight: 700;
-  padding: 7px 18px;
-  border-radius: 999px;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: var(--radius-full);
   cursor: pointer;
-  transition: color 0.18s ease;
+  transition: var(--control-transition);
   line-height: 1;
 }
 .mode-btn .mode-icon {
@@ -718,80 +885,100 @@ onBeforeUnmount(() => {
   color: var(--brand-500);
 }
 .mode-btn.active {
-  color: #ffffff;
+  color: var(--text-brand);
 }
-/* 深色主题:容器底色更深、指示器用青瓷绿提亮版 */
-:root[data-theme="dark"] .mode-switch {
-  background: rgba(90, 155, 127, 0.14);
-  border-color: rgba(90, 155, 127, 0.30);
-}
-:root[data-theme="dark"] .mode-switch .mode-indicator {
-  background: var(--bg-brand);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.4),
-    0 2px 8px rgba(74, 138, 112, 0.40);
-}
-
 .spacer {
   flex: 1 1 auto;
 }
 
 /* ===== Main Layout ===== */
 .app-main {
+  /* Animate composited layers; the 3D canvas keeps its full-workspace size. */
+  --sidebar-duration: 420ms;
+  --sidebar-ease: cubic-bezier(.25, .1, .2, 1);
+  position: relative;
   flex: 1 1 auto;
   display: flex;
   overflow: hidden;
 }
+.app-main.is-sidebar-hidden { --sidebar-duration: 380ms; }
 
 /* ===== Sidebar ===== */
+.sidebar-shell {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  transform: translateX(0);
+  background: var(--bg-base-default);
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+.sidebar-shell.is-animating { transition: transform var(--sidebar-duration) var(--sidebar-ease), width var(--sidebar-duration) var(--sidebar-ease); }
+.sidebar-shell.is-hidden { transform: translateX(-100%); pointer-events: none; }
+
 .app-sidebar {
   flex: 0 0 auto;
-  background: var(--bg-base-default);
-  border-right: 1px solid var(--border-neutral-l1);
+  background: var(--surface-sidebar);
+  border-right: 1px solid var(--surface-line);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px;
+  padding: 14px 12px;
   display: flex;
-  flex-direction: column;  gap: 8px;
-  min-width: 340px;
-  max-width: 600px;
-}
-/* 拖拽松手后启用宽度过渡,产生"惯性到位"效果;拖拽中不启用避免卡顿 */
-.app-sidebar.is-animating {
-  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  scrollbar-gutter: stable;
 }
 
 /* ===== Card Slots ===== */
 .card-slot {
   position: relative;
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-12);
-  background: var(--bg-base-default);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-panel);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-raised);
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--motion-fast) var(--ease-out), box-shadow 200ms var(--ease-out);
 }
+.card-slot:hover { border-color: color-mix(in srgb, var(--text-tertiary) 15%, var(--surface-line)); }
+.card-slot:focus-within { border-color: color-mix(in srgb, var(--bg-brand) 24%, var(--surface-line)); }
+.mode-card { animation: panel-arrive 300ms var(--ease-out) both; }
+#slot-screw.mode-card { animation-delay: 35ms; }
+@keyframes panel-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* Slot Header */
 .slot-header {
+  width: 100%;
+  border: none;
+  text-align: left;
+  font-family: inherit;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 0 12px;
   height: 44px;
-  background: var(--bg-base-default);
-  border-bottom: 1px solid var(--border-neutral-l1);
+  background: var(--surface-card-heading);
+  border-bottom: 1px solid transparent;
   cursor: pointer;
   user-select: none;
-  transition: background-color 0.12s ease;
+  transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
   flex: 0 0 auto;
 }
 
 .slot-header:hover {
-  background: var(--bg-overlay-l1);
+  color: var(--text-brand);
+  background: color-mix(in srgb, var(--surface-well) 55%, var(--surface-raised));
 }
+.slot-header::after { content: ''; position: absolute; left: 16px; right: 16px; top: 43px; height: 1px; background: var(--surface-line); opacity: .45; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-out); }
+.slot-header[aria-expanded="false"]::after { opacity: 0; }
+.slot-header:hover .slot-title { color: var(--text-brand); }
 
 .slot-label {
   display: flex;
@@ -802,7 +989,8 @@ onBeforeUnmount(() => {
 .slot-step-dot {
   width: 20px;
   height: 20px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-inner);
+  corner-shape: var(--corner-shape);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -815,8 +1003,9 @@ onBeforeUnmount(() => {
 }
 
 .slot-step-dot[data-step] {
-  background: var(--status-success-default);
-  color: var(--text-onbrand);
+  background: var(--status-success-surface-l1);
+  color: var(--text-brand);
+  box-shadow: none;
 }
 
 /* 完成态:导入成功/环境就绪后,步骤圆点变成功绿(数字换成 ✓) */
@@ -831,8 +1020,10 @@ onBeforeUnmount(() => {
 
 .slot-title {
   font-size: 13px;
-  font-weight: var(--font-weight-medium);
+  font-weight: 600;
   color: var(--text-default);
+  letter-spacing: 0;
+  transition: color 180ms ease;
 }
 
 .slot-meta {
@@ -867,7 +1058,7 @@ onBeforeUnmount(() => {
 .chevron {
   color: var(--text-tertiary);
   flex-shrink: 0;
-  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform var(--motion-panel) var(--ease-out);
 }
 
 .chevron.is-collapsed {
@@ -906,8 +1097,8 @@ onBeforeUnmount(() => {
 /* Drag Handle */
 .drag-handle {
   height: 6px;
-  background: var(--bg-base-default);
-  border-top: 1px solid var(--border-neutral-l1);
+  background: transparent;
+  border-top: 1px solid transparent;
   cursor: ns-resize;
   flex: 0 0 auto;
   transition: background-color 0.12s ease;
@@ -919,6 +1110,8 @@ onBeforeUnmount(() => {
 }
 
 .drag-handle::after {
+  opacity: .35;
+  transition: opacity var(--motion-fast), background-color var(--motion-fast);
   content: '';
   position: absolute;
   top: 50%;
@@ -931,15 +1124,19 @@ onBeforeUnmount(() => {
 }
 
 .drag-handle:hover::after {
+  opacity: 1;
   background: var(--text-tertiary);
 }
 
 /* Sidebar Resizer */
 .sidebar-resizer {
-  flex: 0 0 5px;
+  width: 5px;
   background: transparent;
   cursor: col-resize;
-  position: relative;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
   transition: background-color 0.15s ease;
 }
 
@@ -956,6 +1153,12 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   background: var(--bg-base-secondary);
   overflow: hidden;
-  min-width: 400px;
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell.is-animating, .sidebar-toggle, .sidebar-toggle.is-animating, .sidebar-toggle-arrow, .chevron,
+  .mode-switch .mode-indicator, .mode-btn, .card-slot { transition: none; }
+  .mode-card, .subtitle { animation: none; }
 }
 </style>

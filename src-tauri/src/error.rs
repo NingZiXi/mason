@@ -3,6 +3,8 @@ use serde::{Serialize, Serializer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("MASON_CANCELLED")]
+    Cancelled,
     #[error("未找到 Python: {0}")]
     PythonNotFound(String),
 
