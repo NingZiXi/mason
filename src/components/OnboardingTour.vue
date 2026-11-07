@@ -3,11 +3,16 @@ import { computed, ref } from "vue";
 import { ElTour, ElTourStep } from "element-plus";
 import { useI18n } from "vue-i18n";
 
-const props = defineProps<{ mode: "jig" | "stencil" }>();
+const props = defineProps<{ mode: "jig" | "stencil"; context?: "inspection"; root?: HTMLElement }>();
 const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const current = ref(0);
-const steps = computed(() => [
+const copyPrefix = computed(() => props.context === "inspection" ? "inspection.tour" : "onboarding");
+const steps = computed(() => props.context === "inspection" ? [
+  { key: "select", selector: ".selection-label", placement: "bottom" as const },
+  { key: "decide", selector: ".decision-controls", placement: "bottom" as const },
+  { key: "compare", selector: ".inspection-segments", placement: "bottom" as const },
+] : [
   { key: "modes", selector: ".mode-switch", placement: "bottom" as const },
   { key: "import", selector: "#slot-gerber .dropzone, #slot-gerber .result-header", placement: "right" as const },
   { key: props.mode === "jig" ? "jigParams" : "stencilParams", selector: props.mode === "jig" ? ".stencil-size-section" : "#slot-stencil .slot-header", placement: "right" as const },
@@ -18,7 +23,7 @@ const steps = computed(() => [
 // The sidebar clips its contents. Position its scroll before Tour measures a
 // target, even when that target happens to lie inside the window's viewport.
 function target(selector: string) {
-  const element = document.querySelector<HTMLElement>(selector);
+  const element = (props.root ?? document).querySelector<HTMLElement>(selector);
   const sidebar = element?.closest<HTMLElement>(".app-sidebar");
   if (element && sidebar) {
     const rect = element.getBoundingClientRect();
@@ -37,10 +42,10 @@ function target(selector: string) {
     :content-style="{ width: '350px', maxWidth: 'calc(100vw - 32px)' }" @close="emit('close')">
     <ElTourStep v-for="(step, index) in steps" :key="step.key"
       :target="step.selector ? () => target(step.selector) : undefined" :placement="step.placement"
-      :title="t(`onboarding.${step.key}Title`)" :show-close="false"
+      :title="t(`${copyPrefix}.${step.key}Title`)" :show-close="false"
       :prev-button-props="{ children: t('onboarding.previous') }"
-      :next-button-props="{ children: t(index === steps.length - 1 ? 'onboarding.finish' : 'onboarding.next') }">
-      <p class="tour-copy">{{ t(`onboarding.${step.key}Body`) }}</p>
+      :next-button-props="{ children: t(index === steps.length - 1 ? `${copyPrefix}.finish` : 'onboarding.next') }">
+      <p class="tour-copy">{{ t(`${copyPrefix}.${step.key}Body`) }}</p>
       <button type="button" class="tour-skip" @click="emit('close')">{{ t('onboarding.skip') }}</button>
     </ElTourStep>
     <template #indicators="{ current: index, total }">

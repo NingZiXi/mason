@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch, shallowRef } from "vue";
+import { ref, computed, defineAsyncComponent, h, onMounted, onBeforeUnmount, watch, shallowRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import { useUiStore } from "../stores/ui";
+import { useWorkSessionStore } from "../stores/work-session";
 import { buildScadParams as createScadParams, modelParamsHash, scadPartHash } from "../lib/model-params";
 import { GenerationTasks, isGenerationCancelled } from "../lib/generation-tasks";
 import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cache";
 import { buildJigAssembly, disposeJigAssembly, setJigExplosion, setJigVisibility } from "../lib/jig-assembly";
 import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
+import { reviewStencilSizeForExport } from "../lib/stencil-export-review";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -19,14 +21,24 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 type PartName = "base" | "insert" | "cover" | "stencil_top" | "stencil_bottom";
 type PreviewName = PartName | "assembly";
 
+const StencilInspection = defineAsyncComponent(() => import("./StencilInspection.vue"));
+
 const store = useConfigStore();
+const workSession = useWorkSessionStore();
+const emit = defineEmits<{ reviewStencilSize: [] }>();
 const ui = useUiStore();
 const { t } = useI18n();
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const containerEl = ref<HTMLElement | null>(null);
-const activePart = ref<PreviewName>("insert");
+// Imports or a mode switch may finish before this async component mounts.
+const activePart = ref<PreviewName>(store.config.appMode === "stencil"
+  ? (store.config.stencilPadsTop.length || !store.config.stencilPadsBottom.length ? "stencil_top" : "stencil_bottom")
+  : "insert");
 const loading = ref(false);
 const exporting = ref(false);
+const inspectionOpen = ref(false);
+// Keep the inspected board and viewport mounted after the first visit.
+const inspectionLoaded = ref(false);
 const generationTasks = new GenerationTasks(invoke);
 const errorMsg = ref<string | null>(null);
 
@@ -47,6 +59,7 @@ const hasData = computed(() =>
     ? store.config.stencilPadsTop.length > 0 || store.config.stencilPadsBottom.length > 0
     : store.config.pcbOutlinePoints.length > 0
 );
+watch(hasData, ready => { if (!ready) inspectionOpen.value = false; });
 
 // three.js 引用(shallowRef 避免响应式包装影响性能)
 const scene = shallowRef<THREE.Scene | null>(null);
@@ -216,7 +229,7 @@ function disposeMesh() {
 let renderSeq = 0;
 
 async function renderCurrent(force = false) {
-  if (disposed) return;
+  if (disposed || inspectionOpen.value) return;
   cancelPreviewTasks(["preview"]);
   if (!scene.value || !store.pythonDetected) {
     if (!store.pythonDetected) {
@@ -1399,6 +1412,8 @@ function onMeasureKeyDown(e: KeyboardEvent) {
 let renderTimer: number | null = null;
 function scheduleRender() {
   if (renderTimer !== null) window.clearTimeout(renderTimer);
+  renderTimer = null;
+  if (inspectionOpen.value) return;
   renderTimer = window.setTimeout(() => {
     renderTimer = null;
     renderCurrent();
@@ -1438,7 +1453,8 @@ const hashSource = computed(() => {
 let preloadTimer: number | null = null;
 function schedulePreload(delay = 1200) {
   if (preloadTimer !== null) window.clearTimeout(preloadTimer);
-  if (disposed) return;
+  preloadTimer = null;
+  if (disposed || inspectionOpen.value) return;
   preloadTimer = window.setTimeout(() => {
     preloadTimer = null;
     if (store.pythonDetected && !loading.value) void preloadAllParts();
@@ -1447,7 +1463,10 @@ function schedulePreload(delay = 1200) {
 
 watch(hashSource, () => {
   ++renderSeq; // Invalidate immediately, including during the render debounce.
-  cancelPreviewTasks(["preview", "preload", "metrics"]);
+  // A stale preload must not keep the Python worker busy while the user is
+  // waiting for the newly selected parameters to appear in the preview.
+  cancelPreviewTasks(["preload"], true);
+  cancelPreviewTasks(["preview", "metrics"]);
   scheduleRender();
   schedulePreload();
 });
@@ -1495,12 +1514,12 @@ const allParts = computed<PartName[]>(() =>
 
 async function preloadAllParts() {
   // 未导入数据不预热(不浪费 Python 调用,导入后 hashSource 变化会自动触发)
-  if (disposed || !store.pythonDetected || !hasData.value) return;
+  if (disposed || inspectionOpen.value || !store.pythonDetected || !hasData.value) return;
   const hash = paramsHash();
   const generation = cacheGeneration;
   const params = buildScadParams();
   for (const part of allParts.value) {
-    if (disposed || loading.value || generation !== cacheGeneration || paramsHash() !== hash) return;
+    if (disposed || inspectionOpen.value || loading.value || generation !== cacheGeneration || paramsHash() !== hash) return;
     if (stlCache.value[part]?.paramsHash === partHash(part, params)) continue;
     const pending = preloading.value.get(part);
     if (pending?.hash === hash && pending.generation === generation) continue;
@@ -1566,7 +1585,7 @@ let metricsTimer: number | null = null;
 function scheduleMetrics() {
   if (metricsTimer !== null) window.clearTimeout(metricsTimer);
   metricsTimer = null;
-  if (!showMetrics.value || disposed) return;
+  if (!showMetrics.value || disposed || inspectionOpen.value) return;
   metricsTimer = window.setTimeout(() => {
     metricsTimer = null;
     void loadMetrics();
@@ -1583,6 +1602,27 @@ watch(showMetrics, visible => {
   if (visible) void loadMetrics();
   else printMetrics.invalidate();
 });
+
+// Give 2D checks the worker without launching hidden CAD builds on each edit.
+// Returning to 3D renders the current parameters, reusing any valid mesh cache.
+watch(inspectionOpen, visible => {
+  if (visible) inspectionLoaded.value = true;
+  ++renderSeq;
+  loading.value = false;
+  if (visible) {
+    if (renderTimer !== null) window.clearTimeout(renderTimer);
+    if (preloadTimer !== null) window.clearTimeout(preloadTimer);
+    if (metricsTimer !== null) window.clearTimeout(metricsTimer);
+    renderTimer = preloadTimer = metricsTimer = null;
+    cancelPreviewTasks(["preload"], true);
+    cancelPreviewTasks(["preview", "metrics"]);
+    printMetrics.invalidate();
+  } else {
+    onResize();
+    void renderCurrent();
+    scheduleMetrics();
+  }
+}, { flush: "post" });
 
 function massGrams(volMm3: number): number {
   return (volMm3 / 1000) * PLA_DENSITY_G_CM3;
@@ -1692,7 +1732,34 @@ onBeforeUnmount(() => {
   controls.value = null;
 });
 
-// 导出 STL / STEP:选父目录 → 自动创建 Mason_<时间戳>/ 子文件夹 → 把所有部件写进子文件夹
+async function ensureStencilSizeReviewed() {
+  const result = await reviewStencilSizeForExport(store, async size => {
+    try {
+      const message = h('div', { class: 'stencil-review-content' }, [
+        h('div', { class: 'stencil-review-dimensions' }, [
+          h('span', { class: 'stencil-review-label' }, t('preview.reviewStencilSizeLabel')),
+          h('div', { class: 'stencil-review-value' }, [
+            h('strong', `${size.x} × ${size.y}`), h('span', 'mm'),
+          ]),
+        ]),
+        h('p', { class: 'stencil-review-note' }, t('preview.reviewStencilSizeMessage')),
+      ]);
+      await ElMessageBox.confirm(message, t('preview.reviewStencilSizeTitle'), {
+        confirmButtonText: t('preview.reviewStencilSizeContinue'), cancelButtonText: t('preview.reviewStencilSizeBack'),
+        distinguishCancelAndClose: true, customClass: 'stencil-review-dialog', buttonSize: 'default',
+        confirmButtonClass: 'stencil-review-confirm', cancelButtonClass: 'stencil-review-back',
+      });
+      return true;
+    } catch (action) {
+      if (action === 'cancel' && !disposed) emit('reviewStencilSize');
+      return false;
+    }
+  }, () => !disposed);
+  if (result === 'changed') ElMessage.warning(t('preview.reviewStencilSizeChanged'));
+  return result === 'ready';
+}
+
+// 导出 STL / STEP:先核对钢网,再选目录并写文件。
 async function exportAll(fmt: "stl" | "step") {
   if (exporting.value || disposed) return;
   if (!store.pythonDetected) {
@@ -1701,15 +1768,19 @@ async function exportAll(fmt: "stl" | "step") {
   }
 
   exporting.value = true;
+  workSession.exporting = true;
   try {
+    if (!await ensureStencilSizeReviewed()) return;
     const parentDir = await open({
       directory: true,
       multiple: false,
       title: fmt === "stl" ? t("preview.exportStl") : t("preview.exportStep"),
     });
     if (!parentDir || Array.isArray(parentDir)) return;
+    if (!await ensureStencilSizeReviewed()) return;
 
     const params: ReturnType<typeof buildScadParams> = JSON.parse(JSON.stringify(buildScadParams()));
+    const exportSnapshot = workSession.captureExport();
     const mode = appMode.value;
     const hasTop = store.config.stencilPadsTop.length > 0;
     const hasBottom = store.config.stencilPadsBottom.length > 0;
@@ -1751,6 +1822,7 @@ async function exportAll(fmt: "stl" | "step") {
       }
     }
 
+    workSession.markExported(exportSnapshot);
     const n = parts.length;
     ElMessage.success(
       fmt === "stl"
@@ -1761,6 +1833,7 @@ async function exportAll(fmt: "stl" | "step") {
     ElMessage.error(t("preview.exportFailed", { msg: e instanceof Error ? e.message : String(e) }));
   } finally {
     exporting.value = false;
+    workSession.exporting = false;
   }
 }
 
@@ -1789,6 +1862,7 @@ const singlePartTabs = computed(() => partTabs.value.filter(tab => tab.name !== 
 
 // 切换模式时重置 activePart 到该模式的第一个 tab
 watch(appMode, (m) => {
+  inspectionOpen.value = false;
   activePart.value = m === "stencil" ? "stencil_top" : "insert";
 });
 
@@ -1828,19 +1902,29 @@ watch(partTabs, (tabs) => {
             {{ t('preview.assembly') }}
           </button>
         </template>
+        <template v-if="appMode === 'stencil'">
+          <span class="mode-divider" aria-hidden="true" />
+          <button class="assembly-mode-btn" :class="{ active: inspectionOpen }" :aria-pressed="inspectionOpen"
+            :disabled="!hasData" @click="inspectionOpen = !inspectionOpen">
+            <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round">
+              <rect x="2.5" y="2.5" width="13" height="13" rx="2" /><path d="M6 6h2v2H6zM10 6h2v2h-2zM6 10h2v2H6zM10 10h2v2h-2z" />
+            </svg>
+            {{ t(inspectionOpen ? 'inspection.back3d' : 'inspection.title') }}
+          </button>
+        </template>
       </div>
       <div class="header-actions">
-        <span v-if="preloading.size > 0" class="preload-badge">
-          {{ t('preview.preloading', { n: allParts.length - preloading.size }) }}
+        <span v-if="!inspectionOpen && preloading.size > 0" class="preload-badge" :title="t('preview.preloadingHint')">
+          {{ t('preview.preloading') }}
         </span>
-        <button class="action-btn" @click="refreshAll" :disabled="refreshing">
+        <button v-if="!inspectionOpen" class="action-btn" @click="refreshAll" :disabled="refreshing">
           <svg viewBox="0 0 16 16" width="14" height="14" :class="{ spinning: refreshing }">
             <path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"
               fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
           {{ t('preview.refresh') }}
         </button>
-        <button class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" :title="t('preview.printInfo')">
+        <button v-if="!inspectionOpen" class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" :title="t('preview.printInfo')">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M8 1.5l5.5 3.1v6.8L8 14.5l-5.5-3.1V4.6zM8 8l5.5-3.1M8 8v6.5M8 8L2.5 4.9"
               fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
@@ -1877,7 +1961,7 @@ watch(partTabs, (tabs) => {
     </div>
 
     <div ref="containerEl" class="canvas-container" :class="{ measuring: measureMode, 'has-preview': hasPreview }">
-      <div class="scene-layer">
+      <div v-show="!inspectionOpen" class="scene-layer">
       <canvas
         ref="canvasEl"
         @pointerdown="onCanvasPointerDown"
@@ -1895,7 +1979,7 @@ watch(partTabs, (tabs) => {
         >{{ tag.text }}</span>
       </div>
       </div>
-      <div class="preview-overlays">
+      <div v-show="!inspectionOpen" class="preview-overlays">
       <div class="viewport-tools" role="group" :aria-label="t('preview.viewControls')" @pointerdown.stop @wheel.stop @dblclick.stop>
         <!-- 视图快捷切换 -->
         <div class="view-btns">
@@ -2051,6 +2135,8 @@ watch(partTabs, (tabs) => {
         {{ t('preview.hint') }}
       </div>
       </div>
+      <StencilInspection v-if="appMode === 'stencil' && hasData && inspectionLoaded" v-show="inspectionOpen"
+        :active="inspectionOpen" :side="activePart === 'stencil_bottom' ? 'bottom' : 'top'" />
     </div>
   </div>
 </template>

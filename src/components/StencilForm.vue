@@ -12,16 +12,16 @@ const c = computed(() => store.config);
 
 // 厚度预设
 const THICKNESS_PRESETS = [
-  { label: "树脂", value: 0.15, hint: "0.15mm · 精度高,锡膏量适中" },
-  { label: "标准", value: 0.2, hint: "0.20mm · 金属钢网常规厚度" },
-  { label: "FDM", value: 0.3, hint: "0.30mm · FDM 适用,建议配焊盘缩小" },
+  { label: "stencil.presetResin", value: 0.15 },
+  { label: "stencil.presetStandard", value: 0.2 },
+  { label: "stencil.presetFdm", value: 0.3 },
 ];
 
 const thicknessHint = computed(() => {
-  const t = c.value.stencilThickness;
-  if (t < 0.25) return "建议树脂打印机;锡膏量适中";
-  if (t <= 0.35) return "FDM 适用;建议配合焊盘缩小 10~20%";
-  return "钢网偏厚;锡膏量偏多,建议增大焊盘缩小比例";
+  const thickness = c.value.stencilThickness;
+  if (thickness < 0.25) return t('stencil.thinHint');
+  if (thickness <= 0.35) return t('stencil.fdmHint');
+  return t('stencil.thickHint');
 });
 
 const totalThickness = computed(() =>
@@ -106,7 +106,7 @@ const showAdvanced = ref(false);
           :class="{ active: Math.abs(c.stencilThickness - p.value) < 0.001 }"
           @click="store.config.stencilThickness = p.value"
         >
-          <span class="preset-name">{{ p.label }}</span>
+          <span class="preset-name">{{ t(p.label) }}</span>
           <span class="preset-val">{{ p.value }}mm</span>
         </button>
         <button
@@ -114,7 +114,7 @@ const showAdvanced = ref(false);
           :class="{ active: !THICKNESS_PRESETS.some((p) => Math.abs(c.stencilThickness - p.value) < 0.001) }"
           @click="store.config.stencilThickness = 0.4"
         >
-          <span class="preset-name">自定义</span>
+          <span class="preset-name">{{ t('stencil.presetCustom') }}</span>
         </button>
       </div>
       <el-input-number
@@ -138,7 +138,7 @@ const showAdvanced = ref(false);
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
           <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <span>总厚度 = {{ c.pcbThickness }} + {{ c.stencilThickness }} = <strong>{{ totalThickness }}mm</strong></span>
+        <span>{{ t('stencil.totalThickness') }} = {{ c.pcbThickness }} + {{ c.stencilThickness }} = <strong>{{ totalThickness }}mm</strong></span>
       </div>
     </div>
 

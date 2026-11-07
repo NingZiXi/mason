@@ -1,11 +1,12 @@
 import { computed, nextTick, shallowRef, watch } from "vue";
 import type { AppConfig } from "../stores/config";
 import { PRESET_KEYS } from "../lib/config-presets";
+import { apertureSnapshot, type ApertureSnapshot } from "../lib/pad-overrides";
 
 // Keep only small parameter values. Never copy Gerber geometry into history.
 const HISTORY_KEYS = [...PRESET_KEYS, "pcbSizeX", "pcbSizeY", "pcbThickness",
   "stencilSizeX", "stencilSizeY", "stencilLip", "jigSize", "platterHeight", "platterMargin"] as const;
-export type ParameterSnapshot = Pick<AppConfig, typeof HISTORY_KEYS[number]>;
+export type ParameterSnapshot = Pick<AppConfig, typeof HISTORY_KEYS[number]> & { apertures: ApertureSnapshot };
 const DERIVED_KEYS = new Set<string>(["jigSize", "platterHeight", "platterMargin", "periScrewD", "nutAcrossFlats", "nutHeight"]);
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -18,7 +19,8 @@ export function useParameterHistory(options: {
 }) {
   function snapshot(): ParameterSnapshot {
     const config = options.config();
-    return clone(Object.fromEntries(HISTORY_KEYS.map((key) => [key, config[key]]))) as ParameterSnapshot;
+    return clone({ ...Object.fromEntries(HISTORY_KEYS.map((key) => [key, config[key]])),
+      apertures: apertureSnapshot(config.stencilPadsTop, config.stencilPadsBottom) }) as ParameterSnapshot;
   }
   const past = shallowRef<ParameterSnapshot[]>([]);
   const future = shallowRef<ParameterSnapshot[]>([]);
@@ -47,7 +49,7 @@ export function useParameterHistory(options: {
       return;
     }
     if (busy.value || equal(present, state.value)) return;
-    const changed = HISTORY_KEYS.filter((key) => !equal(present[key], state.value[key]));
+    const changed = [...HISTORY_KEYS, "apertures" as const].filter((key) => !equal(present[key], state.value[key]));
     const primary = changed.filter((key) => !DERIVED_KEYS.has(key));
     const group = (primary.length ? primary : changed).join(",");
     const now = Date.now();
@@ -79,7 +81,7 @@ export function useParameterHistory(options: {
     const previousContext = context;
     try {
       await options.restore(clone(target));
-      // A new import/project takes precedence over an in-flight history action.
+      // A new import takes precedence over an in-flight history action.
       if (previousContext !== context) return;
       from.value = from.value.slice(0, -1);
       to.value = [...to.value, previous].slice(-LIMIT);

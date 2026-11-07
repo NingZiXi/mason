@@ -7,7 +7,7 @@
 **从 Gerber 到 3D 打印钢网 — 一键生成 PCB 锡膏印刷工具**
 *Gerber 解析 · 参数化 CAD · 实时 3D 预览 · 零云依赖*
 
-[🌐 官网](https://ningzixi.github.io/mason/) · [English](README.en.md) · [📝 更新日志](https://github.com/NingZiXi/mason/releases) · [🐛 反馈问题](https://github.com/NingZiXi/mason/issues) · [👤 作者主页](https://github.com/NingZiXi)
+[🌐 官网](https://ningzixi.github.io/mason/) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [📝 更新日志](https://github.com/NingZiXi/mason/releases) · [🐛 反馈问题](https://github.com/NingZiXi/mason/issues) · [👤 作者主页](https://github.com/NingZiXi)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#快速开始)
 
@@ -39,10 +39,11 @@ Mason 是一款基于 Tauri 2 + Python (build123d) 的桌面应用，能将嘉�
 - 自研 RS-274X 解析器，支持 `%LM` 镜像、`%LR` 旋转、`%LS` 缩放等图层变换命令
 - 支持 G02/G03 弧线、多行 D 码、异形板框轮廓提取
 - 焊盘解析覆盖圆形 / 矩形 / 长圆形 / 圆角矩形 / 多边形 / 区域填充等光圈类型
+- 拼版识别支持相同板阵列和不同板混拼，可选择整版或其中一块子板
 
 ### 钢网夹具模式
 - 四部分装配：PCB 托盘在最下方；B 面底座、金属钢网、A 面顶盖自下而上叠放，底座与顶盖夹紧钢网后通过托盘上的四根一体定位柱定位
-- 螺丝仅布置在 A/B 框周圈并按间距补位；四角是定位柱，不是螺丝。周圈螺丝支持 M2/M2.5/M3 等规格联动
+- 螺丝仅布置在 A/B 框周圈并按间距补位；四角是定位柱，不是螺丝。周圈螺丝支持 M2.5/M3/M3.5/M4/M5 等规格联动
 - 夹具尺寸按钢网尺寸自动计算 (20mm 步进)，同尺寸 PCB 可复用底座与顶盖
 - 异形 PCB 板框完整还原，卡槽间隙可调
 
@@ -50,20 +51,23 @@ Mason 是一款基于 Tauri 2 + Python (build123d) 的桌面应用，能将嘉�
 - 一体式钢网：PCB 外扩边框 + 顶面卡槽 (深度 = PCB 厚度) + 槽底薄钢网层
 - 焊盘开孔仅贯穿钢网层，与板框坐标精确对齐
 - 焊盘方形化 (obround → 直角矩形，匹配钢网厂工艺)
-- 测试点过滤（默认开启）：优先读取 Gerber X2 测试点 / 元件引脚属性；无属性时综合正圆、尺寸与边缘孤立距离识别，保护密集圆孔与等间距孔列，方形、圆角矩形及未知类型不按形状过滤；无用途属性时仍需核对预览
+- 测试点过滤（默认开启）：优先读取 Gerber X2 测试点 / 元件引脚属性，结合制板包中可选的 `FlyingProbeTesting.json` 元件与引脚信息辅助识别；无用途信息时综合正圆、尺寸与边缘孤立距离识别，保护密集圆孔与等间距孔列，方形、圆角矩形及未知类型不按形状过滤；无用途属性时仍需核对预览
+- 二维开孔核对：原始焊盘 / 实际开孔 / 叠加对比，查看自动过滤结果与依据
+- 手动开孔：仅在「原始焊盘」中编辑，左键点选或框选后批量开孔 / 封孔 / 恢复自动；右键拖动、滚轮缩放。支持撤销重做，整版与子板同步
 - 密脚错排、大孔开网格等后处理选项
 - 外框形状可在「跟随板形」与「矩形」间切换，外框圆角可调
 - 梯形取放缺口，便于从卡槽中取出 PCB
 
 ### 通用
 - 实时 3D 预览 (three.js)，多部件后台预热，切换秒级响应
-- 钢网渲染经深度优化，2400+ 焊盘约 3 秒完成
-- 项目保存 / 加载 (JSON)：保留全部建模参数、工作模式、焊盘信息及整版 / 单板两套数据，兼容旧版项目；旧文件未保存的设置使用默认值
-- 多配置预设：保留内置默认配置，支持另存、更新、重命名和删除用户预设；重启恢复上次选中的已保存预设。仅保存打印与结构参数，不覆盖当前板子尺寸、厚度和 Gerber 数据
+- 钢网渲染采用快速 STL 路径与缓存，减少首次加载和重复调参的等待时间
+- 多配置预设：默认配置和自定义配置都可「另存为新预设」，支持保存修改、重命名与删除；切换前可保存、另存或放弃改动，重启恢复上次选中的已保存预设。仅保存打印与结构参数，不包含板子尺寸、厚度和 Gerber 数据
 - 参数撤销 / 重做：支持按钮与快捷键，连续调参合并记录，联动参数一起恢复
 - 整体装配预览：支持爆炸视图、PCB / 钢网显隐，查看定位柱及周圈螺丝、螺母的装配关系
+- 装配辅助：查看凸台与唇宽的平面夹持区域，实时估算周圈螺丝与螺母的规格、长度及数量
+- 导出前核对金属钢网的实际外缘尺寸；当前工作未导出时，退出前提醒确认
 - 首次启动简明引导，导入后提示核对钢网尺寸；主题支持跟随系统
-- 中英双语界面
+- 简体中文 / English / 日本語 / 한국어 四种界面语言，支持手动选择或跟随系统；未支持的系统语言回退到英语
 - STL / STEP 双格式导出，自动创建时间戳目录
 
 ---
@@ -113,11 +117,11 @@ npm run tauri:build
 
 ### 钢网夹具模式
 
-1. 拖入 Gerber ZIP，自动识别板框轮廓
-2. 确认 PCB 尺寸 / 厚度、钢网尺寸等基础参数
+1. 拖入 Gerber ZIP，自动识别板框轮廓；拼版文件可选择整版或子板
+2. 确认 PCB 尺寸 / 厚度，并填写金属钢网的实际外缘长宽
 3. (可选) 调整螺丝间距、托盘厚度、卡槽间隙等高级参数
 4. 在右侧 3D 预览中分别查看 PCB 托盘 (insert)、B 面底座 (base) 和 A 面顶盖 (cover)
-5. 点击「导出」，选择目录，自动生成 `mason_export_<timestamp>/` 子目录并写入 STL 文件
+5. 点击「导出」，选择目录，自动生成 `Mason_<timestamp>/` 子目录并写入 STL / STEP 文件
 
 ### PCB 钢网模式
 
@@ -125,8 +129,8 @@ npm run tauri:build
 2. 拖入 Gerber ZIP (需包含 `.GTP` / `.GBP` 锡膏层)
 3. 选择钢网层厚度预设 (树脂 0.15mm / 标准 0.2mm / FDM 0.3mm)
 4. (可选) 调整焊盘缩小比例、边框宽、外框圆角、取放缺口等参数
-5. 预览生成的钢网模型，确认焊盘开孔位置与数量
-6. 导出 STL 直接 3D 打印，或发给钢网厂切割
+5. 在二维核对中确认开孔位置与自动过滤结果，必要时手动修改，再查看三维模型
+6. 导出 STL 用于切片打印，或导出 STEP 继续在 CAD 中编辑
 
 ---
 
@@ -142,7 +146,7 @@ Mason 采用 **Tauri 2 (Rust) + Vue 3 + Python (build123d)** 的混合架构：
 └────────────────────┘          └─────────────┘           └──────────────────┘
 ```
 
-- 前端将参数通过 Tauri IPC 发送给 Rust，Rust 写入 `input.json` 并调用 `python/jig_generator.py` 生成 STL
+- 前端将参数通过 Tauri IPC 发送给 Rust，由 Rust 调度 `python/jig_generator.py` 生成模型
 - Python 以常驻进程方式运行 (stdin/stdout 行 JSON 协议)，避免重复启动开销
 - STL 按参数哈希缓存在前端，切换部件不重复计算；应用启动时后台预热各部件
 - 千级焊盘钢网采用快速 STL 路径 (numpy 直接生成三角面 + OCC 平面网格化)，渲染性能提升至秒级
@@ -198,10 +202,10 @@ mason/
 │   ├── components/                   # 业务组件 (ConfigForm / StencilForm / ModelPreview ...)
 │   ├── composables/                  # useGerberOutline / useGerberStencil
 │   ├── lib/gerber/                   # 自研 Gerber 解析器 + 单元测试
-│   ├── i18n/                         # 中英双语文案
+│   ├── i18n/                         # 中 / 英 / 日 / 韩文案
 │   └── stores/                       # Pinia 状态管理
 ├── src-tauri/                        # Rust 后端 (Tauri)
-│   └── src/{commands,scad,openscad_detect,error}.rs
+│   └── src/{commands,scad,python_detect,generation,error}.rs
 ├── python/
 │   ├── jig_generator.py              # build123d CAD 生成 (base/insert/cover/stencil)
 │   └── tests/                        # 几何端到端测试
@@ -217,13 +221,13 @@ mason/
 A: 开发模式下应用会探测 PATH 和标准安装位置。若 Python 装在自定义路径，在「Python 环境」卡片手动指定 `python.exe`，需已安装 `build123d`、`shapely`、`numpy`。发布版自带内置引擎，无需此步骤。
 
 **Q: Gerber ZIP 解析失败？**
-A: 板框识别依赖 `.GKO` / `*Edge.Cuts*` / `.GM1` 文件；钢网模式还需要 `.GTP` 或 `.GBP` 的锡膏层。若文件命名特殊，可在导入组件中手动选择。
+A: 板框识别依赖 `.GKO` / `*Edge.Cuts*` / `.GM1` 文件；钢网模式还需要 `.GTP` 或 `.GBP` 的锡膏层。若命名特殊，请检查 ZIP 中实际包含的层文件及其扩展名。
 
 **Q: 钢网焊盘和 PCB 焊盘对不上？**
 A: Mason 默认对长圆形焊盘做方形化处理 (匹配钢网厂工艺)，并按 PCB 板框居中对齐。若仍有偏差，检查 Gerber 坐标系是否与板框层一致。
 
 **Q: 导出的文件在哪里？**
-A: 导出时会在所选目录创建 `mason_export_<时间戳>/` 子文件夹，所有生成的 STL 文件放入其中，避免与现有文件混淆。
+A: 导出时会在所选目录创建 `Mason_<时间戳>/` 子文件夹，所有生成的 STL / STEP 文件放入其中，避免与现有文件混淆。
 
 ---
 

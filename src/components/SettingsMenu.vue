@@ -7,13 +7,16 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { ElMessageBox, ElNotification } from "element-plus";
 import { useUpdaterStore } from "../stores/updater";
+import { useExitConfirmation } from "../composables/useExitConfirmation";
 import { version } from "../../package.json";
+import { LOCALE_NAMES } from '../lib/locales';
 
 const { t } = useI18n();
 const emit = defineEmits<{ startTour: [] }>();
 const replayTour = ref(false);
 const ui = useUiStore();
 const updater = useUpdaterStore();
+const confirmExit = useExitConfirmation();
 const canUpdate = isTauri() && !import.meta.env.DEV;
 const confirmingUpdate = ref(false);
 const showSettings = ref(false);
@@ -47,13 +50,20 @@ async function installUpdate() {
   try {
     await ElMessageBox.confirm(t("updates.confirm"), t("updates.title"), {
       confirmButtonText: t("updates.install"), cancelButtonText: t("updates.later"), type: "warning",
+      customClass: 'stencil-review-dialog update-review-dialog', buttonSize: 'default',
+      confirmButtonClass: 'stencil-review-confirm', cancelButtonClass: 'stencil-review-back',
+      modalClass: 'app-confirm-overlay', closeOnClickModal: false,
     });
-    await updater.installUpdate();
+    await updater.installUpdate(confirmExit);
   } catch {
     // Closing or cancelling the confirmation leaves the update available.
   } finally {
     confirmingUpdate.value = false;
   }
+}
+
+async function restart() {
+  if (await confirmExit()) await updater.restart();
 }
 
 const REPO_URL = "https://github.com/NingZiXi/mason";
@@ -171,7 +181,7 @@ function onSettingsClosed() {
                 <pre v-if="updater.update?.body" class="update-notes">{{ updater.update.body }}</pre>
                 <p v-if="updater.error" class="update-error">{{ t('updates.failed') }}<br>{{ updater.error }}</p>
                 <div class="update-actions">
-                  <el-button v-if="updater.status === 'ready'" size="small" type="primary" @click="updater.restart()">{{ t('updates.restart') }}</el-button>
+                  <el-button v-if="updater.status === 'ready'" size="small" type="primary" @click="restart">{{ t('updates.restart') }}</el-button>
                   <template v-else>
                     <el-button size="small" :loading="updater.status === 'checking'" :disabled="updater.busy || confirmingUpdate" @click="updater.checkForUpdates()">{{ t('updates.check') }}</el-button>
                     <el-button v-if="updater.update" size="small" type="primary" :loading="updater.status === 'downloading' || updater.status === 'installing'" :disabled="updater.busy || confirmingUpdate" @click="installUpdate">{{ t('updates.install') }}</el-button>
@@ -266,20 +276,12 @@ function onSettingsClosed() {
             <div class="setting-row">
               <div class="setting-label">
                 <span class="label-text">{{ t('settings.language') }}</span>
+                <p v-if="ui.locale === 'system'" class="setting-hint">{{ t('settings.languageSystemHint') }}</p>
               </div>
-              <div class="seg-group" :style="{ '--segment-index': ui.locale === 'zh' ? 0 : 1 }">
-                <span class="seg-indicator" aria-hidden="true" />
-                <button
-                  class="seg-btn"
-                  :class="{ active: ui.locale === 'zh' }" :aria-pressed="ui.locale === 'zh'"
-                  @click="ui.setLocale('zh')"
-                >中文</button>
-                <button
-                  class="seg-btn"
-                  :class="{ active: ui.locale === 'en' }" :aria-pressed="ui.locale === 'en'"
-                  @click="ui.setLocale('en')"
-                >English</button>
-              </div>
+              <el-select class="language-select" popper-class="settings-language-menu" :model-value="ui.locale" :aria-label="t('settings.language')" @change="ui.setLocale">
+                <el-option value="system" :label="t('settings.languageSystem')" />
+                <el-option v-for="(label, value) in LOCALE_NAMES" :key="value" :value="value" :label="label" />
+              </el-select>
             </div>
             </section>
             <section class="setting-section">
@@ -523,8 +525,9 @@ function onSettingsClosed() {
 .app-version {
   font-size: 12px;
   color: var(--text-tertiary);
-  font-family: "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  font-family: var(--font-family-mono);
 }
+.language-select { width: 180px; flex-shrink: 0; }
 .about-desc {
   margin: 0;
   font-size: 13px;
@@ -656,6 +659,8 @@ a.link-row:hover .link-label {
 </style>
 
 <style>
+/* The teleported language menu must sit above the settings overlay. */
+.settings-language-menu.el-popper { z-index: 3100 !important; }
 /* settings-dialog 专用覆盖（非 scoped，因对话框 teleport 到 body，scoped :deep() 无法命中） */
 .settings-dialog.el-dialog {
   height: min(560px, calc(100vh - 48px));

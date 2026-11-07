@@ -9,8 +9,8 @@
  * 5. 把多边形点平移到以 bbox 中心为原点(方便 SCAD 居中放置)
  * 6. 返回 reactive 结果供 UI 使用
  */
-import { ref, computed } from "vue";
-import JSZip from "jszip";
+import { ref, computed, shallowRef } from "vue";
+import { GerberImportError, formatImportError } from '../lib/gerber/import-error';
 import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
 import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
 import { detectOutlineFiles, type OutlineCandidate } from "../lib/gerber/outline-detect";
@@ -28,12 +28,13 @@ export interface GerberOutlineResult {
   bboxCenter: { x: number; y: number };
   parse: GerberOutline;
   /** 整版 / 单板两套口径(默认字段为整版) */
-  variants: { panel: PanelVariant; single: PanelVariant };
+  variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
 }
 
 export function useGerberOutline() {
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  const failure = shallowRef<unknown>(null);
+  const error = computed(() => formatImportError(failure.value));
   const result = ref<GerberOutlineResult | null>(null);
   const candidates = ref<OutlineCandidate[]>([]);
 
@@ -44,7 +45,7 @@ export function useGerberOutline() {
    */
   async function processFile(file: File): Promise<void> {
     loading.value = true;
-    error.value = null;
+    failure.value = null;
     result.value = null;
 
     try {
@@ -58,27 +59,24 @@ export function useGerberOutline() {
       ) {
         await processSingleGerber(file);
       } else {
-        throw new Error(
-          `不支持的文件类型: ${file.name}。请提供 .zip 或板框 Gerber 文件 (.gko/.gm1/.gbr)`
-        );
+        throw new GerberImportError('gerber.unsupportedOutline', { name: file.name });
       }
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
+      failure.value = e;
     } finally {
       loading.value = false;
     }
   }
 
   async function processZip(file: File): Promise<void> {
+    const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(file);
     const filenames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
     const detected = detectOutlineFiles(filenames);
     candidates.value = detected;
 
     if (detected.length === 0) {
-      throw new Error(
-        "ZIP 中未找到板框 Gerber 文件 (期望 .GKO / .GM1 / *Edge.Cuts* / *outline*)"
-      );
+      throw new GerberImportError('gerber.outlineNotFound');
     }
 
     const top = detected[0];
@@ -98,9 +96,7 @@ export function useGerberOutline() {
     const outline = extractOutline(gerberText, { panel: true });
 
     if (outline.points.length < 3) {
-      throw new Error(
-        `板框文件 ${filename} 解析失败:多边形点数少于 3(${outline.points.length}个)。请检查文件格式`
-      );
+      throw new GerberImportError('gerber.invalidOutline', { name: filename, n: outline.points.length });
     }
 
     // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同
@@ -111,6 +107,12 @@ export function useGerberOutline() {
     const variants = {
       panel: makePanelVariant(outline),
       single: makePanelVariant(singleOutline),
+      boards: outline.boards?.map((board, index) =>
+        makePanelVariant(board, undefined, undefined, {
+          id: `board-${index + 1}`,
+          label: `#${index + 1}`,
+        })
+      ),
     };
     const applied = variants.panel;
 
@@ -129,7 +131,7 @@ export function useGerberOutline() {
 
   function reset(): void {
     loading.value = false;
-    error.value = null;
+    failure.value = null;
     result.value = null;
     candidates.value = [];
   }

@@ -8,12 +8,19 @@
  * 两种口径都做居中(各自以外框 bbox 中心为原点),由调用方按用户选择取用。
  */
 
-import type { GerberOutline } from "./parser";
+import type { GerberBoardOutline, GerberOutline } from "./parser";
 import type { PadPolygon } from "./pads";
+import { pointInPolygon } from "./geometry";
 
-export type PanelMode = "panel" | "single";
+export type PanelMode = "panel" | "single" | "board";
 
 export interface PanelVariant {
+  /** 子板稳定编号(仅 boards 条目使用) */
+  id?: string;
+  /** 子板显示名称 */
+  label?: string;
+  /** Board boundaries inferred from connecting tabs rather than explicit outlines. */
+  inferred?: boolean;
   /** 外框多边形(已居中) */
   outlinePoints: Array<[number, number]>;
   /** 内孔(已居中) */
@@ -27,6 +34,13 @@ export interface PanelVariant {
   center: { x: number; y: number };
 }
 
+export interface GerberVariants {
+  panel: PanelVariant;
+  single: PanelVariant;
+  boards?: PanelVariant[];
+  hasPads: boolean;
+}
+
 export interface GerberImportPayload {
   filename: string;
   /** 文件是否识别为拼版 */
@@ -35,6 +49,34 @@ export interface GerberImportPayload {
   panelGrid?: { nx: number; ny: number };
   panel: PanelVariant;
   single: PanelVariant;
+  /** 混合拼版中的可选子板 */
+  boards?: PanelVariant[];
+}
+
+interface PanelVariantSet {
+  panel: PanelVariant;
+  single: PanelVariant; // Legacy automatic selection; never shown as a third scope.
+  boards?: PanelVariant[];
+}
+
+export function getPanelBoards(variants: PanelVariantSet): PanelVariant[] {
+  return variants.boards?.length ? variants.boards : [variants.single];
+}
+
+/** Normalize legacy single-board choices into the explicit board selector. */
+export function resolvePanelSelection(variants: PanelVariantSet, mode: PanelMode, index?: number | null) {
+  if (mode === "panel") return { mode: "panel" as const, index: null, variant: variants.panel };
+  const boards = getPanelBoards(variants);
+  const selected = mode === "single" ? boards.indexOf(variants.single) : index;
+  // An automatic single-board variant may be a separate object representing
+  // exactly the same board. Match position and dimensions before defaulting.
+  const legacyIndex = mode === "single" && selected === -1 ? boards.findIndex((board) =>
+    Math.abs(board.width - variants.single.width) < 1e-6 && Math.abs(board.height - variants.single.height) < 1e-6 &&
+    Math.abs(board.center.x - variants.single.center.x) < 1e-6 && Math.abs(board.center.y - variants.single.center.y) < 1e-6
+  ) : selected;
+  const boardIndex = Number.isInteger(legacyIndex)
+    ? Math.max(0, Math.min(legacyIndex!, boards.length - 1)) : 0;
+  return { mode: "board" as const, index: boardIndex, variant: boards[boardIndex] };
 }
 
 /** 把焊盘点列平移到以 (cx, cy) 为原点 */
@@ -59,20 +101,26 @@ function centerPads(
 
 /** 由一条板框轮廓 + 焊盘生成某一口径的建模输入 */
 export function makePanelVariant(
-  outline: GerberOutline,
+  outline: GerberOutline | GerberBoardOutline,
   topPads?: PadPolygon[],
-  bottomPads?: PadPolygon[]
+  bottomPads?: PadPolygon[],
+  identity?: { id?: string; label?: string }
 ): PanelVariant {
   const { minX, minY, maxX, maxY } = outline.bbox;
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
 
-  // 只保留外框范围内的焊盘:整版口径下即全量,单板口径下即该块板上的焊盘
+  // Check the actual polygon as well as the bounds: interlocking boards may
+  // share a bounding box without sharing any PCB material.
   const inside = (p: PadPolygon) =>
     p.cx >= minX - 1e-6 && p.cx <= maxX + 1e-6 &&
-    p.cy >= minY - 1e-6 && p.cy <= maxY + 1e-6;
+    p.cy >= minY - 1e-6 && p.cy <= maxY + 1e-6 &&
+    pointInPolygon(p.cx, p.cy, outline.points) &&
+    !outline.holes.some((hole) => pointInPolygon(p.cx, p.cy, hole));
 
   return {
+    ...identity,
+    ...("inferred" in outline && outline.inferred ? { inferred: true } : {}),
     outlinePoints: outline.points.map(
       ([x, y]): [number, number] => [x - cx, y - cy]
     ),

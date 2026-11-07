@@ -59,7 +59,9 @@ jobs:
             patchelf
       - name: 安装 Rust stable
         uses: dtolnay/rust-toolchain@stable
+      - name: 构建资源同步回归测试
+        run: python -m unittest discover -s scripts -p test_build_sync.py
       - name: 编译检查
         run: cargo check --manifest-path src-tauri/Cargo.toml
-      - name: 后端回归测试(项目保存、任务调度与进程隔离)
+      - name: 后端回归测试(参数默认值、任务调度与进程隔离)
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib

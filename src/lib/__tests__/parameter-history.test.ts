@@ -171,20 +171,6 @@ describe("parameter undo and redo", () => {
     expect(store.canRedo).toBe(false);
   });
 
-  it("resets history after loading a project but leaves it intact if validation fails", async () => {
-    const store = useConfigStore();
-    const project = store.projectConfig();
-    store.config.baseHeight = 5;
-    await nextTick();
-    await expect(store.restoreProject({ base_height: "invalid" }, null)).rejects.toThrow();
-    expect(store.canUndo).toBe(true);
-    await store.restoreProject(project, null);
-    expect(store.canUndo).toBe(false);
-    store.config.baseHeight = 6;
-    await store.undo();
-    expect(store.config.baseHeight).toBe(4);
-  });
-
   it("treats applying a structure preset as one action", async () => {
     const store = useConfigStore();
     store.applyPreset("heavy");

@@ -3,7 +3,6 @@ import { createPinia } from "pinia";
 import {
   ElAlert,
   ElButton,
-  ElButtonGroup,
   ElCheckbox,
   ElConfigProvider,
   ElDialog,
@@ -35,7 +34,6 @@ app.use(i18n);
 for (const component of [
   ElAlert,
   ElButton,
-  ElButtonGroup,
   ElCheckbox,
   ElConfigProvider,
   ElDialog,

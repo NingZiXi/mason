@@ -7,7 +7,7 @@
 **From Gerber to 3D-printable stencil — generate PCB solder paste printing tools in one click**
 *Gerber parsing · Parametric CAD · Real-time 3D preview · Zero cloud dependency*
 
-[🌐 Website](https://ningzixi.github.io/mason/) · [中文](README.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
+[🌐 Website](https://ningzixi.github.io/mason/) · [中文](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#getting-started)
 
@@ -39,10 +39,11 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Self-developed RS-274X parser supporting layer transform commands: `%LM` mirror, `%LR` rotation, `%LS` scaling
 - Supports G02/G03 arcs, multi-line D-codes, and irregular board outline extraction
 - Pad parsing covers circle / rectangle / obround / rounded rectangle / polygon / region fill aperture types
+- Supports repeated-board arrays and mixed-board panels; choose the entire panel or a specific PCB
 
 ### Stencil Jig Mode
 - Four-part assembly: PCB tray at the bottom, followed by the B-side base, metal stencil, and A-side cover; four integral tray posts align the clamped assembly as it drops onto the tray
-- Screws are placed only around the A/B frame perimeter. The four corners are alignment posts, not screws; perimeter screw spacing and M2/M2.5/M3 specs are configurable
+- Screws are placed only around the A/B frame perimeter. The four corners are alignment posts, not screws; perimeter screw spacing and M2.5/M3/M3.5/M4/M5 specs are configurable
 - Jig size auto-calculated from stencil size (20mm steps); base and cover reusable for same-size PCBs
 - Full irregular PCB outline reproduction with adjustable pocket clearance
 
@@ -50,16 +51,23 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - All-in-one stencil: PCB outer frame + top PCB pocket (depth = PCB thickness) + thin stencil layer at pocket bottom
 - Pad openings only penetrate the stencil layer, precisely aligned with board outline coordinates
 - Pad squaring (obround → right-angle rectangle, matching stencil manufacturer process)
-- Test point filtering (enabled by default, matching JLCPCB stencil behavior)
+- Test-point filtering (on by default): combines Gerber purpose attributes, optional `FlyingProbeTesting.json` component/pin data, and isolated-circle geometry. Component pins, nearby circles and regular rows are protected; check the preview results.
+- 2D aperture inspection: compare source pads, actual apertures and overlays, with automatic filtering reasons
+- Manual apertures: edit only in Source pads; left-click or box-select to open, close or reset pads, right-drag to pan and scroll to zoom. Supports undo/redo and synchronization between panel and board scopes
 - Post-processing options: dense pin staggering, large-hole grid
 - Outer frame shape switchable between "follow board shape" and "rectangle", with adjustable corner radius
 - Trapezoidal pick-and-place notch for easy PCB removal from the pocket
 
 ### General
 - Real-time 3D preview (three.js) with background preheating of multiple parts, sub-second switching
-- Stencil rendering deeply optimized — 2400+ pads complete in ~3 seconds
-- Project save / load (JSON) preserves all modeling settings, work mode, pad metadata, and both panel / single-board datasets; legacy projects remain supported, with defaults for settings absent from the file
-- Chinese / English bilingual UI
+- Fast STL generation and caching reduce initial loading and repeated parameter-editing delays
+- Configuration presets: save current Default or custom settings as a new preset, update, rename or delete. Save, save as, or discard edits before switching. Restores the last selected saved preset at startup; presets exclude board dimensions, thickness and Gerber data
+- Parameter undo/redo with buttons and shortcuts; continuous edits and linked changes are grouped
+- Assembly preview with exploded view, PCB/stencil visibility, alignment posts, perimeter screws and nuts
+- Clamping-area plan view and estimated screw/nut sizes, lengths and quantities
+- Confirm unchecked metal stencil dimensions before export; closing unexported work prompts for confirmation
+- First-use guides and system-aware light/dark theme
+- Simplified Chinese / English / Japanese / Korean UI, with manual selection or system-language matching and English fallback
 - STL / STEP dual-format export with auto-created timestamp directories
 
 ---
@@ -109,11 +117,11 @@ Installer artifacts are in `src-tauri/target/release/bundle/` (Windows: `.msi` /
 
 ### Stencil Jig Mode
 
-1. Drag in a Gerber ZIP to auto-detect the board outline
-2. Confirm basic parameters: PCB size / thickness, stencil size, etc.
+1. Drag in a Gerber ZIP to auto-detect the board outline; select the entire panel or a board if panelized
+2. Check PCB dimensions/thickness and enter the metal stencil’s actual outer length and width
 3. (Optional) Adjust advanced parameters: screw spacing, tray thickness, pocket clearance, etc.
 4. Preview the PCB tray (insert), B-side base, and A-side cover individually
-5. Click "Export", select a directory — a `mason_export_<timestamp>/` subfolder is auto-created and STL files are written into it
+5. Click "Export", select a directory — a `Mason_<timestamp>/` subfolder is auto-created and STL / STEP files are written into it
 
 ### PCB Stencil Mode
 
@@ -121,8 +129,8 @@ Installer artifacts are in `src-tauri/target/release/bundle/` (Windows: `.msi` /
 2. Drag in a Gerber ZIP (must contain `.GTP` / `.GBP` paste mask layer)
 3. Select stencil layer thickness preset (Resin 0.15mm / Standard 0.2mm / FDM 0.3mm)
 4. (Optional) Adjust pad shrink ratio, frame width, outer corner radius, pick-and-place notch, etc.
-5. Preview the generated stencil model, confirm pad opening positions and count
-6. Export STL for direct 3D printing, or send to a stencil manufacturer for cutting
+5. Check aperture positions and filtering in 2D inspection, edit if needed, then review the 3D model
+6. Export STL for slicing and printing, or STEP for further CAD editing
 
 ---
 
@@ -138,7 +146,7 @@ Mason uses a hybrid architecture of **Tauri 2 (Rust) + Vue 3 + Python (build123d
 └────────────────────┘          └─────────────┘           └──────────────────┘
 ```
 
-- Frontend sends parameters to Rust via Tauri IPC; Rust writes `input.json` and calls `python/jig_generator.py` to generate STL
+- The frontend sends parameters through Tauri IPC; Rust schedules `python/jig_generator.py` to generate models
 - Python runs as a persistent process (stdin/stdout line JSON protocol) to avoid repeated startup overhead
 - STL cached in frontend by parameter hash; switching parts does not recompute; background preheating on app startup
 - Thousand-pad stencils use a fast STL path (numpy directly generates triangle faces + OCC planar meshing), achieving second-level rendering performance
@@ -194,10 +202,10 @@ mason/
 │   ├── components/                   # Business components (ConfigForm / StencilForm / ModelPreview ...)
 │   ├── composables/                  # useGerberOutline / useGerberStencil
 │   ├── lib/gerber/                   # Self-developed Gerber parser + unit tests
-│   ├── i18n/                         # Chinese / English i18n
+│   ├── i18n/                         # Chinese / English / Japanese / Korean i18n
 │   └── stores/                       # Pinia state management
 ├── src-tauri/                        # Rust backend (Tauri)
-│   └── src/{commands,scad,openscad_detect,error}.rs
+│   └── src/{commands,scad,python_detect,generation,error}.rs
 ├── python/
 │   ├── jig_generator.py              # build123d CAD generation (base/insert/cover/stencil)
 │   └── tests/                        # Geometry end-to-end tests
@@ -213,13 +221,13 @@ mason/
 A: In development mode, the app probes PATH and standard install locations. If Python is in a custom path, manually specify `python.exe` in the "Python Environment" card — it must have `build123d`, `shapely`, and `numpy` installed. Release builds include a bundled engine, so this step is unnecessary.
 
 **Q: Gerber ZIP parsing fails?**
-A: Board outline detection relies on `.GKO` / `*Edge.Cuts*` / `.GM1` files; stencil mode also requires a `.GTP` or `.GBP` paste mask layer. If files use unusual naming, you can manually select in the import component.
+A: Board outline detection relies on `.GKO` / `*Edge.Cuts*` / `.GM1` files; stencil mode also requires a `.GTP` or `.GBP` paste mask layer. For unusual naming, check the actual layer files and extensions inside the ZIP.
 
 **Q: Stencil pads don't align with PCB pads?**
 A: Mason squares obround pads by default (matching stencil manufacturer process) and aligns to the PCB board outline center. If misalignment persists, check whether the Gerber coordinate system matches the outline layer.
 
 **Q: Where are exported files?**
-A: On export, a `mason_export_<timestamp>/` subfolder is created in the selected directory, and all generated STL files are placed inside to avoid mixing with existing files.
+A: On export, a `Mason_<timestamp>/` subfolder is created in the selected directory, and all generated STL / STEP files are placed inside to avoid mixing with existing files.
 
 ---
 

@@ -22,13 +22,13 @@ pub struct ScadParams {
     /// 空数组 = 无内孔
     #[serde(default)]
     pub pcb_outline_holes: Vec<Vec<[f64; 2]>>,
-    /// 钢网外缘长/宽(mm,可为矩形)—— 独立模式;旧项目文件只有单值
-    /// stencil_size 时两轴同取。0 = 非独立模式(钢网外框由板框+边框宽推导)
+    /// 钢网外缘长/宽(mm,可为矩形)—— 独立模式。
+    /// 0 = 非独立模式(钢网外框由板框+边框宽推导)
     #[serde(default)]
     pub stencil_size_x: f64,
     #[serde(default)]
     pub stencil_size_y: f64,
-    /// 旧单值钢网尺寸(正方形),仅用于旧项目文件兼容
+    /// 单值钢网尺寸(正方形)，供建模引擎的旧式参数输入使用
     #[serde(default)]
     pub stencil_size: f64,
     /// 周圈螺丝间距(B 面配置;0 = 关闭周圈孔)
@@ -41,7 +41,7 @@ pub struct ScadParams {
     pub jig_size: f64,
     #[serde(default = "default_insert_height")]
     pub insert_height: f64,
-    // --- v2 新参数(旧项目文件缺省时用默认值) ---
+    // --- v2 结构参数(缺省时使用建模默认值) ---
     /// 凸台高度(其余为底板)
     #[serde(default = "default_platter_height")]
     pub platter_height: f64,
@@ -70,7 +70,7 @@ pub struct ScadParams {
     /// Legacy field used to derive the four alignment-post diameter (stored value + 4 mm).
     #[serde(default = "default_corner_screw_d")]
     pub corner_screw_d: f64,
-    /// 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.4)
+    /// 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.225)
     #[serde(default = "default_post_clearance")]
     pub post_clearance: f64,
     /// 周圈螺丝直径(M3.5)
@@ -162,7 +162,7 @@ fn default_eject_slot_width() -> f64 { 22.0 }
 fn default_pry_notch_sides() -> Vec<String> { vec!["down".to_string()] }
 fn default_pry_notch_scale() -> f64 { 1.0 }
 fn default_corner_screw_d() -> f64 { 5.0 }
-fn default_post_clearance() -> f64 { 0.15 }
+fn default_post_clearance() -> f64 { 0.225 }
 fn default_peri_screw_d() -> f64 { 3.5 }
 fn default_use_hex_nut() -> bool { true }
 fn default_nut_across_flats() -> f64 { 5.5 }
@@ -524,6 +524,24 @@ pub async fn part_metrics(
     Ok(PartMetrics { volume_mm3, area_mm2 })
 }
 
+/// 使用与模型相同的焊盘处理流程返回二维核对数据。
+#[tauri::command]
+pub async fn inspect_stencil(
+    app: AppHandle,
+    params: ScadParams,
+    part: Part,
+    request_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    if !matches!(part, Part::StencilTop | Part::StencilBottom) {
+        return Err(AppError::Other("二维核对仅支持钢网顶层或底层".into()));
+    }
+    let configured = app.store(STORE_FILE).ok()
+        .and_then(|s| s.get(KEY_PYTHON_PATH))
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
+    scad::inspect_stencil(&app, configured.as_deref(), &params, part, request_id).await
+}
+
 /// 把单个部件渲染到指定路径(供前端导出 STL 文件)
 #[tauri::command]
 pub async fn export_stl(
@@ -565,58 +583,6 @@ pub async fn ensure_dir(path: String) -> Result<(), AppError> {
         .map_err(|e| AppError::Io(format!("创建目录失败 {}: {}", path, e)))
 }
 
-/// 项目文件 schema
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProjectFile {
-    #[serde(default = "default_version")]
-    pub version: u32,
-    // Project state includes UI mode, both panel scopes, and legacy keys.
-    // Keep the original keys until frontend migration; ScadParams would drop them
-    // and inject defaults before legacy fields can be interpreted.
-    pub config: serde_json::Map<String, serde_json::Value>,
-    #[serde(default)]
-    pub gerber_filename: Option<String>,
-    #[serde(default)]
-    pub created_at: String,
-    #[serde(default)]
-    pub updated_at: String,
-}
-
-fn default_version() -> u32 {
-    1
-}
-
-/// 保存项目配置到 JSON 文件
-#[tauri::command]
-pub async fn save_project(
-    path: String,
-    config: serde_json::Map<String, serde_json::Value>,
-    gerber_filename: Option<String>,
-) -> Result<String, AppError> {
-    let now = chrono_like_now();
-    let project = ProjectFile {
-        version: 2,
-        config,
-        gerber_filename,
-        created_at: now.clone(),
-        updated_at: now,
-    };
-
-    let json = serde_json::to_string_pretty(&project)
-        .map_err(|e| AppError::Other(format!("序列化失败: {}", e)))?;
-    std::fs::write(&path, json).map_err(|e| AppError::Io(e.to_string()))?;
-    Ok(path)
-}
-
-/// 加载项目配置文件
-#[tauri::command]
-pub async fn load_project(path: String) -> Result<ProjectFile, AppError> {
-    let text = std::fs::read_to_string(&path).map_err(|e| AppError::Io(e.to_string()))?;
-    let project: ProjectFile = serde_json::from_str(&text)
-        .map_err(|e| AppError::Other(format!("JSON 解析失败: {}", e)))?;
-    Ok(project)
-}
-
 /// 读取拖入的文件,供 drag-drop 后使用
 #[tauri::command]
 pub async fn read_dropped_file(path: String) -> Result<Vec<u8>, AppError> {
@@ -624,15 +590,8 @@ pub async fn read_dropped_file(path: String) -> Result<Vec<u8>, AppError> {
     Ok(bytes)
 }
 
-/// 简易 ISO 8601 时间戳(避免引入 chrono 依赖)
-fn chrono_like_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    format!("epoch:{}", now.as_secs())
-}
-
 #[cfg(test)]
-mod project_tests {
+mod parameter_tests {
     use super::*;
     use serde_json::json;
 
@@ -647,45 +606,14 @@ mod project_tests {
         let defaults: ScadParams = serde_json::from_value(raw.clone()).unwrap();
         assert!(defaults.stencil_filter_test_points);
         assert_eq!(defaults.nut_pocket_clearance, 0.2);
+        assert_eq!(defaults.post_clearance, 0.225);
         assert_eq!(defaults.stencil_pads_top[0]["type"], "circle");
         raw["stencil_filter_test_points"] = json!(false);
         raw["nut_pocket_clearance"] = json!(0.35);
+        raw["post_clearance"] = json!(0.15);
         let explicit: ScadParams = serde_json::from_value(raw).unwrap();
         assert!(!explicit.stencil_filter_test_points);
         assert_eq!(explicit.nut_pocket_clearance, 0.35);
-    }
-
-    #[test]
-    fn save_load_preserves_project_state() {
-        let config = json!({
-            "app_mode": "stencil", "post_clearance": 0.45,
-            "pry_notch_sides": ["left", "up"], "pry_notch_scale": 1.4,
-            "panel_mode": "single", "panel_available": true,
-            "panel_variants": {"panel": {"width": 90}, "single": {"width": 40}},
-            "stencil_pads_top": [{"type": "circle", "polarity": "C", "parts": []}]
-        });
-        let path = std::env::temp_dir().join(format!(
-            "mason-project-test-{}-{}.json", std::process::id(),
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-        ));
-        let project = tauri::async_runtime::block_on(async {
-            save_project(path.to_string_lossy().into_owned(), config.as_object().unwrap().clone(), Some("panel.zip".into())).await.unwrap();
-            load_project(path.to_string_lossy().into_owned()).await.unwrap()
-        });
-        std::fs::remove_file(path).unwrap();
-        assert_eq!(project.version, 2);
-        assert_eq!(serde_json::Value::Object(project.config), config);
-        assert_eq!(project.gerber_filename.as_deref(), Some("panel.zip"));
-    }
-
-    #[test]
-    fn legacy_keys_reach_frontend_without_injected_defaults() {
-        let project: ProjectFile = serde_json::from_value(json!({
-            "config": {"stencil_size": 140, "platter_width": 110, "pry_notch_side": "off"}
-        })).unwrap();
-        assert_eq!(project.version, 1);
-        assert_eq!(project.config["platter_width"], 110);
-        assert!(!project.config.contains_key("stencil_lip"));
-        assert!(!project.config.contains_key("stencil_size_x"));
+        assert_eq!(explicit.post_clearance, 0.15);
     }
 }

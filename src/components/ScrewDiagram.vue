@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useConfigStore, windowHalf, windowHalfXY, SCREW_SPECS } from "../stores/config";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
+import AssemblyHardware from "./AssemblyHardware.vue";
 
 const { t } = useI18n();
 const store = useConfigStore();
@@ -41,7 +42,7 @@ const alignmentPosts = computed(() => {
   }));
 });
 
-// Keep the legacy project field while presenting the actual positioning-post OD.
+// Convert the engine parameter to the actual positioning-post OD.
 const cornerPostDiameter = computed({
   get: () => c.value.cornerScrewD + 4,
   set: (diameter: number) => { c.value.cornerScrewD = diameter - 4; },
@@ -200,6 +201,8 @@ const showAdvanced = ref(false);
         />
       </el-select>
     </div>
+
+    <AssemblyHardware />
 
     <!-- 高级参数(默认折叠) -->
     <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">

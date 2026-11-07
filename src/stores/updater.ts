@@ -40,7 +40,7 @@ export const useUpdaterStore = defineStore("updater", () => {
     }
   }
 
-  async function installUpdate() {
+  async function installUpdate(beforeInstall?: () => Promise<boolean>) {
     if (!update.value || busy.value || status.value === "ready") return;
     status.value = "downloading";
     error.value = "";
@@ -53,6 +53,12 @@ export const useUpdaterStore = defineStore("updater", () => {
         if (event.event === "Started") total.value = event.data.contentLength ?? 0;
         if (event.event === "Progress") downloaded.value += event.data.chunkLength;
       }, { timeout: 600000 });
+      // Check again at the installation boundary: the user may have edited
+      // during the download, and Windows exits directly into the installer.
+      if (beforeInstall && !await beforeInstall()) {
+        status.value = 'available';
+        return;
+      }
       status.value = "installing";
       await update.value.install();
       // Windows exits into the installer; macOS/Linux need an explicit restart.

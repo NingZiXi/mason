@@ -5,8 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useGerberOutline } from "../composables/useGerberOutline";
 import { useGerberStencil, type GerberStencilResult } from "../composables/useGerberStencil";
-import type { PanelMode, PanelVariant } from "../lib/gerber/panel";
+import { getPanelBoards, resolvePanelSelection, type PanelMode, type PanelVariant } from "../lib/gerber/panel";
 import { useConfigStore } from "../stores/config";
+import PanelBoardPicker from "./PanelBoardPicker.vue";
 
 const props = withDefaults(defineProps<{
   mode?: "jig" | "stencil";
@@ -21,7 +22,8 @@ export interface GerberImportPayload {
   isPanel: boolean;
   panelGrid?: { nx: number; ny: number };
   hasPads: boolean;
-  variants: { panel: PanelVariant; single: PanelVariant };
+  boardIndex?: number;
+  variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
 }
 
 const emit = defineEmits<{
@@ -33,7 +35,6 @@ const stencil = useGerberStencil();
 
 const loading = computed(() => (props.mode === "stencil" ? stencil.loading.value : outline.loading.value));
 const error = computed(() => (props.mode === "stencil" ? stencil.error.value : outline.error.value));
-const hasResult = computed(() => (props.mode === "stencil" ? stencil.hasResult.value : outline.hasResult.value));
 const candidates = computed(() => (props.mode === "stencil" ? [] : outline.candidates.value));
 
 // ===== 拼版口径选择 =====
@@ -41,8 +42,35 @@ const candidates = computed(() => (props.mode === "stencil" ? [] : outline.candi
 const payload = ref<GerberImportPayload | null>(null);
 /** 当前生效口径:以 store 为唯一来源,设置面板切换后这里同步跟随 */
 const activeMode = computed(() => configStore.config.panelMode);
+const activeBoardIndex = computed(() => configStore.selectedPanelBoard);
+const availableBoards = computed(() => showPanelDialog.value && payload.value
+  ? getPanelBoards(payload.value.variants) : configStore.panelBoards);
 /** 拼版文件导入时弹窗,让用户先选整版还是单板 */
 const showPanelDialog = ref(false);
+const dialogMode = ref<PanelMode>("panel");
+const dialogBoardIndex = ref(0);
+
+function openPanelDialog() {
+  if (!showPanelDialog.value && configStore.panelOverview && configStore.config.panelAvailable) {
+    payload.value = { filename: configStore.config.gerberFilename ?? '', isPanel: true,
+      hasPads: !!(configStore.panelOverview.topPads?.length || configStore.panelOverview.bottomPads?.length),
+      panelGrid: configStore.config.panelGrid ?? undefined,
+      variants: { panel: configStore.panelOverview, single: configStore.panelBoards[0] ?? configStore.panelOverview,
+        boards: configStore.panelBoards } };
+  }
+  dialogMode.value = activeMode.value;
+  dialogBoardIndex.value = activeBoardIndex.value;
+  showPanelDialog.value = true;
+}
+
+function selectDialogBoard(index: number) {
+  dialogBoardIndex.value = index;
+  dialogMode.value = "board";
+}
+
+function variantFor(p: GerberImportPayload, mode: PanelMode, boardIndex: number): PanelVariant {
+  return resolvePanelSelection(p.variants, mode, boardIndex).variant;
+}
 
 /** 统一显示用的结果 */
 interface DisplayResult {
@@ -56,13 +84,31 @@ interface DisplayResult {
   skipped?: number;
   isPanel?: boolean;
   panelGrid?: { nx: number; ny: number };
+  boardCount?: number;
+  boardIndex?: number;
   units?: string | null;
   arcs?: number;
 }
 const display = computed<DisplayResult | null>(() => {
+  // Reflect the active board and pad edits when switching panel scopes.
+  if (!showPanelDialog.value) {
+    const c = configStore.config;
+    if (!c.pcbOutlinePoints.length && !c.stencilPadsTop.length && !c.stencilPadsBottom.length) return null;
+    const sameImport = payload.value?.filename === c.gerberFilename;
+    return { width: c.pcbSizeX, height: c.pcbSizeY, filename: c.gerberFilename ?? '',
+      outlinePoints: c.pcbOutlinePoints, holes: c.pcbOutlineHoles,
+      topPadCount: c.stencilPadsTop.length, bottomPadCount: c.stencilPadsBottom.length,
+      skipped: sameImport ? stencil.result.value?.skipped : undefined,
+      units: sameImport ? outline.result.value?.bbox.units : 'mm',
+      arcs: sameImport ? outline.result.value?.parse.arcsLinearized : undefined,
+      isPanel: c.panelAvailable, panelGrid: c.panelGrid ?? undefined,
+      boardCount: configStore.panelBoards.length, boardIndex: c.panelMode === 'board' ? configStore.selectedPanelBoard : undefined };
+  }
   const p = payload.value;
   if (!p) return null;
-  const v = p.variants[activeMode.value];
+  const mode = showPanelDialog.value ? dialogMode.value : activeMode.value;
+  const boardIndex = showPanelDialog.value ? dialogBoardIndex.value : activeBoardIndex.value;
+  const v = variantFor(p, mode, boardIndex);
   const o = outline.result.value;
   const s = stencil.result.value;
   return {
@@ -76,6 +122,8 @@ const display = computed<DisplayResult | null>(() => {
     skipped: s?.skipped,
     isPanel: p.isPanel,
     panelGrid: p.panelGrid,
+    boardCount: availableBoards.value.length,
+    boardIndex: mode === "board" ? boardIndex : undefined,
     units: props.mode === "stencil" ? undefined : o?.bbox.units ?? null,
     arcs: o?.parse.arcsLinearized,
   };
@@ -96,6 +144,8 @@ function submit(p: GerberImportPayload) {
   payload.value = p;
   if (p.isPanel) {
     // 拼版文件:先弹窗让用户选口径(默认沿用上次选择)
+    dialogMode.value = activeMode.value;
+    dialogBoardIndex.value = activeBoardIndex.value;
     showPanelDialog.value = true;
     return;
   }
@@ -103,10 +153,13 @@ function submit(p: GerberImportPayload) {
 }
 
 /** 弹窗选择完成:按选中口径应用 */
-function confirmPanelMode(mode: PanelMode) {
+function confirmPanelMode(mode: PanelMode, boardIndex = dialogBoardIndex.value) {
   showPanelDialog.value = false;
   const p = payload.value;
-  if (p) emit("gerberLoaded", { ...p, mode });
+  if (p) {
+    const selection = resolvePanelSelection(p.variants, mode, boardIndex);
+    emit("gerberLoaded", { ...p, mode: selection.mode, boardIndex: selection.index ?? undefined });
+  }
 }
 
 /**
@@ -233,6 +286,8 @@ function clear() {
   else outline.reset();
   payload.value = null;
   configStore.clearPanelScope();
+  Object.assign(configStore.config, { gerberFilename: null, pcbOutlinePoints: [], pcbOutlineHoles: [],
+    stencilPadsTop: [], stencilPadsBottom: [] });
 }
 
 function fmt(n: number): string {
@@ -264,7 +319,7 @@ const outlinePath = computed(() => {
 
     <!-- Dropzone -->
     <div
-      v-if="!hasResult"
+      v-if="!display"
       class="dropzone"
       :class="{ active: loading || dragOver }"
       @click="pickFile"
@@ -320,7 +375,7 @@ const outlinePath = computed(() => {
           :x="display.width/2 + 2" y="3"
           font-size="3"
           fill="rgba(115,115,115,0.5)"
-          font-family="JetBrains Mono, monospace"
+          font-family="var(--font-family-mono)"
         >
           {{ fmt(display.width) }}×{{ fmt(display.height) }} mm
         </text>
@@ -345,8 +400,11 @@ const outlinePath = computed(() => {
         <div v-if="display.isPanel" class="info-row">
           <span class="info-label">{{ t('gerber.panelScope') }}</span>
           <span class="info-value" :title="t('gerber.panelScopeHint')">
-            {{ t(activeMode === 'single' ? 'gerber.scopeSingle' : 'gerber.scopePanel') }}
-            <button class="link-btn" @click="showPanelDialog = true">{{ t('gerber.panelChange') }}</button>
+            {{ t(activeMode === 'board' ? 'gerber.scopeBoard' : 'gerber.scopePanel') }}
+            <template v-if="activeMode === 'board' && display.boardCount">
+              · {{ (display.boardIndex ?? 0) + 1 }} / {{ display.boardCount }}
+            </template>
+            <button class="link-btn" @click="openPanelDialog">{{ t('gerber.panelChange') }}</button>
           </span>
         </div>
         <div v-if="props.mode === 'stencil'" class="info-row">
@@ -395,37 +453,53 @@ const outlinePath = computed(() => {
     <el-dialog
       v-model="showPanelDialog"
       :title="t('gerber.panelDialogTitle')"
-      width="420"
+      class="panel-import-dialog"
+      width="840"
       align-center
       append-to-body
       :close-on-click-modal="false"
     >
       <p class="dialog-desc">
-        {{ t('gerber.panelDialogDesc', {
+        {{ t(payload?.variants.boards?.some(board => board.inferred) ? 'gerber.panelDialogDescConnected'
+          : display?.boardCount && display.boardCount > 1 ? 'gerber.panelDialogDescMixed' : 'gerber.panelDialogDesc', {
           grid: display?.panelGrid
             ? t('gerber.panelGrid', display.panelGrid)
             : t('gerber.panelDetected'),
+          n: display?.boardCount ?? 0,
         }) }}
       </p>
       <div class="scope-options">
         <button
           class="scope-option"
-          :class="{ 'is-active': activeMode === 'panel' }"
-          @click="confirmPanelMode('panel')"
+          :class="{ 'is-active': dialogMode === 'panel' }"
+          :aria-pressed="dialogMode === 'panel'"
+          @click="dialogMode = 'panel'"
         >
           <span class="scope-name">{{ t('gerber.scopePanel') }}</span>
           <span class="scope-hint">{{ t('gerber.scopePanelHint') }}</span>
         </button>
         <button
           class="scope-option"
-          :class="{ 'is-active': activeMode === 'single' }"
-          @click="confirmPanelMode('single')"
+          :class="{ 'is-active': dialogMode === 'board' }"
+          :aria-pressed="dialogMode === 'board'"
+          @click="dialogMode = 'board'"
         >
-          <span class="scope-name">{{ t('gerber.scopeSingle') }}</span>
-          <span class="scope-hint">{{ t('gerber.scopeSingleHint') }}</span>
+          <span class="scope-name">{{ t('gerber.scopeBoard') }}</span>
+          <span class="scope-hint">{{ t('gerber.scopeBoardHint') }}</span>
         </button>
       </div>
-      <p class="dialog-foot">{{ t('gerber.panelDialogFoot') }}</p>
+      <PanelBoardPicker v-if="payload" expanded :model-value="dialogBoardIndex"
+        :whole-panel="dialogMode === 'panel'" :boards="availableBoards" :panel="payload.variants.panel"
+        @update:model-value="selectDialogBoard" />
+      <template #footer>
+        <div class="panel-dialog-footer">
+          <span class="dialog-foot">{{ t('gerber.panelSelectionFoot') }}</span>
+          <button class="scope-confirm" @click="confirmPanelMode(dialogMode, dialogBoardIndex)">
+            {{ t(dialogMode === 'panel' ? 'gerber.panelUseWhole' : 'gerber.panelUseChoice') }}
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 8h10m-4-4 4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+          </button>
+        </div>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -488,7 +562,7 @@ const outlinePath = computed(() => {
   margin: 0;
   font-size: 11px;
   color: var(--text-tertiary);
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-default);
 }
 
 .error-alert {
@@ -639,7 +713,7 @@ const outlinePath = computed(() => {
 
 /* 拼版口径选择弹窗 */
 .dialog-desc {
-  margin: 0 0 14px;
+  margin: 0 0 18px;
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -647,32 +721,36 @@ const outlinePath = computed(() => {
 
 .scope-options {
   display: flex;
-  flex-direction: column;
   gap: 8px;
+  margin-bottom: 20px;
 }
 
 .scope-option {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  border: 1.5px solid var(--border-neutral-l1);
-  border-radius: var(--radius-8);
-  background: var(--bg-base-default);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out);
 }
 
 .scope-option:hover {
   border-color: var(--bg-brand);
-  background: var(--bg-brand-popup);
+  background: color-mix(in srgb, var(--bg-brand) 5%, var(--surface-raised));
 }
 
 .scope-option.is-active {
   border-color: var(--bg-brand);
-  background: var(--bg-brand-popup);
+  background: color-mix(in srgb, var(--bg-brand) 8%, var(--surface-raised));
 }
+
+.scope-option:focus-visible, .scope-confirm:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 3px; }
 
 .scope-name {
   font-size: 13px;
@@ -686,9 +764,54 @@ const outlinePath = computed(() => {
   color: var(--text-tertiary);
 }
 
+.scope-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 11px 18px;
+  border: 1px solid var(--bg-brand);
+  border-radius: var(--radius-control);
+  background: var(--bg-brand);
+  color: var(--text-onbrand);
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
+}
+
+.scope-confirm:hover {
+  background: var(--bg-brand-hover);
+}
+.scope-confirm:active { transform: translateY(1px); }
+.panel-dialog-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
 .dialog-foot {
-  margin: 14px 0 0;
+  margin: 0;
   font-size: 11px;
   color: var(--text-tertiary);
+}
+</style>
+
+<style>
+.panel-import-dialog.el-dialog {
+  max-width: calc(100vw - 40px);
+  max-height: calc(100dvh - 40px);
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-dialog);
+  corner-shape: var(--corner-shape);
+  box-shadow: var(--shadow-float);
+}
+.panel-import-dialog .el-dialog__header { flex-shrink: 0; padding: 0 32px 12px 0; border-bottom: none; }
+.panel-import-dialog .el-dialog__title { font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
+.panel-import-dialog .el-dialog__body { overflow-y: auto; min-height: 0; padding: 0; }
+.panel-import-dialog .el-dialog__footer { flex-shrink: 0; padding: 18px 0 0; margin-top: 20px; border-top: 1px solid var(--surface-line); }
+@media (max-width: 660px) {
+  .panel-import-dialog.el-dialog { padding: 18px; max-width: calc(100vw - 24px); }
+  .panel-import-dialog .panel-dialog-footer { align-items: flex-start; }
 }
 </style>

@@ -12,13 +12,14 @@
  * 实机验证一致)由 Python 生成时处理 —— 顶层钢网翻面入槽做 Y 镜像,
  * 底层钢网板子正放用原坐标。
  */
-import { ref, computed } from "vue";
-import JSZip from "jszip";
+import { ref, computed, shallowRef } from "vue";
+import { GerberImportError, formatImportError } from '../lib/gerber/import-error';
 import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
 import { extractPads, type PadPolygon } from "../lib/gerber/pads";
 import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
 import { detectOutlineFiles } from "../lib/gerber/outline-detect";
 import { detectPasteFiles, pickPasteBySide } from "../lib/gerber/paste-detect";
+import { applyFlyingProbeRoles } from "../lib/gerber/flying-probe";
 
 export interface GerberStencilResult {
   /** 板框外框多边形(已居中) */
@@ -45,14 +46,15 @@ export interface GerberStencilResult {
   /** 拼版阵列(仅由 %SR 给出时存在) */
   panelGrid?: { nx: number; ny: number };
   /** 整版 / 单板两套口径(默认字段为整版) */
-  variants: { panel: PanelVariant; single: PanelVariant };
+  variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
   /** 因光圈缺失等被跳过的图形数(>0 表示文件存在兼容问题) */
   skipped: number;
 }
 
 export function useGerberStencil() {
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  const failure = shallowRef<unknown>(null);
+  const error = computed(() => formatImportError(failure.value));
   const result = ref<GerberStencilResult | null>(null);
 
   const hasResult = computed(() => result.value !== null);
@@ -60,7 +62,7 @@ export function useGerberStencil() {
 
   async function processFile(file: File): Promise<void> {
     loading.value = true;
-    error.value = null;
+    failure.value = null;
     result.value = null;
 
     try {
@@ -74,18 +76,17 @@ export function useGerberStencil() {
       ) {
         await processSingleGerber(file);
       } else {
-        throw new Error(
-          `不支持的文件类型: ${file.name}。请提供 .zip(含板框+锡膏层)或锡膏 Gerber (.gtp/.gbp/.gbr)`
-        );
+        throw new GerberImportError('gerber.unsupportedPaste', { name: file.name });
       }
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
+      failure.value = e;
     } finally {
       loading.value = false;
     }
   }
 
   async function processZip(file: File): Promise<void> {
+    const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(file);
     const filenames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
 
@@ -93,14 +94,12 @@ export function useGerberStencil() {
     const pasteCands = detectPasteFiles(filenames);
 
     if (pasteCands.length === 0) {
-      throw new Error(
-        "ZIP 中未找到锡膏层 Gerber (期望 .GTP/.GBP 或文件名含 paste)"
-      );
+      throw new GerberImportError('gerber.pasteNotFound');
     }
 
     const { top, bottom } = pickPasteBySide(pasteCands);
     if (!top && !bottom) {
-      throw new Error("未能识别任何锡膏层文件");
+      throw new GerberImportError('gerber.pasteNotFound');
     }
 
     // 板框可选;没有板框时用锡膏层 bbox 作为卡槽形状
@@ -111,6 +110,12 @@ export function useGerberStencil() {
     const outlineText = outlineFile
       ? await zip.files[outlineFile].async("string")
       : null;
+    const probeFile = filenames.find(name => /(^|[/\\])FlyingProbeTesting\.json$/i.test(name));
+    let probeData: unknown;
+    if (probeFile) {
+      try { probeData = JSON.parse(await zip.files[probeFile].async("string")); }
+      catch { console.warn("[gerber] ignored invalid FlyingProbeTesting.json"); }
+    }
 
     finalize(
       topText,
@@ -118,7 +123,8 @@ export function useGerberStencil() {
       outlineText,
       top?.filename ?? null,
       bottom?.filename ?? null,
-      outlineFile ?? "(锡膏层 bbox)"
+      outlineFile ?? "(paste layer bounds)",
+      probeData,
     );
   }
 
@@ -133,7 +139,7 @@ export function useGerberStencil() {
       null,
       isBottom ? null : file.name,
       isBottom ? file.name : null,
-      "(锡膏层 bbox)"
+      "(paste layer bounds)"
     );
   }
 
@@ -143,13 +149,15 @@ export function useGerberStencil() {
     outlineText: string | null,
     topPasteFile: string | null,
     bottomPasteFile: string | null,
-    outlineFile: string
+    outlineFile: string,
+    probeData?: unknown,
   ): void {
     const topResult = topText ? extractPads(topText) : null;
     const bottomResult = bottomText ? extractPads(bottomText) : null;
+    applyFlyingProbeRoles(topResult?.pads ?? [], bottomResult?.pads ?? [], probeData);
 
     if (!topResult?.pads.length && !bottomResult?.pads.length) {
-      throw new Error("锡膏层未解析到任何焊盘,请检查文件");
+      throw new GerberImportError('gerber.noPads');
     }
 
     // Both sides share one origin and board boundary, including fallback imports.
@@ -179,6 +187,12 @@ export function useGerberStencil() {
         singleOutline,
         topResult?.pads ?? [],
         bottomResult?.pads ?? []
+      ),
+      boards: outline.boards?.map((board, index) =>
+        makePanelVariant(board, topResult?.pads ?? [], bottomResult?.pads ?? [], {
+          id: `board-${index + 1}`,
+          label: `#${index + 1}`,
+        })
       ),
     };
     const applied = variants.panel;
@@ -235,7 +249,7 @@ export function useGerberStencil() {
 
   function reset(): void {
     loading.value = false;
-    error.value = null;
+    failure.value = null;
     result.value = null;
   }
 

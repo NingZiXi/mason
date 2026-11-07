@@ -368,6 +368,24 @@ def test_generate_part_smoke(part, tmp_path):
     assert out.stat().st_size > 0
 
 
+@pytest.mark.parametrize("clearance", [None, 0, 0.15, 0.225, 1.0])
+def test_post_layout_uses_the_actual_hole_clearance(clearance):
+    # A compact layout where the window constraint moves the posts, without
+    # hitting the outer-edge clamp. Missing settings use the current default;
+    # explicit legacy and zero clearances must remain unchanged.
+    params = dict(corner_screw_d=5, outer_corner_radius=0,
+                  platter_half_for_post=45, platter_corner_radius=4.5)
+    if clearance is not None:
+        params["post_clearance"] = clearance
+    radius = 4.5 + (0.225 if clearance is None else clearance)
+    assert jg.post_hole_radius(params) == pytest.approx(radius)
+    positions = jg.corner_screw_positions(shapely_box(-50, -50, 50, 50), 122, params)
+    assert len(positions) == 4
+    for x, y in positions:
+        assert abs(x) == pytest.approx(50 + radius)
+        assert abs(y) == pytest.approx(50 + radius)
+
+
 def test_post_clearance_geometry_change(tmp_path):
     """回归:post_clearance 越大,4 角定位孔越大 → STL 体积越小。
 
@@ -385,3 +403,182 @@ def test_post_clearance_geometry_change(tmp_path):
         sizes[tag] = os.path.getsize(out)
     # 间隙越大,cover 上的 4 角孔越大 → STL 越小(孔里 0.5mm 的差距放大到 ~4πmm³ 体积差)
     assert sizes["loose"] < sizes["tight"]
+
+# ---------------------------------------------------------------------------
+# 2D inspection must report the manufacturing pipeline, including polarity,
+# mirroring, shrink, filtering and grid splitting.
+# ---------------------------------------------------------------------------
+
+def _inspection_geom(polygons):
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    return unary_union([Polygon(item['outer'], item['holes']) for item in polygons])
+
+
+def test_inspection_reports_explicit_and_inferred_filtered_pads():
+    explicit = dict(_paste_pad(ShapelyPoint(-6, 2).buffer(.4, resolution=16), kind='circle'), padRole='testpoint')
+    inferred = _paste_pad(ShapelyPoint(6, 2).buffer(.4, resolution=16), kind='circle')
+    component = dict(_paste_pad(shapely_box(-.5, -.5, .5, .5), kind='rect'), padRole='component')
+    params = dict(BASE_PARAMS, stencil_pads_top=[explicit, inferred, component],
+                  pad_shrink=20, stencil_stagger=False, stencil_grid=False)
+    report = jg.inspect_stencil(params)
+    assert report['summary'] == dict(sourcePads=3, filteredPads=2, openings=1, invalidPads=0)
+    assert [(p['sourceIndex'], p['reason']) for p in report['filtered']] == [(0, 'explicit'), (1, 'inferred')]
+    assert report['filtered'][0]['width'] == pytest.approx(.8)
+    assert _inspection_geom(report['filtered'][0]['polygons']).centroid.y == pytest.approx(-2)
+    params['stencil_filter_test_points'] = False
+    restored = jg.inspect_stencil(params)
+    assert not restored['filtered']
+    assert restored['summary']['openings'] == 3
+    assert restored['original'] == report['original']
+
+
+def test_inspection_preserves_clear_polarity_and_interior_rings():
+    params = dict(BASE_PARAMS, stencil_pads_bottom=[
+        _paste_pad(shapely_box(-2, -2, 2, 2), kind='rect'),
+        _paste_pad(shapely_box(-.5, -.5, .5, .5), kind='rect', polarity='C')],
+        pad_shrink=0, stencil_stagger=False, stencil_grid=False)
+    report = jg.inspect_stencil(params, 'bottom')
+    assert report['summary']['sourcePads'] == 1
+    assert report['summary']['openings'] == 1
+    assert len(report['openings'][0]['holes']) == 1
+    assert _inspection_geom(report['original']).area == pytest.approx(15)
+    assert _inspection_geom(report['openings']).area == pytest.approx(15)
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_inspection_grid_shrink_matches_actual_steel_layer(side):
+    params = dict(BASE_PARAMS, pcb_size_x=12, pcb_size_y=12,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                  **{f'stencil_pads_{side}': [_paste_pad(shapely_box(-2, 0, 2, 4), kind='rect')]},
+                  pad_shrink=50, stencil_filter_test_points=False, stencil_stagger=False,
+                  stencil_grid=True, stencil_grid_size=1, stencil_grid_bar=.5,
+                  pry_notch_sides=[])
+    report = jg.inspect_stencil(params, side)
+    raw = _inspection_geom(report['original'])
+    apertures = _inspection_geom(report['openings'])
+    assert raw.area == pytest.approx(16)
+    assert apertures.area == pytest.approx(2.25)
+    assert report['summary']['openings'] == 4
+    assert raw.centroid.y == pytest.approx(-2 if side == 'top' else 2)
+    actual_steel = jg.build_stencil(params, side)._fast_stl[0][0][0]
+    frame = jg.compute_frame_poly(params)
+    if side == 'top':
+        frame = jg.shapely_scale_aff(frame, xfact=1, yfact=-1)
+    assert frame.difference(apertures).symmetric_difference(actual_steel).area < 1e-5
+
+
+def test_inspection_all_filtered_empty_side_and_invalid_geometry():
+    circle = dict(_paste_pad(ShapelyPoint(0, 0).buffer(.4, resolution=16), kind='circle'), padRole='testpoint')
+    params = dict(BASE_PARAMS, stencil_pads_top=[circle, {'parts': []}],
+                  stencil_stagger=False, stencil_grid=False)
+    report = jg.inspect_stencil(params)
+    assert report['summary'] == dict(sourcePads=1, filteredPads=1, openings=0, invalidPads=1)
+    assert report['openings'] == []
+    assert jg.inspect_stencil(params, 'bottom')['original'] == []
+    with pytest.raises(ValueError):
+        jg.inspect_stencil(params, 'unknown')
+
+
+def test_inspection_protocol_returns_data_without_building_solid(monkeypatch, capsys):
+    import io
+    import json
+    import sys
+    def forbidden(*args, **kwargs):
+        raise AssertionError('2D inspection must not build a CAD solid')
+    monkeypatch.setattr(jg, 'build_part', forbidden)
+    requests = [dict(id=1, cmd='inspect_stencil', part='stencil_top', params=BASE_PARAMS),
+                dict(id=2, cmd='inspect_stencil', part='base', params=BASE_PARAMS)]
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join(map(json.dumps, requests))))
+    jg.serve()
+    responses = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert responses[0]['id'] == 1 and responses[0]['ok']
+    assert responses[0]['inspection']['side'] == 'top'
+    assert responses[1]['id'] == 2 and not responses[1]['ok']
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_probe_test_pads_near_components_are_filtered_and_respect_diameter(side):
+    circle = ShapelyPoint(-2, 1).buffer(.9, resolution=16)
+    neighbour = shapely_box(-.9, .6, -.3, 1.4)  # only 0.2 mm from the test pad
+    probe = dict(_paste_pad(circle), padRole='testpoint', padRoleSource='flying-probe')
+    params = dict(BASE_PARAMS, pcb_size_x=12, pcb_size_y=12,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                  stencil_frame_width=4, stencil_thickness=.3, pad_shrink=0,
+                  stencil_stagger=False, stencil_grid=False, pry_notch_sides=[],
+                  **{f'stencil_pads_{side}': [probe, _paste_pad(neighbour, 'rect')]})
+    report = jg.inspect_stencil(params, side)
+    assert report['summary']['filteredPads'] == 1
+    assert report['filtered'][0]['reason'] == 'probe'
+    filtered_volume = jg.build_stencil(params, side).volume
+    # Keep the boundary value despite floating-point subtraction of bounds.
+    params['stencil_test_point_max_dia'] = 1.8
+    assert jg.inspect_stencil(params, side)['summary']['filteredPads'] == 1
+    params['stencil_test_point_max_dia'] = 1.5
+    assert jg.inspect_stencil(params, side)['summary']['filteredPads'] == 0
+    params['stencil_test_point_max_dia'] = 1.9
+    params['stencil_filter_test_points'] = False
+    assert jg.inspect_stencil(params, side)['summary']['filteredPads'] == 0
+    restored_volume = jg.build_stencil(params, side).volume
+    assert filtered_volume - restored_volume == pytest.approx(circle.simplify(.02).area * .25, abs=1e-5)
+    probe.pop('padRole'); probe.pop('padRoleSource')
+    params['stencil_filter_test_points'] = True
+    # No metadata: the close neighbour still protects an ambiguous round pad.
+    assert jg.inspect_stencil(params, side)['summary']['filteredPads'] == 0
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_manual_apertures_override_filtering_and_match_generated_steel(side):
+    testpad = dict(_paste_pad(ShapelyPoint(-3, 1).buffer(.9, resolution=16), 'circle'), padRole='testpoint')
+    normal = _paste_pad(shapely_box(1, 0, 3, 2), 'rect')
+    params = dict(BASE_PARAMS, pcb_size_x=12, pcb_size_y=12, pad_shrink=20,
+                  stencil_size=0, stencil_size_x=0, stencil_size_y=0, pry_notch_sides=[],
+                  stencil_stagger=False, stencil_grid=False,
+                  **{f'stencil_pads_{side}': [testpad, normal]})
+    automatic = jg.inspect_stencil(params, side)
+    assert automatic['summary']['filteredPads'] == 1
+    testpad['apertureOverride'] = 'open'
+    normal['apertureOverride'] = 'closed'
+    report = jg.inspect_stencil(params, side)
+    assert report['summary']['filteredPads'] == 0
+    assert [p['decision'] for p in report['pads']] == ['open', 'closed']
+    openings = _inspection_geom(report['openings'])
+    assert openings.area < ShapelyPoint(0, 0).buffer(.9).area  # shrink still applies
+    for enabled in (True, False):
+        params['stencil_filter_test_points'] = enabled
+        assert jg.inspect_stencil(params, side)['openings'] == report['openings']
+    steel = jg.build_stencil(params, side)._fast_stl[0][0][0]
+    frame = jg.compute_frame_poly(params)
+    if side == 'top':
+        frame = jg.shapely_scale_aff(frame, xfact=1, yfact=-1)
+    assert frame.difference(openings).symmetric_difference(steel).area < 1e-5
+    normal.pop('apertureOverride'); testpad.pop('apertureOverride')
+    params['stencil_filter_test_points'] = True
+    assert jg.inspect_stencil(params, side)['openings'] == automatic['openings']
+
+
+def test_manual_closure_seals_overlapping_openings_and_preserves_clear_and_holes():
+    closed = dict(_paste_pad(shapely_box(-1, -1, 1, 1), 'rect'), apertureOverride='closed')
+    neighbour = dict(_paste_pad(shapely_box(0, -1, 2, 1), 'rect'), apertureOverride='open')
+    clear = dict(_paste_pad(shapely_box(1.25, -.25, 1.75, .25), 'rect'), polarity='C', apertureOverride='open')
+    params = dict(BASE_PARAMS, pad_shrink=0, stencil_filter_test_points=False,
+                  stencil_stagger=False, stencil_grid=False, stencil_pads_bottom=[closed, neighbour, clear])
+    report = jg.inspect_stencil(params, 'bottom')
+    openings = _inspection_geom(report['openings'])
+    assert openings.area == pytest.approx(1.75)
+    assert not openings.intersects(ShapelyPoint(.5, 0))
+    assert not openings.intersects(ShapelyPoint(1.5, 0))
+    assert [p['sourceIndex'] for p in report['pads']] == [0, 1]
+    assert report['summary']['sourcePads'] == 2
+
+
+def test_manually_opened_pad_still_uses_shrink_and_grid_settings():
+    pad = dict(_paste_pad(shapely_box(-2, 0, 2, 4), 'rect'), padRole='testpoint', apertureOverride='open')
+    params = dict(BASE_PARAMS, stencil_pads_bottom=[pad], stencil_grid=True,
+                  stencil_grid_size=1, stencil_grid_bar=.5, pad_shrink=50, stencil_stagger=False)
+    report = jg.inspect_stencil(params, 'bottom')
+    assert report['summary']['openings'] == 4
+    assert _inspection_geom(report['openings']).area == pytest.approx(2.25)
+    pad['apertureOverride'] = 'closed'
+    assert not jg.inspect_stencil(params, 'bottom')['openings']
+    pad.pop('apertureOverride')
+    assert jg.inspect_stencil(params, 'bottom')['summary']['filteredPads'] == 1

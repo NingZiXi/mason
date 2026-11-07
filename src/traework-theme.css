@@ -4,7 +4,7 @@
  *
  * Brand: #3E7D62 (celadon green)
  * Surface: #FFFFFF / #F5F5F5
- * Typography: SF Pro Text / PingFang SC
+ * Typography: native UI fonts with locale-specific CJK fallbacks
  * Philosophy: Quiet surfaces, restrained borders, type-first hierarchy.
  */
 
@@ -12,9 +12,9 @@
   /* ===== TraeWork Canonical Tokens ===== */
 
   /* Font families */
-  --font-family-default: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-heading: "SF Pro", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-family-metric: "Inter", "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-family-default: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-family-heading: var(--font-family-default);
+  --font-family-metric: var(--font-family-default);
   --font-family-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   /* Body text styles */
@@ -259,7 +259,7 @@
   --el-border-radius-round: 999px;
 
   /* Font */
-  --el-font-family: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --el-font-family: var(--font-family-default);
   --el-font-size-base: 14px;
   --el-font-size-small: 12px;
   --el-font-size-extra-small: 11px;
@@ -270,6 +270,13 @@
   --el-disabled-bg-color: rgba(115, 115, 115, 0.08);
   --el-disabled-text-color: #A1A1A1;
   --el-disabled-border-color: rgba(115, 115, 115, 0.12);
+}
+
+html:lang(ja) {
+  --font-family-default: -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic UI", "Yu Gothic", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif;
+}
+html:lang(ko) {
+  --font-family-default: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
 }
 
 /* Older WebViews keep normal rounded corners without a script or polyfill. */
@@ -498,7 +505,7 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-/* Dialog:TraeWork 化(设置窗口/项目保存等) */
+/* Dialog:TraeWork 化(设置窗口/预设管理等) */
 .el-dialog {
   border-radius: var(--radius-dialog);
   corner-shape: var(--corner-shape);

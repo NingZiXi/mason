@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { nextTick } from "vue";
 import { DEFAULT, useConfigStore } from "../../stores/config";
 import { usePresetsStore } from "../../stores/presets";
+import { useWorkSessionStore } from "../../stores/work-session";
 import { DEFAULT_PRESET_ID, PRESETS_STORAGE_KEY, pickPresetSettings, readPresetSettings } from "../config-presets";
 import type { PanelVariant } from "../gerber/panel";
 
@@ -17,6 +18,52 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("persistent configuration presets", () => {
+  it("keeps the unexported-work reminder after saving edits as a preset", async () => {
+    const presets = usePresetsStore();
+    await presets.initialize();
+    const session = useWorkSessionStore();
+    await session.initialize();
+    useConfigStore().config.postClearance = 0.3;
+    expect(session.hasUnexportedChanges).toBe(true);
+    presets.saveAs("新预设");
+    expect(presets.dirty).toBe(false);
+    expect(session.hasUnexportedChanges).toBe(true);
+    session.markExported(session.captureExport());
+    expect(session.hasUnexportedChanges).toBe(false);
+  });
+
+  it("saves edits made under Default as a new preset without reapplying settings or changing the board", async () => {
+    const config = useConfigStore();
+    const store = usePresetsStore();
+    await store.initialize();
+    expect(store.selectedId).toBe(DEFAULT_PRESET_ID);
+    config.config.pcbSizeX = 65;
+    config.config.pcbThickness = 2;
+    config.config.screwSpec = "M4";
+    config.config.baseHeight = 6;
+    await nextTick();
+    config.config.postClearance = .3;
+    config.config.padShrink = 12;
+    await nextTick();
+    const before = JSON.parse(JSON.stringify(config.config));
+    const settings = pickPresetSettings(config.config);
+    store.saveAs("我的打印配置");
+    expect(store.selectedId).not.toBe(DEFAULT_PRESET_ID);
+    expect(store.selected?.name).toBe("我的打印配置");
+    expect(store.selected?.settings).toEqual(settings);
+    expect(store.dirty).toBe(false);
+    expect(config.config).toEqual(before);
+    expect(DEFAULT.postClearance).toBe(.225);
+    expect(DEFAULT.padShrink).toBe(0);
+
+    const id = store.selectedId;
+    setActivePinia(createPinia());
+    const reopened = usePresetsStore();
+    await reopened.initialize();
+    expect(reopened.selectedId).toBe(id);
+    expect(pickPresetSettings(useConfigStore().config)).toEqual(settings);
+  });
+
   it("restores the last saved preset on restart, retaining custom screw overrides", async () => {
     const config = useConfigStore();
     const store = usePresetsStore();
@@ -118,7 +165,7 @@ describe("persistent configuration presets", () => {
     const store = usePresetsStore();
     await store.initialize();
     store.saveAs("Printer");
-    for (const name of [" printer ", "", "   ", "默认配置", "Default", "x".repeat(41)]) {
+    for (const name of [" printer ", "", "   ", "默认配置", "Default", "デフォルト", "기본 설정", "x".repeat(41)]) {
       expect(() => store.saveAs(name)).toThrow("presets.invalidName");
     }
     await store.select(DEFAULT_PRESET_ID);
@@ -172,15 +219,4 @@ describe("persistent configuration presets", () => {
     expect(() => readPresetSettings({ pryNotchSides: ["up", "up"] }, DEFAULT)).toThrow();
   });
 
-  it("marks loaded project parameters as modified without overwriting the selected preset", async () => {
-    const config = useConfigStore();
-    const store = usePresetsStore();
-    await store.initialize();
-    store.saveAs("Printer");
-    const before = disk.get(PRESETS_STORAGE_KEY);
-    await config.restoreProject({ pad_shrink: 20, stencil_filter_test_points: true }, "project.zip");
-    expect(store.dirty).toBe(true);
-    expect(store.selected?.settings.padShrink).toBe(0);
-    expect(disk.get(PRESETS_STORAGE_KEY)).toBe(before);
-  });
 });

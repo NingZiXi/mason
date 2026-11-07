@@ -56,6 +56,8 @@ struct ServerResponse {
     /// stats 命令返回:实体表面积(mm²)
     #[serde(default)]
     area: Option<f64>,
+    #[serde(default)]
+    inspection: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +506,21 @@ pub async fn part_metrics(
         ))),
         Err(e) => Err(e),
     }
+}
+
+/// Reuse the engine's 2D aperture pipeline without constructing a CAD solid.
+pub async fn inspect_stencil(
+    app: &AppHandle,
+    configured_python: Option<&str>,
+    params: &ScadParams,
+    part: Part,
+    request_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let resp = request_model(app, configured_python, params, part, "inspect_stencil", None, None, request_id, 0, false).await?;
+    if !resp.ok {
+        return Err(AppError::RenderFailed(format!("开孔核对失败: {}", resp.error.unwrap_or_default())));
+    }
+    resp.inspection.ok_or_else(|| AppError::Other("响应缺少开孔核对数据".into()))
 }
 
 /// 渲染单个部件为 STL 字节(供前端预览)

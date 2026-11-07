@@ -2,8 +2,9 @@ import type { AppConfig } from "../stores/config";
 import type { PadPolygon } from "./gerber/pads";
 
 // Image polarity applies to the whole pad; part polarity and holes apply inside it.
-const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole }) => ({
-  type, polarity, parts, ...(padRole ? { padRole } : {}),
+const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride }) => ({
+  type, polarity, parts, ...(padRole ? { padRole } : {}), ...(padRoleSource ? { padRoleSource } : {}),
+  ...(apertureOverride ? { apertureOverride } : {}),
 }));
 
 // 计算当前参数的 hash(用于判断是否需要重新生成)
@@ -87,7 +88,7 @@ export function scadPartHash(params: ReturnType<typeof buildScadParams>, part: s
   const stencilShared = new Set(["pcb_size_x", "pcb_size_y", "pcb_thickness", "pcb_outline_points", "pcb_outline_holes",
     "outer_corner_radius", "pry_notch_sides", "pry_notch_scale", "pocket_clearance", "pad_shrink"]);
   const unusedJigInputs = new Set(part === "insert"
-    ? ["screw_spacing", "screw_spec", "peri_screw_d", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance", "post_clearance", "platter_height"]
+    ? ["screw_spacing", "screw_spec", "peri_screw_d", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance", "platter_height"]
     : ["insert_height", "platter_height", "pcb_thickness", "pcb_outline_holes", "eject_slot_width", "pry_notch_sides", "pry_notch_scale",
       ...(part === "cover" ? ["base_height", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance"] : ["top_cover_height"])]);
   return JSON.stringify(Object.fromEntries(Object.entries(params).filter(([key]) => {
@@ -95,7 +96,7 @@ export function scadPartHash(params: ReturnType<typeof buildScadParams>, part: s
       if (key === (part === "stencil_top" ? "stencil_pads_bottom" : "stencil_pads_top")) return false;
       return key.startsWith("stencil_") || stencilShared.has(key);
     }
-    return (!key.startsWith("stencil_") || ["stencil_size_x", "stencil_size_y", "stencil_corner_radius", "stencil_frame_width", "stencil_frame_shape"].includes(key))
+    return (!key.startsWith("stencil_") || ["stencil_size_x", "stencil_size_y", "stencil_lip", "stencil_corner_radius", "stencil_frame_width", "stencil_frame_shape"].includes(key))
       && key !== "pad_shrink" && !unusedJigInputs.has(key);
   })));
 }

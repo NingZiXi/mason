@@ -1,35 +1,43 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isTauri } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useI18n } from "vue-i18n";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import enLocale from "element-plus/es/locale/lang/en";
+import jaLocale from "element-plus/es/locale/lang/ja";
+import koLocale from "element-plus/es/locale/lang/ko";
 import { useConfigStore } from "./stores/config";
 import { useUiStore } from "./stores/ui";
 import ConfigForm from "./components/ConfigForm.vue";
-import ModelPreview from "./components/ModelPreview.vue";
 import GerberImport, { type GerberImportPayload } from "./components/GerberImport.vue";
 import ScrewDiagram from "./components/ScrewDiagram.vue";
 import StencilForm from "./components/StencilForm.vue";
 import PythonSetup from "./components/PythonSetup.vue";
-import ProjectMenu from "./components/ProjectMenu.vue";
 import HistoryControls from "./components/HistoryControls.vue";
 import SettingsMenu from "./components/SettingsMenu.vue";
 import ConfigPresets from "./components/ConfigPresets.vue";
 import MotionCollapse from "./components/MotionCollapse.vue";
 import { usePresetsStore } from "./stores/presets";
+import { useWorkSessionStore } from "./stores/work-session";
+import { useExitConfirmation } from "./composables/useExitConfirmation";
+import { ElMessage } from "element-plus";
 import type { PanelMode } from "./lib/gerber/panel";
 
 const OnboardingTour = defineAsyncComponent(() => import("./components/OnboardingTour.vue"));
+// Render the application shell without waiting for the 3D engine to evaluate.
+const ModelPreview = defineAsyncComponent(() => import("./components/ModelPreview.vue"));
 
 const configStore = useConfigStore();
-void usePresetsStore().initialize();
+const workSession = useWorkSessionStore();
+void workSession.initialize(usePresetsStore().initialize());
+const confirmExit = useExitConfirmation();
 const ui = useUiStore();
 const { t } = useI18n();
 
 // Element Plus 内置组件文案(弹窗按钮等)跟随语言切换
-const epLocale = computed(() => (ui.locale === "en" ? enLocale : zhCn));
+const epLocale = computed(() => ({ zh: zhCn, en: enLocale, ja: jaLocale, ko: koLocale })[ui.resolvedLocale]);
 const appMode = computed(() => configStore.config.appMode);
 // Gerber 导入完成态:治具模式看板框轮廓,钢网模式看焊盘(用于步骤圆点 1 → ✓)
 const gerberDone = computed(() =>
@@ -56,6 +64,9 @@ const appWindow = (() => {
 })();
 const isMaximized = ref(false);
 let unlistenMaximize: UnlistenFn | null = null;
+let unlistenClose: UnlistenFn | null = null;
+let closing = false;
+let allowClose = false;
 
 async function initWindowState() {
   isMaximized.value = await appWindow.isMaximized();
@@ -63,6 +74,23 @@ async function initWindowState() {
   unlistenMaximize = (await appWindow.onResized(async () => {
     isMaximized.value = await appWindow.isMaximized();
   })) as unknown as UnlistenFn;
+  if (isTauri()) {
+    unlistenClose = await appWindow.onCloseRequested(async event => {
+      if (allowClose) return;
+      event.preventDefault();
+      if (closing) return;
+      closing = true;
+      try {
+        if (await confirmExit()) {
+          allowClose = true;
+          await appWindow.close();
+        }
+      } catch {
+        allowClose = false;
+        ElMessage.error(t('exit.failed'));
+      } finally { closing = false; }
+    });
+  }
 }
 
 // 双击页眉空白 → 最大化/还原(Windows 标题栏惯例);交互控件上双击不触发
@@ -75,6 +103,7 @@ function onHeaderDblClick(e: MouseEvent) {
 onMounted(initWindowState);
 onBeforeUnmount(() => {
   unlistenMaximize?.();
+  unlistenClose?.();
 });
 
 // 侧栏宽度
@@ -365,6 +394,10 @@ async function onGerberLoaded(
   payload: GerberImportPayload & { mode: PanelMode }
 ) {
   configStore.applyGerberImport(payload);
+  await revealStencilSizeForReview();
+}
+
+async function revealStencilSizeForReview() {
   const sequence = ++importGuideSequence;
   if (appMode.value !== "jig") return;
   sidebarAnimating.value = true;
@@ -380,7 +413,7 @@ async function onGerberLoaded(
     .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
     .map((animation) => animation.finished));
   if (sequence !== importGuideSequence || appMode.value !== "jig" || sidebarHidden.value || collapsed.value.config) return;
-  await configFormRef.value?.revealStencilSize();
+  await configFormRef.value?.revealStencilSize(true);
 }
 
 onMounted(() => {
@@ -468,7 +501,6 @@ onBeforeUnmount(() => {
       </div>
       <div class="spacer" data-tauri-drag-region />
       <HistoryControls />
-      <ProjectMenu />
       <SettingsMenu @start-tour="startTour" />
 
       <!-- 窗口控制(与页眉融合,替代系统标题栏) -->
@@ -541,7 +573,7 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="drag-handle"
-            title="拖动调整高度,双击恢复自适应"
+            :title="t('layout.resizeHeight')"
             @mousedown="onHeightDown('python', $event)"
             @dblclick="onHandleDblClick('python')"
           />
@@ -565,7 +597,7 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="drag-handle"
-            title="拖动调整高度,双击恢复自适应"
+            :title="t('layout.resizeHeight')"
             @mousedown="onHeightDown('gerber', $event)"
             @dblclick="onHandleDblClick('gerber')"
           />
@@ -592,7 +624,7 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="drag-handle"
-            title="拖动调整高度,双击恢复自适应"
+            :title="t('layout.resizeHeight')"
             @mousedown="onHeightDown('config', $event)"
             @dblclick="onHandleDblClick('config')"
           />
@@ -616,7 +648,7 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="drag-handle"
-            title="拖动调整高度,双击恢复自适应"
+            :title="t('layout.resizeHeight')"
             @mousedown="onHeightDown('screw', $event)"
             @dblclick="onHandleDblClick('screw')"
           />
@@ -642,7 +674,7 @@ onBeforeUnmount(() => {
           </div>
           <div
             class="drag-handle"
-            title="拖动调整高度,双击恢复自适应"
+            :title="t('layout.resizeHeight')"
             @mousedown="onHeightDown('stencil', $event)"
             @dblclick="onHandleDblClick('stencil')"
           />
@@ -655,7 +687,7 @@ onBeforeUnmount(() => {
         class="sidebar-resizer"
         @mousedown="onWidthDown"
         @dblclick="resetSidebarWidth"
-        title="拖动调整侧栏宽度,双击重置"
+        :title="t('layout.resizeSidebar')"
       />
       </div>
 
@@ -669,7 +701,7 @@ onBeforeUnmount(() => {
       </button>
 
       <section class="app-preview">
-        <ModelPreview :class="{ 'is-layout-animating': sidebarAnimating }" />
+        <ModelPreview :class="{ 'is-layout-animating': sidebarAnimating }" @review-stencil-size="revealStencilSizeForReview" />
       </section>
     </main>
     <OnboardingTour v-if="tourOpen" :mode="appMode" @close="finishTour" />
@@ -687,11 +719,6 @@ onBeforeUnmount(() => {
 }
 
 /* ===== Header ===== */
-/* Keep the mode switch and history actions clear at smaller window widths. */
-@media (max-width: 1400px) {
-  .app-header :deep(.project-menu__filename) { display: none; }
-}
-
 .app-header {
   flex: 0 0 auto;
   height: 56px;
@@ -924,10 +951,10 @@ onBeforeUnmount(() => {
   border-right: 1px solid var(--surface-line);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 14px 12px;
+  padding: 16px 14px 24px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   height: 100%;
   scrollbar-gutter: stable;
 }
@@ -962,7 +989,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 12px;
+  padding: 0 16px;
   height: 44px;
   background: var(--surface-card-heading);
   border-bottom: 1px solid transparent;
@@ -983,7 +1010,7 @@ onBeforeUnmount(() => {
 .slot-label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .slot-step-dot {

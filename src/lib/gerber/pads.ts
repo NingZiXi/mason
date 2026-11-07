@@ -39,6 +39,10 @@ export interface PadPolygon {
   polarity: "D" | "C";
   /** Gerber X2 attributes can explicitly distinguish test pads and component pins. */
   padRole?: "testpoint" | "component";
+  /** Supplementary single-pin test-pad evidence from the manufacturing netlist. */
+  padRoleSource?: "flying-probe";
+  /** User decision takes precedence over automatic test-point filtering. */
+  apertureOverride?: "open" | "closed";
   /** 部件列表(宏光圈可产生多个,含极性与内孔) */
   parts: PadPart[];
 }

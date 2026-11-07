@@ -1,7 +1,7 @@
 import type { AppConfig } from "../stores/config";
 
 // Only reusable manufacturing settings. Board geometry, dimensions, file identity,
-// panel scope and derived values belong to projects, never to user presets.
+// panel scope and derived values belong to the current board, never to presets.
 export const PRESET_KEYS = [
   "stencilThickness", "padShrink", "stencilFrameWidth", "stencilCornerRadius",
   "stencilFrameShape", "pocketClearance", "stencilTaper", "stencilStagger",
@@ -61,7 +61,7 @@ export function readPresetSettings(raw: unknown, defaults: AppConfig): PresetSet
 
 export function presetName(raw: string, presets: UserPreset[], exceptId?: string): string {
   const name = raw.trim();
-  if (!name || name.length > 40 || ["default", "默认配置"].includes(name.toLowerCase()) ||
+  if (!name || name.length > 40 || ["default", "默认配置", "デフォルト", "기본 설정"].includes(name.toLowerCase()) ||
       presets.some((p) => p.id !== exceptId && p.name.toLowerCase() === name.toLowerCase())) {
     throw new Error("presets.invalidName");
   }

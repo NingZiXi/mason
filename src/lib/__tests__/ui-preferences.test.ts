@@ -36,6 +36,25 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("application preferences", () => {
+  it("remembers the inspection guide separately from the application guide", () => {
+    const ui = useUiStore();
+    ui.dismissOnboarding();
+    expect(ui.inspectionOnboardingSeen).toBe(false);
+    ui.dismissInspectionOnboarding();
+    setActivePinia(createPinia());
+    const restored = useUiStore();
+    expect(restored.inspectionOnboardingSeen).toBe(true);
+    expect(restored.onboardingSeen).toBe(true);
+  });
+
+  it("does not dismiss the application guide when closing the inspection guide", () => {
+    const ui = useUiStore();
+    ui.dismissInspectionOnboarding();
+    setActivePinia(createPinia());
+    expect(useUiStore().onboardingSeen).toBe(false);
+    expect(useUiStore().inspectionOnboardingSeen).toBe(true);
+  });
+
   it("offers the tour once and remembers completion or skipping across restarts", () => {
     const ui = useUiStore();
     expect(ui.onboardingSeen).toBe(false);
@@ -52,12 +71,14 @@ describe("application preferences", () => {
     const ui = useUiStore();
     expect(() => ui.dismissOnboarding()).not.toThrow();
     expect(ui.onboardingSeen).toBe(true);
+    expect(() => ui.dismissInspectionOnboarding()).not.toThrow();
+    expect(ui.inspectionOnboardingSeen).toBe(true);
   });
 
   it("preserves existing defaults for users without saved settings", () => {
     const ui = useUiStore();
     expect(ui.theme).toBe("light");
-    expect(ui.locale).toBe("zh");
+    expect(ui.locale).toBe("system");
     expect(ui.checkUpdatesOnStartup).toBe(true);
     expect(ui.defaultExportFormat).toBe("stl");
   });
@@ -88,7 +109,7 @@ describe("application preferences", () => {
     disk.set("psj_default_export_format", "obj");
     const ui = useUiStore();
     expect(ui.theme).toBe("light");
-    expect(ui.locale).toBe("zh");
+    expect(ui.locale).toBe("system");
     expect(ui.checkUpdatesOnStartup).toBe(true);
     expect(ui.defaultExportFormat).toBe("stl");
   });

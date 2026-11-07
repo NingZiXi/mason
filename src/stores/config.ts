@@ -8,10 +8,11 @@ import { defineStore } from "pinia";
 import { computed, nextTick, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { PadPolygon } from "../lib/gerber/pads";
-import type { PanelMode, PanelVariant } from "../lib/gerber/panel";
-import { deserializeProjectConfig, serializeProjectConfig, type GerberVariants } from "../lib/project";
+import type { GerberVariants, PanelMode, PanelVariant } from "../lib/gerber/panel";
+import { getPanelBoards, resolvePanelSelection } from "../lib/gerber/panel";
 import { readPresetSettings } from "../lib/config-presets";
 import { useParameterHistory } from "../composables/useParameterHistory";
+import { setPadOverrides, type ApertureOverride, type PadSide } from "../lib/pad-overrides";
 
 export type AppMode = "jig" | "stencil";
 
@@ -81,10 +82,10 @@ export interface AppConfig {
   pcbPocketClearance: number;
   /** PCB 插板总厚(默认 8mm,参考设计) */
   insertHeight: number;
-  /** 凸台高度(其余为底板) —— 由 baseHeight 自动同步,字段保留作项目兼容 */
+  /** 凸台高度(其余为底板) —— 由 baseHeight 自动同步,与后端建模参数保持同步 */
   platterHeight: number;
   /** 凸台台阶宽(槽到凸台外缘) —— 派生值(两轴取小),由 stencilLip 决定,
-   * 字段保留仅用于项目文件兼容 */
+   * 作为后端建模使用的派生值 */
   platterMargin: number;
   /** 矩形板凸台圆角半径 */
   platterCornerRadius: number;
@@ -105,7 +106,7 @@ export interface AppConfig {
   pryNotchScale: number;
   /** Legacy field: four alignment-post outer diameter is cornerScrewD + 4mm. */
   cornerScrewD: number;
-  /** 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.4)
+  /** 4 角定位柱与 A/B 面孔之间的径向间隙(mm,默认 0.225)
    *  FDM 打印需要较大间隙吸收打印误差;光固化/CNC 可减小到 0.1~0.2mm */
   postClearance: number;
   /** 周圈螺丝直径(M3.5) */
@@ -138,6 +139,8 @@ export interface AppConfig {
   panelAvailable: boolean;
   /** 拼版阵列(仅由 %SR 声明时存在,展示用) */
   panelGrid: { nx: number; ny: number } | null;
+  /** 混合拼版当前选中的子板索引(从 0 开始) */
+  panelBoardIndex: number | null;
 }
 
 export const DEFAULT: AppConfig = {
@@ -183,7 +186,7 @@ export const DEFAULT: AppConfig = {
   pryNotchSides: ['down'],
   pryNotchScale: 1.0,
   cornerScrewD: 5,
-  postClearance: 0.15,
+  postClearance: 0.225,
   periScrewD: 3.2,
   outerCornerRadius: 5,
   useHexNut: true,
@@ -198,6 +201,7 @@ export const DEFAULT: AppConfig = {
   panelMode: "panel",
   panelAvailable: false,
   panelGrid: null,
+  panelBoardIndex: null,
 };
 
 /**
@@ -314,7 +318,7 @@ export function windowHalf(c: AppConfig): number {
 }
 
 /**
- * 派生 platterMargin(项目文件兼容字段):等于有效台阶宽
+ * 派生 platterMargin(建模派生字段):等于有效台阶宽
  *   = 两轴凸台半宽 - 对应槽半宽 的较小值
  * 与 Python plater_radius 的 margin_eff 同源
  * @deprecated platterMargin 已是派生展示字段,由 watch 自动写入;不再建议组件直接读
@@ -381,7 +385,7 @@ function computeJigSize(c: AppConfig): number {
   const stencilFloor = stencilClampFloor(c);
   // 约束 C:4 角定位柱不撞凸台/窗口
   const rPost = (c.cornerScrewD ?? 5) / 2 + 2;
-  const rHole = (c.cornerScrewD ?? 5) / 2 + 2.2;
+  const rHole = rPost + (c.postClearance ?? DEFAULT.postClearance);
   const rOut = c.outerCornerRadius ?? 5;
   const rCorner = c.platterCornerRadius ?? 4.5;
   // 凸台半宽直接用 platterHalfFor:逐轴 = max(stencilHalf - lip, slotHalf),取两轴较大值
@@ -399,8 +403,23 @@ function computeJigSize(c: AppConfig): number {
 
 export const useConfigStore = defineStore("config", () => {
   const config = ref<AppConfig>(JSON.parse(JSON.stringify(DEFAULT)));
-  let restoringProject = false;
+  let restoringParameters = false;
   const historyEpoch = ref(0);
+  // Session-only review, shared by the sidebar and every export format.
+  // Never reuse an acknowledgement from a different board.
+  const stencilSizeReviewed = ref(false);
+  const stencilSizeReviewRevision = ref(0);
+  function invalidateStencilSizeReview() {
+    stencilSizeReviewed.value = false;
+    stencilSizeReviewRevision.value++;
+  }
+  function confirmStencilSizeReview(revision = stencilSizeReviewRevision.value) {
+    if (revision !== stencilSizeReviewRevision.value) return false;
+    stencilSizeReviewed.value = true;
+    return true;
+  }
+  watch(() => [config.value.gerberFilename, config.value.pcbOutlinePoints,
+    config.value.stencilSizeX, config.value.stencilSizeY], invalidateStencilSizeReview, { flush: 'sync' });
 
   // 派生:周圈螺丝位置(与 Python compute_perimeter_screw_positions 同算法)
   // 孔带靠外:螺丝圆心距外缘 10mm,窗口→螺丝的内侧带完整留给钢网夹紧;
@@ -443,7 +462,7 @@ export const useConfigStore = defineStore("config", () => {
   //   - 钢网任一轴 < 该轴板边 + 0.1 时,自动推荐 = 该轴板边 + 20(10mm 步进)
   //     —— 避免空值/默认值 0 让后续推导失真
   //   - stencilLip:钳到 [0, stencilLipMax](唇宽四边一致,上限取更紧的一轴)
-  //   - platterMargin:派生写入 = effectivePlatterMargin(项目兼容字段)
+  //   - platterMargin:派生写入 = effectivePlatterMargin(建模派生字段)
   //   - jigSize:按 5mm 步进取整(窗口 + 螺丝带 + 外缘)
   // 触发依赖:pcb/stencil/lip/windowGap 任一变化都重算(下界同步联动)
   watch(
@@ -457,11 +476,12 @@ export const useConfigStore = defineStore("config", () => {
       // 周圈螺丝与角定位柱尺寸影响夹紧下限/角柱约束,变化时重算 jigSize
       config.value.periScrewD,
       config.value.cornerScrewD,
+      config.value.postClearance,
       config.value.outerCornerRadius,
       config.value.platterCornerRadius,
     ],
     () => {
-      if (restoringProject) return;
+      if (restoringParameters) return;
       const c = config.value;
       if (c.stencilSizeX < c.pcbSizeX + 0.1) {
         c.stencilSizeX = Math.ceil((c.pcbSizeX + 20) / 10) * 10;
@@ -471,7 +491,7 @@ export const useConfigStore = defineStore("config", () => {
       }
       // 唇宽四边一致:上限由更紧的一轴决定(凸台每轴都不能小于 PCB 槽)
       c.stencilLip = Math.max(0, Math.min(stencilLipMax(c), c.stencilLip ?? 0));
-      // platterMargin 派生写入(项目文件兼容)
+      // platterMargin 派生写入(建模派生值)
       c.platterMargin = effectivePlatterMargin(c);
       c.jigSize = computeJigSize(c);
     },
@@ -489,7 +509,7 @@ export const useConfigStore = defineStore("config", () => {
       config.value.windowGap,
     ],
     () => {
-      if (restoringProject) return;
+      if (restoringParameters) return;
       config.value.jigSize = computeJigSize(config.value);
     }
   );
@@ -499,7 +519,7 @@ export const useConfigStore = defineStore("config", () => {
   watch(
     () => config.value.baseHeight,
     (h) => {
-      if (restoringProject) return;
+      if (restoringParameters) return;
       config.value.platterHeight = h;
     },
     { immediate: true }
@@ -510,7 +530,7 @@ export const useConfigStore = defineStore("config", () => {
   watch(
     () => config.value.screwSpec,
     (spec) => {
-      if (restoringProject) return;
+      if (restoringParameters) return;
       const s = SCREW_SPECS[spec as ScrewSpec];
       if (!s) return;
       config.value.periScrewD = s.holeD;
@@ -618,34 +638,19 @@ export const useConfigStore = defineStore("config", () => {
 
   // Actions
 
-  /** 导入文件的整版 / 单板两套口径,随项目一起保存。 */
+  /** 当前导入文件的整版与子板几何，用于切换预览和同步开孔选择。 */
   const gerberVariants = ref<GerberVariants | null>(null);
-
-  function projectConfig() {
-    return serializeProjectConfig(config.value, gerberVariants.value);
-  }
-
-  async function restoreProject(raw: unknown, filename: string | null) {
-    const restored = deserializeProjectConfig(raw, DEFAULT);
-    restored.config.gerberFilename = filename;
-    restoringProject = true;
-    try {
-      Object.assign(config.value, restored.config);
-      gerberVariants.value = restored.panelVariants;
-      // Flush queued watchers while restoration is active, preserving custom dimensions.
-      await nextTick();
-    } finally {
-      restoringProject = false;
-      history.clear();
-    }
-  }
+  const panelBoards = computed(() => config.value.panelAvailable && gerberVariants.value ? getPanelBoards(gerberVariants.value) : []);
+  const panelOverview = computed(() => gerberVariants.value?.panel);
+  const selectedPanelBoard = computed(() => gerberVariants.value
+    ? resolvePanelSelection(gerberVariants.value, config.value.panelMode, config.value.panelBoardIndex).index ?? 0 : 0);
 
   /** Apply manufacturing settings without replacing the imported board or letting
    * screwSpec's queued watcher overwrite saved custom hole/nut dimensions. */
   async function applyUserSettings(raw: unknown) {
     const settings = readPresetSettings(raw, DEFAULT);
     history.breakGroup();
-    restoringProject = true;
+    restoringParameters = true;
     try {
       Object.assign(config.value, settings);
       const c = config.value;
@@ -655,7 +660,7 @@ export const useConfigStore = defineStore("config", () => {
       c.jigSize = computeJigSize(c);
       await nextTick();
     } finally {
-      restoringProject = false;
+      restoringParameters = false;
     }
   }
 
@@ -663,8 +668,9 @@ export const useConfigStore = defineStore("config", () => {
   function applyVariant(mode: PanelMode) {
     const cached = gerberVariants.value;
     if (!cached) return;
-    const v = cached[mode];
     const c = config.value;
+    const selection = resolvePanelSelection(cached, mode, c.panelBoardIndex);
+    const v = selection.variant;
 
     c.pcbSizeX = Math.round(v.width * 100) / 100;
     c.pcbSizeY = Math.round(v.height * 100) / 100;
@@ -685,7 +691,8 @@ export const useConfigStore = defineStore("config", () => {
     }
     c.stencilLip = Math.round(0.6 * stencilLipMax(c) * 10) / 10;
 
-    c.panelMode = mode;
+    c.panelMode = selection.mode;
+    c.panelBoardIndex = selection.index;
   }
 
   /** 导入 Gerber:写入两套口径并按 mode 应用(hasPads = 是否带锡膏层结果) */
@@ -695,18 +702,22 @@ export const useConfigStore = defineStore("config", () => {
     panelGrid?: { nx: number; ny: number };
     hasPads: boolean;
     mode: PanelMode;
-    variants: { panel: PanelVariant; single: PanelVariant };
+    boardIndex?: number;
+    variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
   }) {
+    invalidateStencilSizeReview();
     historyEpoch.value++;
     gerberVariants.value = {
       panel: payload.variants.panel,
       single: payload.variants.single,
+      boards: payload.variants.boards,
       hasPads: payload.hasPads,
     };
     const c = config.value;
     c.gerberFilename = payload.filename;
     c.panelAvailable = payload.isPanel;
     c.panelGrid = payload.panelGrid ?? null;
+    c.panelBoardIndex = payload.boardIndex ?? null;
     applyVariant(payload.mode);
   }
 
@@ -716,13 +727,43 @@ export const useConfigStore = defineStore("config", () => {
     applyVariant(mode);
   }
 
-  /** 丢弃拼版状态:切换工程 / 清除导入后不再持有该文件的两种口径 */
+  /** 选择混合拼版中的具体子板。 */
+  function setPanelBoard(index: number) {
+    if (!Number.isInteger(index) || !config.value.panelAvailable || !gerberVariants.value) return;
+    config.value.panelBoardIndex = Math.max(0, Math.min(index, panelBoards.value.length - 1));
+    applyVariant("board");
+  }
+
+  function changePadOverrides(side: PadSide, indices: readonly number[], value?: ApertureOverride) {
+    const pads = side === 'top' ? config.value.stencilPadsTop : config.value.stencilPadsBottom;
+    const variants = gerberVariants.value;
+    const active = variants ? resolvePanelSelection(variants, config.value.panelMode, config.value.panelBoardIndex).variant : null;
+    setPadOverrides(pads, indices, value, side, variants, active);
+  }
+
+  function setApertureOverride(side: PadSide, index: number, value?: ApertureOverride) {
+    setApertureOverrides(side, [index], value);
+  }
+
+  function setApertureOverrides(side: PadSide, indices: readonly number[], value?: ApertureOverride) {
+    history.breakGroup();
+    changePadOverrides(side, indices, value);
+  }
+
+  function resetApertureOverrides(side: PadSide) {
+    history.breakGroup();
+    const pads = side === 'top' ? config.value.stencilPadsTop : config.value.stencilPadsBottom;
+    changePadOverrides(side, pads.flatMap((pad, index) => pad.apertureOverride ? [index] : []));
+  }
+
+  /** 丢弃拼版状态:替换 / 清除导入后不再持有该文件的两种口径 */
   function clearPanelScope() {
     historyEpoch.value++;
     gerberVariants.value = null;
     config.value.panelAvailable = false;
     config.value.panelGrid = null;
     config.value.panelMode = "panel";
+    config.value.panelBoardIndex = null;
   }
 
   function setMode(mode: AppMode) {
@@ -813,22 +854,34 @@ export const useConfigStore = defineStore("config", () => {
     config: () => config.value,
     context: () => {
       const c = config.value;
-      return [historyEpoch.value, c.appMode, c.panelMode, c.gerberFilename, c.pcbOutlinePoints,
+      return [historyEpoch.value, c.appMode, c.panelMode, c.panelBoardIndex, c.gerberFilename, c.pcbOutlinePoints,
         c.pcbOutlineHoles, c.stencilPadsTop, c.stencilPadsBottom, c.panelAvailable];
     },
     restore: async (snapshot) => {
       // Replay all linked values together; screwSpec must not overwrite custom
       // hole/nut sizes, and size watchers must not shrink a manually sized jig.
-      restoringProject = true;
+      restoringParameters = true;
       try {
-        Object.assign(config.value, snapshot);
+        const { apertures, ...parameters } = snapshot;
+        Object.assign(config.value, parameters);
+        for (const side of ['top', 'bottom'] as const) {
+          const overrides = new Map(apertures[side]);
+          const pads = side === 'top' ? config.value.stencilPadsTop : config.value.stencilPadsBottom;
+          for (const value of [undefined, 'open', 'closed'] as const) {
+            const indices = pads.flatMap((pad, index) => pad.apertureOverride !== overrides.get(index) && overrides.get(index) === value ? [index] : []);
+            changePadOverrides(side, indices, value);
+          }
+        }
         await nextTick();
-      } finally { restoringProject = false; }
+      } finally { restoringParameters = false; }
     },
   });
 
   return {
     config,
+    stencilSizeReviewed,
+    stencilSizeReviewRevision,
+    confirmStencilSizeReview,
     screwPositions,
     warnings,
     pythonPath,
@@ -839,9 +892,14 @@ export const useConfigStore = defineStore("config", () => {
     bundledEngine,
     applyGerberImport,
     setPanelMode,
+    setPanelBoard,
+    setApertureOverride,
+    setApertureOverrides,
+    resetApertureOverrides,
+    panelBoards,
+    panelOverview,
+    selectedPanelBoard,
     clearPanelScope,
-    projectConfig,
-    restoreProject,
     applyUserSettings,
     setMode,
     applyPreset,

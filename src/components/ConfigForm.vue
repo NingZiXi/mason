@@ -5,12 +5,13 @@ import { useConfigStore, windowHalf, platterHalfXY, windowHalfXY, stencilLipMax,
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
+import ClampPlanPreview from "./ClampPlanPreview.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
 const c = computed(() => store.config);
 const warnings = computed(() => store.warnings);
-const stencilSizeReviewed = ref(false);
+const stencilSizeReviewed = computed(() => store.stencilSizeReviewed);
 const showStencilSizeGuide = computed(() => !!c.value.gerberFilename && !stencilSizeReviewed.value);
 const stencilSizeSection = ref<HTMLElement | null>(null);
 const stencilSizeGuide = ref<HTMLElement | null>(null);
@@ -25,12 +26,12 @@ function cancelStencilReveal() {
   guideAnimation = undefined;
 }
 
-async function revealStencilSize() {
+async function revealStencilSize(force = false) {
   cancelStencilReveal();
   const sequence = guideSequence;
   const section = stencilSizeSection.value;
   const sidebar = section?.closest<HTMLElement>(".app-sidebar");
-  if (!section || !sidebar || !showStencilSizeGuide.value) return;
+  if (!section || !sidebar || (!force && !showStencilSizeGuide.value)) return;
   // Scroll only the parameter sidebar, leaving the 3D view and keyboard focus alone.
   const top = Math.max(0, Math.min(sidebar.scrollHeight - sidebar.clientHeight,
     sidebar.scrollTop + section.getBoundingClientRect().top - sidebar.getBoundingClientRect().top - 16));
@@ -66,16 +67,15 @@ async function revealStencilSize() {
 
 defineExpose({ revealStencilSize });
 onBeforeUnmount(cancelStencilReveal);
-// A new board (including a same-name reimport) or new dimensions need a fresh review.
+// Stop an old guide animation when its target changes. Review state lives in the store.
 watch(() => [c.value.gerberFilename, c.value.pcbOutlinePoints, c.value.stencilSizeX, c.value.stencilSizeY], () => {
   cancelStencilReveal();
-  stencilSizeReviewed.value = false;
 });
 const windowSize = computed(() => (windowHalf(store.config) * 2).toFixed(1));
 
 // 组件 setup 之前先钳制异常值 —— 防止 ElementPlus InputNumber 在 setup 阶段抛
 // "min should not be greater than max" 阻断整个应用挂载:
-//   1. 加载旧工程 / localStorage 持久化的脏数据(用户曾经手动改过 jigSize < 60 等);
+//   1. 恢复配置预设中的越界参数(用户曾经手动改过 jigSize < 60 等);
 //   2. ElementPlus 的 watch 在 InputNumber 内部用 throw 报告错(uncaught),而非 return,会让
 //      整个 setup 失败 → 整个页面白屏。
 // 解决:在 setup 之前把所有数值钳到合法范围,InputNumber 后续只接收合法值。
@@ -104,7 +104,7 @@ function onLipChange(v: number | number[]) {
 // 派生读数:凸台 / 窗口逐轴尺寸(矩形钢网下长宽可不等)
 const platterSize = computed(() => {
   const p = platterHalfXY(c.value);
-  return `${(p.hx * 2).toFixed(0)} × ${(p.hy * 2).toFixed(0)}`;
+  return `${(p.hx * 2).toFixed(1)} × ${(p.hy * 2).toFixed(1)}`;
 });
 const windowSizeXY = computed(() => {
   const w = windowHalfXY(c.value);
@@ -115,7 +115,7 @@ const windowSizeXY = computed(() => {
 //   A · 2*win + 28(窗口+螺丝带+外缘)
 //   B · stencil + 20(结构边 ≥10mm/边)
 // 手动改小到装不下窗口时部件会被挖空(空 STL,模型不显示) —— 在输入框拦住
-// 已存储值低于动态下界时抬到下界(如加载旧工程/钢网变大后):
+// 已存储值低于动态下界时抬到下界(如切换预设/钢网变大后):
 //   值域与输入框一致,不留"显示 A 实际 B"的裂缝
 //   注意:store 内的 watch[pcb/stencil/lip] 已经在 immediate 时执行同向钳制,
 //   这里只做"输入框强制约束"——v-model 范围(防止用户绕过)
@@ -164,6 +164,7 @@ function applyPreset(id: string) {
       </ul>
     </div>
 
+    <section class="parameter-section preset-section" :aria-label="t('config.preset')">
     <!-- 结构预设:一键套用常用螺丝 + 结构高度组合 -->
     <InlineHelp id="config-presetHint" class="section-help" :label="t('config.preset')" :text="t('config.presetHint')"><span>{{ t('config.preset') }}</span></InlineHelp>
     <div class="preset-group">
@@ -176,9 +177,12 @@ function applyPreset(id: string) {
       >{{ t(p.label) }}</button>
     </div>
 
+    </section>
+
+    <section class="parameter-section pcb-section" :aria-label="t('config.pcb')">
     <!-- PCB(基本:拖入 Gerber 自动填,板厚需用户确认) -->
     <div class="section-label">{{ t('config.pcb') }}</div>
-    <div class="field-row">
+    <div class="field-row pcb-dimensions">
       <div class="field">
         <label class="field-label">{{ t('config.length') }}</label>
         <el-input-number
@@ -203,7 +207,6 @@ function applyPreset(id: string) {
           style="width: 100%"
         />
       </div>
-    </div>
     <div class="field">
       <label class="field-label">{{ t('config.thickness') }}</label>
       <el-input-number
@@ -216,6 +219,7 @@ function applyPreset(id: string) {
         style="width: 100%"
       />
     </div>
+    </div>
     <!-- 导入提示:长宽已从板框自动识别,板厚是物理属性须人工确认 -->
     <div v-if="c.gerberFilename" class="auto-hint">
       <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
@@ -225,8 +229,10 @@ function applyPreset(id: string) {
       <span>{{ t('config.gerberApplied', { f: c.gerberFilename }) }}</span>
     </div>
 
+    </section>
+
     <!-- 钢网(基本:按板子自动推荐,可改成实际购买的钢网尺寸;长宽独立可矩形) -->
-    <section ref="stencilSizeSection" class="stencil-size-section" :aria-label="t('config.stencil')">
+    <section ref="stencilSizeSection" class="parameter-section stencil-size-section" :aria-label="t('config.stencil')">
     <div class="section-label">{{ t('config.stencil') }}</div>
     <div class="field-row">
       <div class="field">
@@ -267,7 +273,7 @@ function applyPreset(id: string) {
         <div>
           <strong>{{ t('config.stencilSizeGuideTitle') }}</strong>
           <p>{{ t('config.stencilSizeGuide') }}</p>
-          <button type="button" class="stencil-size-reviewed" @click="stencilSizeReviewed = true">
+          <button type="button" class="stencil-size-reviewed" @click="store.confirmStencilSizeReview()">
             <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="m3.5 8 3 3 6-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
             {{ t('config.stencilSizeReviewed') }}
           </button>
@@ -275,6 +281,52 @@ function applyPreset(id: string) {
       </div>
     </MotionCollapse>
     </section>
+
+    <section class="parameter-section lip-section" :aria-label="t('config.platterLipGroup')">
+    <!-- 唇宽滑块(单条):四边一致,凸台/窗口逐轴随之变化 -->
+    <InlineHelp id="clamp-plan-help" class="section-help lip-section-heading" :label="t('config.platterLipGroup')" :text="t('clampPlan.help')"><span>{{ t('config.platterLipGroup') }}</span></InlineHelp>
+    <div class="platter-lip-card">
+      <ClampPlanPreview />
+      <div class="platter-lip-slider">
+        <label class="field-label">
+          <span class="lbl-l">{{ t('config.stencilLip') }}</span>
+          <strong class="lip-current">{{ lipValue.toFixed(1) }} <small>mm</small></strong>
+        </label>
+        <el-slider
+          :model-value="lipValue"
+          @update:model-value="onLipChange"
+          :min="0"
+          :max="Math.max(lipMax, 0.1)"
+          :step="0.1"
+          :show-tooltip="true"
+          :format-tooltip="(v: number) => `${t('config.stencilLip')} = ${v.toFixed(1)}mm`"
+          :disabled="lipMax <= 0"
+        />
+        <div class="slider-readout">
+          <span class="rd-r">
+            <span class="rd-v">{{ platterSize }}</span>
+            <span class="rd-k">{{ t('config.platterSizeShort') }}</span>
+          </span>
+          <span class="rd-eq">→</span>
+          <span class="rd-r">
+            <span class="rd-v">{{ windowSizeXY }}</span>
+            <span class="rd-k">{{ t('config.windowSizeShort') }}</span>
+          </span>
+        </div>
+      </div>
+      <div v-if="lipMax <= 0" class="auto-hint">
+        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+          <path d="M8 7v4M8 5.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+        </svg>
+        <span>{{ t('config.lipNoRoom') }}</span>
+      </div>
+    </div>
+
+    </section>
+
+    <section class="parameter-section handling-section" :aria-label="t('config.handling')">
+    <div class="section-label">{{ t('config.handling') }}</div>
     <div class="field">
       <label class="field-label">{{ t('config.pryNotch') }}</label>
       <div class="notch-picker">
@@ -337,6 +389,8 @@ function applyPreset(id: string) {
       <span>{{ t('config.jigAuto', { j: c.jigSize }) }}</span>
     </div>
 
+    </section>
+
     <!-- 高级参数(默认折叠) -->
     <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
       <span>{{ t('config.advanced') }}</span>
@@ -367,49 +421,6 @@ function applyPreset(id: string) {
         <el-input-number v-model="c.ejectSlotWidth" :min="0" :max="40" :step="1" :precision="0" size="small" style="width: 100%" />
       </div>
 
-      <!-- 唇宽滑块(单条):四边一致,凸台/窗口逐轴随之变化 -->
-      <div class="section-label">{{ t('config.platterLipGroup') }}</div>
-      <div class="platter-lip-card">
-        <div class="platter-lip-slider">
-          <label class="field-label">
-            <span class="lbl-l">{{ t('config.stencilLip') }}</span>
-          </label>
-          <el-slider
-            :model-value="lipValue"
-            @update:model-value="onLipChange"
-            :min="0"
-            :max="Math.max(lipMax, 0.1)"
-            :step="0.1"
-            :show-tooltip="true"
-            :format-tooltip="(v: number) => `${t('config.stencilLip')} = ${v.toFixed(1)}mm`"
-            :disabled="lipMax <= 0"
-          />
-          <div class="slider-readout">
-            <span class="rd-l">
-              <span class="rd-k">{{ t('config.stencilLip') }}</span>
-              <span class="rd-v">{{ lipValue.toFixed(1) }} mm</span>
-            </span>
-            <span class="rd-eq">→</span>
-            <span class="rd-r">
-              <span class="rd-v">{{ platterSize }}</span>
-              <span class="rd-k">{{ t('config.platterSizeShort') }}</span>
-            </span>
-            <span class="rd-eq">→</span>
-            <span class="rd-r">
-              <span class="rd-v">{{ windowSizeXY }}</span>
-              <span class="rd-k">{{ t('config.windowSizeShort') }}</span>
-            </span>
-          </div>
-        </div>
-        <div v-if="lipMax <= 0" class="auto-hint">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M8 7v4M8 5.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-          </svg>
-          <span>{{ t('config.lipNoRoom') }}</span>
-        </div>
-      </div>
-
       <!-- 装配间隙 -->
       <div class="section-label">{{ t('config.assemblyGap') }}</div>
       <div class="field-row">
@@ -425,7 +436,7 @@ function applyPreset(id: string) {
       <div class="field-row">
         <div class="field">
           <InlineHelp id="config-postClearanceHint" :label="t('config.postClearance')" :text="t('config.postClearanceHint')"><span class="field-label">{{ t('config.postClearance') }}</span></InlineHelp>
-          <el-input-number v-model="c.postClearance" :min="0" :max="1" :step="0.05" :precision="2" size="small" style="width: 100%" />
+          <el-input-number v-model="c.postClearance" :min="0" :max="1" :step="0.025" :precision="3" size="small" style="width: 100%" />
         </div>
       </div>
 
@@ -500,6 +511,20 @@ function applyPreset(id: string) {
 <style scoped>
 .config-form {
   padding: 16px;
+  container-type: inline-size;
+}
+
+.parameter-section { min-width: 0; }
+.parameter-section + .parameter-section { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--surface-line); }
+.parameter-section > .section-label:first-child { margin-top: 0; }
+.parameter-section > .field:last-child { margin-bottom: 0; }
+.parameter-section > .auto-hint:last-child { margin-bottom: 0; }
+.pcb-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pcb-dimensions > .field:last-child { grid-column: 1 / -1; }
+.field-row > .field { min-width: 0; }
+@container (min-width: 380px) {
+  .pcb-dimensions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pcb-dimensions > .field:last-child { grid-column: auto; }
 }
 
 /* 参数警告卡 */
@@ -569,7 +594,7 @@ function applyPreset(id: string) {
 
 .stencil-size-section {
   display: flow-root;
-  margin-top: 20px;
+  margin-top: 0;
   border-radius: var(--radius-control);
 }
 
@@ -793,12 +818,17 @@ function applyPreset(id: string) {
 
 /* 双向滑块卡片:凸台宽 ⇄ 唇宽 —— 独立卡片突出,整行独占 */
 .platter-lip-card {
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-8);
-  background: var(--bg-overlay-l1);
-  padding: 14px 14px 10px 14px;
-  margin-bottom: 12px;
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-popover);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-well);
+  padding: 10px 10px 12px;
+  margin-bottom: 0;
 }
+.lip-section-heading { margin-bottom: 10px; }
+.lip-current { color: var(--text-brand); font-family: var(--font-family-metric); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lip-current small { color: var(--text-tertiary); font-size: 10px; font-weight: 400; }
+.platter-lip-slider { padding-inline: 4px; }
 
 .platter-lip-slider .field-label {
   display: flex;
@@ -840,10 +870,10 @@ function applyPreset(id: string) {
 }
 
 .slider-readout {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  padding: 8px 4px 2px 4px;
+  padding: 10px 0 0;
   font-size: 12px;
   color: var(--text-secondary);
   font-family: var(--font-family-metric);
@@ -864,8 +894,10 @@ function applyPreset(id: string) {
 }
 
 .slider-readout .rd-r {
-  align-items: flex-end;
+  min-width: 0;
+  align-items: flex-start;
 }
+.slider-readout .rd-r:last-child { align-items: flex-end; }
 
 .slider-readout .rd-k {
   font-size: 11px;

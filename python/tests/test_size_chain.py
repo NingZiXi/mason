@@ -100,7 +100,7 @@ ck.check("唇过大 → 凸台钳到槽尺寸",
 ck.check("唇过大 → 有效唇宽回写为正且被钳小",
          0 <= p4["stencil_lip"] < 40, f"回写 lip={p4['stencil_lip']:.2f}")
 
-# --- 5. 旧项目文件:只有单值 stencil_size → 两轴同取 ---
+# --- 5. 旧式建模参数:只有单值 stencil_size → 两轴同取 ---
 p5 = base_params(_tag="sz5", pcb_size_x=60, pcb_size_y=40,
                  stencil_size=120, stencil_lip=15)
 shx5, shy5 = jg.stencil_half_xy(p5)

@@ -266,7 +266,7 @@ M02*
     expect(outline.bbox.maxX).toBeCloseTo(50, 3);
   });
 
-  it("外框之外的独立轮廓被忽略(拼板场景)", () => {
+  it("不同尺寸独立轮廓识别为混合拼版,单板口径仍取最大板", () => {
     const disjoint = `G04 two boards*
 %FSLAX24Y24*%
 %MOMM*%
@@ -285,7 +285,10 @@ M02*
 `;
     const outline = extractOutline(disjoint);
     expect(outline.holes).toHaveLength(0);
-    expect(outline.bbox.maxX).toBeCloseTo(50, 3);
+    expect(outline.isPanel).toBe(true);
+    expect(outline.boards).toHaveLength(2);
+    expect(outline.bbox.maxX).toBeCloseTo(70, 3);
+    expect(extractOutline(disjoint, { panel: false }).bbox.maxX).toBeCloseTo(50, 3);
   });
 
   it("单轮廓文件 holes 为空(向后兼容)", () => {

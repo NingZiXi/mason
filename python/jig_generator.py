@@ -10,9 +10,9 @@ PCB 钢网夹具生成器 v2 - 基于 build123d + Shapely(参考商用件逆向�
               用于夹紧组件落位)+ 板内孔挖穿(顶出/透锡)
   - cover:  A 面顶盖,窗口 = 凸台+0.4(与 base 同一多边形,叠合孔口重合),45° 全高倒角
             (顶开口四角圆角半径与窗口一致,直边壁开口向上张开)
-            + 4 角定位柱过孔(Ø9.4)+ 周圈夹紧螺丝过孔
+            + 4 角定位柱过孔(默认 Ø9.45)+ 周圈夹紧螺丝过孔
   - base:   B 面底座,窗口 = 凸台+0.4,顶缘反向拔模(底面开口更大)+ 周圈螺丝孔
-            + 4 角定位柱孔(Ø9.4,与 cover 一一对应)
+            + 4 角定位柱孔(默认 Ø9.45,与 cover 一一对应)
 
 装配(A 面印刷,自下而上):PCB 托盘(insert) → B 面底座(base) → 金属钢网 →
 A 面顶盖(cover)。周圈螺丝穿过顶盖和底座,将钢网夹紧在底座与顶盖之间；
@@ -145,7 +145,7 @@ def stencil_half_xy(p):
     """钢网外缘半长 / 半宽(mm),居中坐标系。
 
     优先读 stencil_size_x / stencil_size_y(矩形钢网,长宽可不等);
-    旧参数 stencil_size(单值正方形)两轴兜底,保证老项目文件仍可用。
+    参数 stencil_size(单值正方形)两轴兜底，兼容独立建模脚本的输入。
     两轴都取不到时返回 (0, 0) —— 表示『非独立模式』,外框改由
     板框 + 边框宽推导(见 compute_frame_poly 的分支 2)。
     """
@@ -323,6 +323,12 @@ def get_polys(p):
     return slot_poly, platter_poly, window_poly, is_shaped
 
 
+def post_hole_radius(p=None):
+    """Use the same radial fit allowance for layout protection and actual holes."""
+    p = p or {}
+    return p.get("corner_screw_d", 5.0) / 2 + 2.0 + p.get("post_clearance", 0.225)
+
+
 def corner_screw_positions(window_poly, jig, p=None):
     """4 角定位柱位置:紧贴夹具 4 角(沿对角线),post(半径 corner_d/2+2)圆心
     到两边各留 7mm,外缘 R5 圆角自然包容。
@@ -340,7 +346,7 @@ def corner_screw_positions(window_poly, jig, p=None):
     win_half = max(window_poly.bounds[2], window_poly.bounds[3])
     # boss 与外缘参数(默认 5)
     r_post = (p or {}).get("corner_screw_d", 5.0) / 2 + 2.0  # d/2+2
-    r_hole = (p or {}).get("corner_screw_d", 5.0) / 2 + 2.2  # 孔 r=d/2+2.2(留 0.2 间隙)
+    r_hole = post_hole_radius(p)
     r_out = (p or {}).get("outer_corner_radius", 5.0)
     # 凸台半宽(沿对角线,platter = 圆角矩形,半宽 = slot/2 + lip 钳到 frame)
     plater_half = (p or {}).get("platter_half_for_post", None)
@@ -383,7 +389,7 @@ def corner_screw_positions(window_poly, jig, p=None):
 def compute_perimeter_screw_positions(jig, window_poly, spacing):
     """周圈螺丝(B 面配置):孔带靠外 —— 螺丝圆心距外缘固定 10mm,
     窗口→螺丝之间的整条内侧带留给钢网夹紧(压紧区不打孔);
-    行/列末端内收到 jig/2-14,与 4 角定位柱孔(jig/2-7, Ø9.4)保持净距;
+    行/列末端内收到 jig/2-14,与 4 角定位柱孔(默认 Ø9.45)保持净距;
     窗口过大(手动改小夹具)时贴窗口壁外移,保证孔壁与窗口壁 ≥4mm —— 与 TS screwPositions 同步改"""
     if spacing <= 0:
         return []
@@ -666,7 +672,6 @@ def build_cover(p):
     jig = p["jig_size"]
     cover_h = p["top_cover_height"]
     r_out = p.get("outer_corner_radius", 5.0)
-    corner_d = p.get("corner_screw_d", 5.0)
     peri_d, _nut_across, _nut_h = peri_screw_params(p)
     spacing = p["screw_spacing"]
 
@@ -692,10 +697,10 @@ def build_cover(p):
     cone = loft_cone(bot.exterior.coords, top.exterior.coords, -pad, cover_h + pad)
     cover = cover - cone
 
-    # 3. 4 角定位柱过孔(与 insert 定位柱同心):Ø9.4 全厚贯穿,
+    # 3. 4 角定位柱过孔(与 insert 定位柱同心):默认 Ø9.45 全厚贯穿,
     #    柱穿过对应孔为装配组件定位(免螺丝)
     positions = corner_screw_positions(window_poly, jig, p)
-    r_post_hole = corner_d / 2 + 2.0 + p.get("post_clearance", 0.15)  # 柱 Ø9 + 可配置径向间隙
+    r_post_hole = post_hole_radius(p)  # 柱 Ø9 + 可配置径向间隙
     for (x, y) in positions:
         hole = Cylinder(r_post_hole, cover_h + 0.2)
         cover = cover - hole.moved(bd.Location((x, y, cover_h / 2)))
@@ -743,11 +748,10 @@ def build_base(p):
         hole = Cylinder(peri_d / 2, base_h + 0.2)
         base = base - hole.moved(bd.Location((x, y, base_h / 2)))
 
-    # 4. 4 角定位柱孔(与 cover 角孔同尺寸 Ø9.4,一一对应):
+    # 4. 4 角定位柱孔(与 cover 角孔同尺寸,默认 Ø9.45,一一对应):
     #    翻面/换面装配时收定位柱
-    corner_d = p.get("corner_screw_d", 5.0)
     for (x, y) in corner_screw_positions(window_poly, jig, p):
-        hole = Cylinder(corner_d / 2 + 2.0 + p.get("post_clearance", 0.15), base_h + 0.2)
+        hole = Cylinder(post_hole_radius(p), base_h + 0.2)
         base = base - hole.moved(bd.Location((x, y, base_h / 2)))
 
     # 5. 周圈螺母反沉孔(可选):从底面开口,深 = nut_h + 0.2,
@@ -1201,39 +1205,32 @@ def _filter_test_point_pads(pad_geoms, sources, candidates, isolation, roles=Non
     return kept
 
 
-def build_stencil(p, side="top"):
-    """PCB 钢网:外框 + 顶面 PCB 卡槽 + 槽底薄钢网层(焊盘开孔只穿这一层)
-
-    构建坐标:z=0 = 底面(钢网层/刮刀面,平整),z 向上递增。
-    总厚度 = PCB 厚度 + 钢网层厚度。
-    PCB 从顶面放入卡槽(焊盘朝下),锡膏从底面钢网层刮入,穿过开孔到达焊盘。
-    不依赖夹具,独立使用;无四角定位柱孔(凹槽壁完成 PCB 定位)。
-
-    双面钢网(与 Dream_maker 等实机验证约定一致):
-    - side="top":PCB 翻面(绕 X 轴,顶面朝下)放入卡槽 →
-      板框与焊盘统一 Y 镜像(y→-y),翻面放入后开孔对准 Top 焊盘。
-    - side="bottom":PCB 正放(底面朝下)入槽 → 板框与焊盘用原坐标。
-
-    取放缺口:方向/尺寸与夹具逻辑一致(pry_notch_sides +
-    pry_notch_scale × 自动基准),形状为梯形凹陷 —— 长边在里贴槽缘、
-    短边朝外,两侧斜坡向内张开(手指进入后越往里越宽,托板空间足),
-    底部平直贴齐 PCB 边缘,不倒圆角。
-    """
-    pcb_t = p["pcb_thickness"]
-    stencil_t = float(p.get("stencil_thickness", 0.3))
-    frame_w = float(p.get("stencil_frame_width", 12.0))
+def _stencil_board_polys(p, side):
     pocket_clr = float(p.get("pocket_clearance", 0.1))
-    pad_shrink = float(p.get("pad_shrink", 0.0)) / 100.0
-    total_h = pcb_t + stencil_t
-    r_out = p.get("outer_corner_radius", 5.0)
+    # PCB 板框多边形(居中坐标系);top 面翻面入槽 → Y 镜像
+    outline_pts = p.get("pcb_outline_points", [])
+    if len(outline_pts) >= 3:
+        if side == "top":
+            outline_pts = [(x, -y) for x, y in outline_pts]
+        base_poly = shapely_orient(ShapelyPolygon(outline_pts), 1.0)
+        if not base_poly.is_valid:
+            base_poly = base_poly.buffer(0)
+    else:
+        # 矩形兜底:上下对称,Y 镜像后不变
+        w, h = p["pcb_size_x"] / 2, p["pcb_size_y"] / 2
+        base_poly = shapely_box(-w, -h, w, h)
 
-    # 焊盘后处理(参考 Dream_maker,均有开关/参数)
-    # 喇叭孔本版禁用:OCC 对"上下开孔尺寸不同"的几何(台阶分层/领环两种
-    # 构造均试过)在千级焊盘时平面分割病态慢(2448 焊盘 >3min),而直孔
-    # 纯 2D 分层路径 17s。参数保留(协议/工程文件兼容),统一按直孔处理;
-    # 未来找到快速构造后把 taper_s 恢复为 max(1.0, taper_pct/100.0)。
-    taper_pct = float(p.get("stencil_taper", 105.0))  # noqa: F841(保留解析)
-    taper_s = 1.0
+    if base_poly.is_empty:
+        raise ValueError("PCB 板框多边形为空")
+
+    # 卡槽 = 板框 + 间隙
+    pocket_poly = base_poly.buffer(pocket_clr, join_style=1, resolution=RES).simplify(0.02)
+    return base_poly, pocket_poly
+
+
+def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
+    """Shared aperture pipeline for manufacturing and the 2D inspection view."""
+    pad_shrink = float(p.get("pad_shrink", 0.0)) / 100.0
     do_stagger = bool(p.get("stencil_stagger", False))      # 密脚错排
     stagger_gap = float(p.get("stencil_stagger_gap", 0.55))
     stagger_off = float(p.get("stencil_stagger_offset", 0.15))
@@ -1256,24 +1253,240 @@ def build_stencil(p, side="top"):
     else:
         pads_list = p.get("stencil_pads_top", p.get("stencil_pads", []))
 
-    # PCB 板框多边形(居中坐标系);top 面翻面入槽 → Y 镜像
-    outline_pts = p.get("pcb_outline_points", [])
-    if len(outline_pts) >= 3:
-        if side == "top":
-            outline_pts = [(x, -y) for x, y in outline_pts]
-        base_poly = shapely_orient(ShapelyPolygon(outline_pts), 1.0)
-        if not base_poly.is_valid:
-            base_poly = base_poly.buffer(0)
-    else:
-        # 矩形兜底:上下对称,Y 镜像后不变
-        w, h = p["pcb_size_x"] / 2, p["pcb_size_y"] / 2
-        base_poly = shapely_box(-w, -h, w, h)
+    # 3. 焊盘解析(多部件极性/镜像/收缩/简化)
+    pad_geoms = []  # [(shapely geom, 焊盘极性)]
+    tp_sources, tp_candidates, tp_roles = [], [], []
+    source_indices, original, filtered = [], [], []
+    overrides, manual_closures, source_shapes = {}, [], {}
+    for source_index, pad in enumerate(pads_list):
+        parts, pad_pol = _pad_to_parts(pad)
+        if not parts:
+            continue
+        dark, clear = [], []
+        for part_d in parts:
+            pts = part_d.get("points", [])
+            holes = [h for h in part_d.get("holes", []) if len(h) >= 3]
+            if len(pts) < 3:
+                continue
+            if side == "top":
+                pts = [(x, -y) for x, y in pts]
+                holes = [[(x, -y) for x, y in h] for h in holes]
+            try:
+                g = ShapelyPolygon(pts, holes) if holes else ShapelyPolygon(pts)
+            except Exception:
+                continue
+            if not g.is_valid:
+                g = g.buffer(0)
+            if g.is_empty or g.area < 1e-6:
+                continue
+            if str(part_d.get("polarity", "D")).upper() == "C":
+                clear.append(g)
+            else:
+                dark.append(g)
+        if not dark:
+            continue
+        geom = shapely_union(dark) if len(dark) > 1 else dark[0]
+        if clear:
+            geom = geom.difference(shapely_union(clear))
+        if geom.is_empty or geom.area < 1e-6:
+            continue
+        source_geom = geom
+        decision = pad.get("apertureOverride") if isinstance(pad, dict) and pad_pol == "D" else None
+        if decision in ("open", "closed"):
+            overrides[source_index] = decision
+            if decision == "closed":
+                source_shapes[source_index] = geom
+        if audit:
+            original.append((geom, pad_pol, source_index))
+        tp_candidate = filter_tp and _is_test_point_candidate(pad, geom, tp_max_dia)
+        if pad_shrink > 0:
+            s = max(0.05, 1.0 - pad_shrink)
+            geom = shapely_scale_aff(geom, xfact=s, yfact=s, origin="centroid")
+            if geom.is_empty or geom.area < 1e-6:
+                continue
+        # 焊盘方形化(在 simplify 之前做):simplify(0.02) 会移除长圆形
+        # 圆弧上的顶点,导致 bounds 收缩、中心偏移。
+        # 用最小旋转外接矩形(MRR)代替轴对齐 bounds:保持焊盘原始旋转
+        # 方向(斜放的电容/电阻不被转正),只补全圆角/缺口。
+        # 触发条件(满足任一):
+        #   1) 拉长形(MRR 长宽比 > 1.15):O 光圈/圆角矩形 → 直角矩形
+        #   2) 有凹陷(面积 < 凸包面积 92%):C 形/开槽焊盘 → 补全矩形
+        #      (部分 EDA 工具在锡膏层生成带缺口的 region,钢网应开全孔)
+        # 圆/方焊盘不变形。
+        if do_square:
+            mrr = geom.minimum_rotated_rectangle
+            mrr_pts = list(mrr.exterior.coords)
+            # MRR 两条相邻边长 → 长宽
+            e1 = math.hypot(mrr_pts[1][0] - mrr_pts[0][0],
+                            mrr_pts[1][1] - mrr_pts[0][1])
+            e2 = math.hypot(mrr_pts[2][0] - mrr_pts[1][0],
+                            mrr_pts[2][1] - mrr_pts[1][1])
+            bw, bh = max(e1, e2), min(e1, e2)
+            if min(bw, bh) > 1e-6:
+                elongated = bw / bh > 1.15
+                # 有凹陷的单连通焊盘(C 形/开槽):面积 < 凸包 92% 且无内孔。
+                # MultiPolygon(如热焊盘被 clear 切成多块)不处理,保持原貌。
+                concave = False
+                if geom.geom_type == "Polygon":
+                    has_holes = len(list(geom.interiors)) > 0
+                    if not has_holes:
+                        ch_area = geom.convex_hull.area
+                        if ch_area > 1e-9:
+                            concave = geom.area / ch_area < 0.92
+                if elongated or concave:
+                    geom = mrr
+        # 简化 0.02mm:圆孔 16~32 顶点 → ~6-8 顶点,孔壁面数减半,
+        # OCC 网格化耗时与面数成正比(0.3ms/面);0.02mm 远低于锡膏
+        # 印刷公差(±0.05mm)和打印机分辨率(FDM 0.4 喷嘴/树脂 0.05)
+        geom = geom.simplify(0.02, preserve_topology=True)
+        if geom.is_empty or geom.area < 1e-6:
+            continue
+        pad_geoms.append((geom, pad_pol))
+        source_indices.append(source_index)
+        if filter_tp:
+            tp_sources.append(source_geom)
+            tp_candidates.append(tp_candidate)
+            role = pad.get("padRole") if isinstance(pad, dict) else None
+            # Probe metadata supplements geometric inference, not explicit X2
+            # TestPad attributes. Respect the user's maximum-diameter setting.
+            if (isinstance(pad, dict) and pad.get("padRoleSource") == "flying-probe"
+                    and max(source_geom.bounds[2] - source_geom.bounds[0],
+                            source_geom.bounds[3] - source_geom.bounds[1]) > tp_max_dia + 1e-6):
+                role = None
+            # Manual decisions override both explicit and inferred filtering.
+            # Closed pads remain neighbours until automatic inference finishes.
+            if decision in ("open", "closed"):
+                role = "component"
+            tp_roles.append(role)
 
-    if base_poly.is_empty:
-        raise ValueError("PCB 板框多边形为空")
+    entry_sources = {id(entry): index for entry, index in zip(pad_geoms, source_indices)} if overrides else {}
+    if filter_tp:
+        kept = _filter_test_point_pads(pad_geoms, tp_sources, tp_candidates, tp_iso, tp_roles)
+        if audit:
+            kept_ids = {id(entry) for entry in kept}
+            filtered = [(tp_sources[i], source_indices[i],
+                         ("probe" if pads_list[source_indices[i]].get("padRoleSource") == "flying-probe"
+                          else "explicit") if tp_roles[i] == "testpoint" else "inferred")
+                        for i, entry in enumerate(pad_geoms) if id(entry) not in kept_ids]
+        pad_geoms = kept
 
-    # 卡槽 = 板框 + 间隙
-    pocket_poly = base_poly.buffer(pocket_clr, join_style=1, resolution=RES).simplify(0.02)
+    if overrides:
+        # The retained objects are the original tuples, allowing index lookup
+        # without geometry equality (which is expensive and ambiguous).
+        kept = []
+        for entry in pad_geoms:
+            source_index = entry_sources[id(entry)]
+            if overrides.get(source_index) == "closed":
+                manual_closures.extend([entry[0], source_shapes[source_index]])
+            else:
+                kept.append(entry)
+        pad_geoms = kept
+
+    # 密脚错排(隔位 ±法向偏移)
+    if do_stagger and len(pad_geoms) >= 3:
+        pad_geoms = _stagger_pad_geoms(pad_geoms, stagger_gap, stagger_off)
+    # 大孔开网格(只对 D 极性开口;C 极性是恢复材料,不网格化)
+    if do_grid:
+        pad_geoms = [((_grid_pad_geom(g, grid_size, grid_bar) if pol == "D"
+                       else g), pol) for g, pol in pad_geoms]
+
+    # 开孔几何拆分:D 极性 = 开孔(裁剪到卡槽内,超出板框的开孔
+    # 本就无意义);焊盘级 C 极性(%LPC)= 恢复材料。
+    dark_geoms, clear_geoms = [], [g.intersection(pocket_poly) for g in manual_closures]
+    for geom, pad_pol in pad_geoms:
+        if geom.is_empty or geom.area < 1e-6:
+            continue
+        if pad_pol == "C":
+            clear_geoms.append(geom)
+            continue
+        g = geom.intersection(pocket_poly)
+        if g.is_empty or g.area < 1e-6:
+            continue
+        dark_geoms.append(g)
+
+    return dark_geoms, clear_geoms, original, filtered
+
+
+def _inspection_polygons(geom):
+    """JSON polygons with interior rings; never merge rings with even-odd XOR."""
+    if geom.is_empty:
+        return []
+    if geom.geom_type == "Polygon":
+        ring = lambda coords: [[round(x, 6), round(y, 6)] for x, y in coords]
+        return [{"outer": ring(geom.exterior.coords),
+                 "holes": [ring(h.coords) for h in geom.interiors]}]
+    return [polygon for child in getattr(geom, "geoms", [])
+            for polygon in _inspection_polygons(child)]
+
+
+def inspect_stencil(p, side="top"):
+    """Return actual aperture masks without OCC solids, meshing or file IO.
+
+    Coordinates follow the manufacturing view (top is Y-mirrored). Counts of
+    source pads and connected apertures differ after union/grid/clear polarity.
+    """
+    if side not in ("top", "bottom"):
+        raise ValueError("Unknown stencil side")
+    base, pocket = _stencil_board_polys(p, side)
+    dark, clear, original, filtered = _prepare_stencil_pads(p, side, pocket, audit=True)
+    frame = compute_frame_poly(p)
+    if side == "top":
+        frame = shapely_scale_aff(frame, xfact=1.0, yfact=-1.0)
+    original_dark = [g for g, pol, _ in original if pol == "D"]
+    original_clear = [g for g, pol, _ in original if pol == "C"]
+    raw = shapely_union(original_dark).difference(shapely_union(original_clear))
+    final = shapely_union(dark).difference(shapely_union(clear)).intersection(frame)
+    openings = _inspection_polygons(final)
+    pads_list = p.get("stencil_pads_bottom", []) if side == "bottom" else p.get("stencil_pads_top", p.get("stencil_pads", []))
+    return {
+        "side": side, "mirrored": side == "top",
+        "outline": _inspection_polygons(base),
+        "original": _inspection_polygons(raw), "openings": openings,
+        "filtered": [{"sourceIndex": index, "reason": reason,
+                      "polygons": _inspection_polygons(g),
+                      "width": g.bounds[2] - g.bounds[0], "height": g.bounds[3] - g.bounds[1]}
+                     for g, index, reason in filtered],
+        "pads": [{"sourceIndex": index, "polygons": _inspection_polygons(g),
+                  "width": g.bounds[2] - g.bounds[0], "height": g.bounds[3] - g.bounds[1],
+                  "decision": pads_list[index].get("apertureOverride", "auto") if isinstance(pads_list[index], dict) else "auto"}
+                 for g, pol, index in original if pol == "D"],
+        "summary": {"sourcePads": len(original_dark), "filteredPads": len(filtered),
+                    "openings": len(openings), "invalidPads": len(pads_list) - len(original)},
+    }
+
+
+def build_stencil(p, side="top"):
+    """PCB 钢网:外框 + 顶面 PCB 卡槽 + 槽底薄钢网层(焊盘开孔只穿这一层)
+
+    构建坐标:z=0 = 底面(钢网层/刮刀面,平整),z 向上递增。
+    总厚度 = PCB 厚度 + 钢网层厚度。
+    PCB 从顶面放入卡槽(焊盘朝下),锡膏从底面钢网层刮入,穿过开孔到达焊盘。
+    不依赖夹具,独立使用;无四角定位柱孔(凹槽壁完成 PCB 定位)。
+
+    双面钢网(与 Dream_maker 等实机验证约定一致):
+    - side="top":PCB 翻面(绕 X 轴,顶面朝下)放入卡槽 →
+      板框与焊盘统一 Y 镜像(y→-y),翻面放入后开孔对准 Top 焊盘。
+    - side="bottom":PCB 正放(底面朝下)入槽 → 板框与焊盘用原坐标。
+
+    取放缺口:方向/尺寸与夹具逻辑一致(pry_notch_sides +
+    pry_notch_scale × 自动基准),形状为梯形凹陷 —— 长边在里贴槽缘、
+    短边朝外,两侧斜坡向内张开(手指进入后越往里越宽,托板空间足),
+    底部平直贴齐 PCB 边缘,不倒圆角。
+    """
+    pcb_t = p["pcb_thickness"]
+    stencil_t = float(p.get("stencil_thickness", 0.3))
+    frame_w = float(p.get("stencil_frame_width", 12.0))
+    total_h = pcb_t + stencil_t
+    r_out = p.get("outer_corner_radius", 5.0)
+
+    # 焊盘后处理(参考 Dream_maker,均有开关/参数)
+    # 喇叭孔本版禁用:OCC 对"上下开孔尺寸不同"的几何(台阶分层/领环两种
+    # 构造均试过)在千级焊盘时平面分割病态慢(2448 焊盘 >3min),而直孔
+    # 纯 2D 分层路径 17s。参数保留(协议/工程文件兼容),统一按直孔处理;
+    # 未来找到快速构造后把 taper_s 恢复为 max(1.0, taper_pct/100.0)。
+    taper_pct = float(p.get("stencil_taper", 105.0))  # noqa: F841(保留解析)
+    taper_s = 1.0
+    base_poly, pocket_poly = _stencil_board_polys(p, side)
     # 外框 = 与 get_polys 共用 compute_frame_poly,保证凸台钳制与实际生成
     # 钢网外缘是同一个多边形 —— 单一来源改一处即可两端同步
     frame_poly = compute_frame_poly(p)
@@ -1376,115 +1589,7 @@ def build_stencil(p, side="top"):
         if ring_2d.is_empty:
             raise RuntimeError("卡槽把外框切空")
 
-        # 3. 焊盘解析(多部件极性/镜像/收缩/简化)
-        pad_geoms = []  # [(shapely geom, 焊盘极性)]
-        tp_sources, tp_candidates, tp_roles = [], [], []
-        for pad in pads_list:
-            parts, pad_pol = _pad_to_parts(pad)
-            if not parts:
-                continue
-            dark, clear = [], []
-            for part_d in parts:
-                pts = part_d.get("points", [])
-                holes = [h for h in part_d.get("holes", []) if len(h) >= 3]
-                if len(pts) < 3:
-                    continue
-                if side == "top":
-                    pts = [(x, -y) for x, y in pts]
-                    holes = [[(x, -y) for x, y in h] for h in holes]
-                try:
-                    g = ShapelyPolygon(pts, holes) if holes else ShapelyPolygon(pts)
-                except Exception:
-                    continue
-                if not g.is_valid:
-                    g = g.buffer(0)
-                if g.is_empty or g.area < 1e-6:
-                    continue
-                if str(part_d.get("polarity", "D")).upper() == "C":
-                    clear.append(g)
-                else:
-                    dark.append(g)
-            if not dark:
-                continue
-            geom = shapely_union(dark) if len(dark) > 1 else dark[0]
-            if clear:
-                geom = geom.difference(shapely_union(clear))
-            if geom.is_empty or geom.area < 1e-6:
-                continue
-            source_geom = geom
-            tp_candidate = filter_tp and _is_test_point_candidate(pad, geom, tp_max_dia)
-            if pad_shrink > 0:
-                s = max(0.05, 1.0 - pad_shrink)
-                geom = shapely_scale_aff(geom, xfact=s, yfact=s, origin="centroid")
-                if geom.is_empty or geom.area < 1e-6:
-                    continue
-            # 焊盘方形化(在 simplify 之前做):simplify(0.02) 会移除长圆形
-            # 圆弧上的顶点,导致 bounds 收缩、中心偏移。
-            # 用最小旋转外接矩形(MRR)代替轴对齐 bounds:保持焊盘原始旋转
-            # 方向(斜放的电容/电阻不被转正),只补全圆角/缺口。
-            # 触发条件(满足任一):
-            #   1) 拉长形(MRR 长宽比 > 1.15):O 光圈/圆角矩形 → 直角矩形
-            #   2) 有凹陷(面积 < 凸包面积 92%):C 形/开槽焊盘 → 补全矩形
-            #      (部分 EDA 工具在锡膏层生成带缺口的 region,钢网应开全孔)
-            # 圆/方焊盘不变形。
-            if do_square:
-                mrr = geom.minimum_rotated_rectangle
-                mrr_pts = list(mrr.exterior.coords)
-                # MRR 两条相邻边长 → 长宽
-                e1 = math.hypot(mrr_pts[1][0] - mrr_pts[0][0],
-                                mrr_pts[1][1] - mrr_pts[0][1])
-                e2 = math.hypot(mrr_pts[2][0] - mrr_pts[1][0],
-                                mrr_pts[2][1] - mrr_pts[1][1])
-                bw, bh = max(e1, e2), min(e1, e2)
-                if min(bw, bh) > 1e-6:
-                    elongated = bw / bh > 1.15
-                    # 有凹陷的单连通焊盘(C 形/开槽):面积 < 凸包 92% 且无内孔。
-                    # MultiPolygon(如热焊盘被 clear 切成多块)不处理,保持原貌。
-                    concave = False
-                    if geom.geom_type == "Polygon":
-                        has_holes = len(list(geom.interiors)) > 0
-                        if not has_holes:
-                            ch_area = geom.convex_hull.area
-                            if ch_area > 1e-9:
-                                concave = geom.area / ch_area < 0.92
-                    if elongated or concave:
-                        geom = mrr
-            # 简化 0.02mm:圆孔 16~32 顶点 → ~6-8 顶点,孔壁面数减半,
-            # OCC 网格化耗时与面数成正比(0.3ms/面);0.02mm 远低于锡膏
-            # 印刷公差(±0.05mm)和打印机分辨率(FDM 0.4 喷嘴/树脂 0.05)
-            geom = geom.simplify(0.02, preserve_topology=True)
-            if geom.is_empty or geom.area < 1e-6:
-                continue
-            pad_geoms.append((geom, pad_pol))
-            if filter_tp:
-                tp_sources.append(source_geom)
-                tp_candidates.append(tp_candidate)
-                tp_roles.append(pad.get("padRole") if isinstance(pad, dict) else None)
-
-        if filter_tp:
-            pad_geoms = _filter_test_point_pads(pad_geoms, tp_sources, tp_candidates, tp_iso, tp_roles)
-
-        # 密脚错排(隔位 ±法向偏移)
-        if do_stagger and len(pad_geoms) >= 3:
-            pad_geoms = _stagger_pad_geoms(pad_geoms, stagger_gap, stagger_off)
-        # 大孔开网格(只对 D 极性开口;C 极性是恢复材料,不网格化)
-        if do_grid:
-            pad_geoms = [((_grid_pad_geom(g, grid_size, grid_bar) if pol == "D"
-                           else g), pol) for g, pol in pad_geoms]
-
-        # 开孔几何拆分:D 极性 = 开孔(裁剪到卡槽内,超出板框的开孔
-        # 本就无意义);焊盘级 C 极性(%LPC)= 恢复材料。
-        dark_geoms, clear_geoms = [], []
-        for geom, pad_pol in pad_geoms:
-            if geom.is_empty or geom.area < 1e-6:
-                continue
-            if pad_pol == "C":
-                clear_geoms.append(geom)
-                continue
-            g = geom.intersection(pocket_poly)
-            if g.is_empty or g.area < 1e-6:
-                continue
-            dark_geoms.append(g)
+        dark_geoms, clear_geoms, _, _ = _prepare_stencil_pads(p, side, pocket_poly)
 
         # 4. 分层 2D:钢网层 = 外框(含缺口) - 开孔 + LPC 恢复材料。
         #    喇叭孔 = 两层(下半区放大/上半区原尺寸);直孔 = 单层。
@@ -1835,6 +1940,12 @@ def serve():
                     metrics.put(key, *result)
                 respond({"id": rid, "ok": True,
                          "volume": result[0], "area": result[1]})
+            elif cmd == "inspect_stencil":
+                part = req.get("part")
+                if part not in ("stencil_top", "stencil_bottom"):
+                    raise ValueError("Inspection requires a stencil side")
+                result = inspect_stencil(req["params"], "bottom" if part == "stencil_bottom" else "top")
+                respond({"id": rid, "ok": True, "inspection": result})
             elif cmd == "shutdown":
                 respond({"id": rid, "ok": True})
                 break

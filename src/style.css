@@ -8,7 +8,7 @@
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --ease-settle: cubic-bezier(.2, 1.2, .32, 1);
   --control-transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), box-shadow 200ms var(--ease-out), scale var(--motion-release) var(--ease-settle);
-  font-family: "SF Pro Text", "PingFang SC", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-family-default);
   font-size: 14px;
   line-height: 20px;
   font-weight: 400;
@@ -26,6 +26,10 @@
 * {
   box-sizing: border-box;
 }
+
+/* Native form controls and teleported dialogs use the same UI font. */
+button, input, textarea, select { font-family: inherit; }
+.el-message-box { font-family: var(--font-family-default); }
 
 html,
 body,
@@ -122,6 +126,12 @@ input[type='radio']:focus-visible {
 .app-sidebar .section-label::after { content: ''; height: 1px; flex: 1; background: var(--surface-line); }
 .app-sidebar .section-help { margin-bottom: 12px; font-size: 11px; font-weight: 600; color: var(--text-secondary); }
 .app-sidebar .inline-help .field-label { margin-bottom: 0; }
+.app-sidebar :is(.config-form, .stencil-form, .screw-diagram) .field-label { line-height: 18px; margin-bottom: 6px; }
+.app-sidebar .field-row { align-items: flex-start; }
+.app-sidebar .field-row > .field { min-width: 0; }
+.app-sidebar .el-input-number { max-width: 100%; }
+.app-sidebar .parameter-section > .section-label, .app-sidebar .parameter-section > .section-help { font-size: 12px; font-weight: 600; letter-spacing: 0; }
+.app-sidebar .parameter-section > .section-label::after { display: none; }
 .app-sidebar .el-slider__button { box-shadow: 0 2px 5px rgba(28,46,36,.12); transition: transform 160ms ease, box-shadow 160ms ease; }
 .app-sidebar .el-slider__button:hover, .app-sidebar .el-slider__button.dragging { box-shadow: 0 0 0 4px var(--status-success-surface-l1), 0 2px 5px rgba(28,46,36,.12); }
 .app-sidebar .el-input-number__increase, .app-sidebar .el-input-number__decrease {
@@ -150,7 +160,6 @@ input[type='radio']:focus-visible {
 }
 .app-sidebar .preset-btn:not(.active):hover, .app-sidebar .shape-btn:not(.active):hover { background: var(--surface-selected); border-color: var(--surface-line); }
 .app-sidebar .outline-preview { background: var(--surface-well); }
-.app-header .project-menu__actions .el-button { height: 30px; padding-inline: 12px; }
 
 /* Floating surfaces share the same geometry, including teleported menus. */
 .el-popper.is-light, .el-select__popper.el-popper, .el-dropdown__popper.el-popper {
@@ -167,5 +176,62 @@ input[type='radio']:focus-visible {
 .el-message-box { border-radius: var(--radius-dialog); corner-shape: var(--corner-shape); border-color: var(--surface-line); background: var(--surface-raised); box-shadow: var(--shadow-float); }
 .el-message-box .el-input__wrapper { background: var(--surface-well); }
 .el-message { border-radius: var(--radius-popover); corner-shape: var(--corner-shape); }
+
+/* A quiet dimension check: one measurement, one sentence, two actions. */
+.stencil-review-dialog.el-message-box { --review-action: var(--bg-brand); --review-action-hover: var(--bg-brand-hover); --review-action-active: var(--bg-brand-active); width: 380px; max-width: calc(100vw - 32px); padding: 24px; border-radius: var(--radius-dialog); }
+.stencil-review-dialog .el-message-box__header { position: relative; padding: 0 40px 18px 0; }
+.stencil-review-dialog .el-message-box__title { font-size: 16px; line-height: 24px; font-weight: 600; color: var(--text-default); }
+.stencil-review-dialog .el-message-box__headerbtn { display: grid; place-items: center; top: -4px; right: -4px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 9px; background: transparent; transition: var(--control-transition); }
+.stencil-review-dialog .el-message-box__headerbtn .el-message-box__close { color: var(--text-secondary); font-size: 16px; }
+.stencil-review-dialog .el-message-box__headerbtn:hover { background: var(--surface-well); }
+.stencil-review-dialog .el-message-box__headerbtn:hover .el-message-box__close { color: var(--text-default); }
+.stencil-review-dialog .el-message-box__content { padding: 0; }
+.stencil-review-dialog .el-message-box__container { display: block; }
+.stencil-review-dialog .el-message-box__message { width: 100%; font-size: 13px; line-height: 21px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.stencil-review-dimensions { display: flex; flex-direction: column; gap: 7px; padding: 15px 16px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); corner-shape: var(--corner-shape); background: var(--surface-well); }
+.stencil-review-label { color: var(--text-secondary); font-size: 11px; line-height: 16px; }
+.stencil-review-value { display: flex; align-items: baseline; gap: 8px; font-family: var(--font-family-metric); color: var(--text-default); font-variant-numeric: tabular-nums; }
+.stencil-review-value strong { font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -.02em; }
+.stencil-review-value > span { color: var(--text-tertiary); font-size: 12px; }
+.stencil-review-dialog .el-message-box__message .stencil-review-note { margin: 12px 0 0; font-size: 12px; line-height: 20px; color: var(--text-secondary); }
+.stencil-review-dialog .el-message-box__btns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 18px 0 0; }
+.stencil-review-dialog .el-message-box__btns .el-button { width: 100%; min-width: 0; height: 36px; margin: 0; padding: 0 10px; border-radius: var(--radius-control); font-size: 13px; font-weight: 500; }
+/* Explicit action colors keep the teleported dialog legible regardless of
+   Element Plus style injection order, including hover and keyboard focus. */
+.stencil-review-dialog .stencil-review-confirm { background: var(--review-action); border-color: var(--review-action); color: var(--text-onbrand); }
+.stencil-review-dialog .stencil-review-confirm:hover { background: var(--review-action-hover); border-color: var(--review-action-hover); color: var(--text-onbrand); }
+.stencil-review-dialog .stencil-review-confirm:active { background: var(--review-action-active); border-color: var(--review-action-active); color: var(--text-onbrand); }
+.stencil-review-dialog .stencil-review-back { background: var(--surface-raised); border-color: var(--surface-line); color: var(--text-default); }
+.stencil-review-dialog .stencil-review-back:hover { background: var(--surface-well); border-color: var(--border-neutral-l2); color: var(--text-default); }
+.stencil-review-dialog .stencil-review-back:active { background: var(--surface-selected); color: var(--text-default); }
+.stencil-review-dialog :is(.el-button, .el-message-box__headerbtn):focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 3px; }
+/* MessageBox assigns an inline z-index; nested confirmations must cover Settings. */
+.app-confirm-overlay.el-overlay { z-index: 4000 !important; }
+.preset-delete-dialog.el-message-box { --review-action: var(--el-color-danger); --review-action-hover: var(--el-color-danger-light-3); --review-action-active: var(--el-color-danger-dark-2); }
+
+/* Preset naming shares the compact confirmation geometry and action colors. */
+.preset-name-dialog .el-message-box__message { color: var(--text-secondary); font-size: 12px; line-height: 18px; }
+.preset-name-dialog .el-message-box__input { padding-top: 8px; }
+.preset-name-dialog .el-input { font-size: 13px; }
+.preset-name-dialog .el-input__wrapper { min-height: 38px; padding: 0 12px; border-radius: 10px; background: var(--surface-well); box-shadow: inset 0 0 0 1px var(--surface-line); }
+.preset-name-dialog .el-input__wrapper.is-focus { background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--bg-brand), 0 0 0 3px var(--status-success-surface-l1); }
+.preset-name-dialog .el-input.invalid .el-input__wrapper { box-shadow: inset 0 0 0 1px var(--el-color-error); }
+.preset-name-dialog .el-input__inner { height: 36px; line-height: 36px; }
+.preset-name-dialog .el-input__inner::placeholder { color: var(--text-tertiary); }
+.preset-name-dialog .el-message-box__errormsg { padding-top: 6px; font-size: 11px; line-height: 17px; }
+.preset-name-dialog .el-message-box__errormsg:empty { display: none; }
+.preset-name-dialog .el-message-box__btns { padding-top: 22px; }
+
+.preset-switch-dialog .preset-switch-note { color: var(--text-secondary); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.preset-switch-choices { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+.preset-switch-choice { width: 100%; min-height: 36px; padding: 8px 12px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--surface-raised); color: var(--text-default); font-size: 13px; line-height: 20px; font-weight: 500; cursor: pointer; transition: var(--control-transition); }
+.preset-switch-choice:hover { background: var(--surface-well); }
+.preset-switch-choice.is-primary { background: var(--review-action); border-color: var(--review-action); color: var(--text-onbrand); }
+.preset-switch-choice.is-primary:hover { background: var(--review-action-hover); border-color: var(--review-action-hover); }
+.preset-switch-choice.is-primary:active { background: var(--review-action-active); border-color: var(--review-action-active); }
+.preset-switch-choice.is-discard { background: transparent; border-color: transparent; color: var(--text-secondary); }
+.preset-switch-choice.is-discard:hover { background: var(--surface-well); color: var(--text-default); }
+.preset-switch-choice:active { scale: .98; }
+.preset-switch-choice:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
 
 /* Desktop motion is always enabled, independently of the OS animation setting. */
