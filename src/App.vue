@@ -22,6 +22,7 @@ import MotionCollapse from "./components/MotionCollapse.vue";
 import { usePresetsStore } from "./stores/presets";
 import { useWorkSessionStore } from "./stores/work-session";
 import { useExitConfirmation } from "./composables/useExitConfirmation";
+import { createWindowCloseHandler } from "./lib/window-close";
 import { ElMessage } from "element-plus";
 import type { PanelMode } from "./lib/gerber/panel";
 
@@ -65,8 +66,11 @@ const appWindow = (() => {
 const isMaximized = ref(false);
 let unlistenMaximize: UnlistenFn | null = null;
 let unlistenClose: UnlistenFn | null = null;
-let closing = false;
-let allowClose = false;
+const handleCloseRequested = createWindowCloseHandler(
+  confirmExit,
+  () => appWindow.destroy(),
+  () => ElMessage.error(t('exit.failed')),
+);
 
 async function initWindowState() {
   isMaximized.value = await appWindow.isMaximized();
@@ -75,21 +79,7 @@ async function initWindowState() {
     isMaximized.value = await appWindow.isMaximized();
   })) as unknown as UnlistenFn;
   if (isTauri()) {
-    unlistenClose = await appWindow.onCloseRequested(async event => {
-      if (allowClose) return;
-      event.preventDefault();
-      if (closing) return;
-      closing = true;
-      try {
-        if (await confirmExit()) {
-          allowClose = true;
-          await appWindow.close();
-        }
-      } catch {
-        allowClose = false;
-        ElMessage.error(t('exit.failed'));
-      } finally { closing = false; }
-    });
+    unlistenClose = await appWindow.onCloseRequested(handleCloseRequested);
   }
 }
 
