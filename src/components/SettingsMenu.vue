@@ -52,7 +52,7 @@ async function installUpdate() {
       confirmButtonText: t("updates.install"), cancelButtonText: t("updates.later"), type: "warning",
       customClass: 'stencil-review-dialog update-review-dialog', buttonSize: 'default',
       confirmButtonClass: 'stencil-review-confirm', cancelButtonClass: 'stencil-review-back',
-      modalClass: 'app-confirm-overlay', closeOnClickModal: false,
+      modalClass: 'app-confirm-overlay', appendTo: 'body', closeOnClickModal: false,
     });
     await updater.installUpdate(confirmExit);
   } catch {
@@ -96,7 +96,7 @@ function onSettingsClosed() {
   </button>
 
   <!-- Escape the header stacking context so the mask covers all preview controls. -->
-  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" append-to-body align-center :z-index="3000" class="settings-dialog" @closed="onSettingsClosed">
+  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" append-to-body align-center :z-index="3000" modal-class="settings-overlay" class="settings-dialog" @closed="onSettingsClosed">
     <div class="dialog-root">
       <!-- 顶部栏 -->
       <div class="dialog-header">
@@ -673,10 +673,8 @@ a.link-row:hover .link-label {
   box-shadow: var(--shadow-float);
   overflow: hidden;
   align-self: center;
-  z-index: 3001 !important;
 }
-.settings-dialog + .el-overlay,
-.el-overlay:has(.settings-dialog) {
+.settings-overlay.el-overlay {
   z-index: 3000 !important;
 }
 .settings-dialog .el-dialog__header {

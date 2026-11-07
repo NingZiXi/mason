@@ -205,8 +205,10 @@ input[type='radio']:focus-visible {
 .stencil-review-dialog .stencil-review-back:hover { background: var(--surface-well); border-color: var(--border-neutral-l2); color: var(--text-default); }
 .stencil-review-dialog .stencil-review-back:active { background: var(--surface-selected); color: var(--text-default); }
 .stencil-review-dialog :is(.el-button, .el-message-box__headerbtn):focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 3px; }
-/* MessageBox assigns an inline z-index; nested confirmations must cover Settings. */
-.app-confirm-overlay.el-overlay { z-index: 4000 !important; }
+/* Cover Settings (3000) and its language menu (3100), including MessageBoxes
+   without a custom modalClass. Raise the overlay, not only its inner dialog. */
+.el-overlay.is-message-box,
+.el-overlay.app-confirm-overlay { z-index: 4000 !important; }
 .preset-delete-dialog.el-message-box { --review-action: var(--el-color-danger); --review-action-hover: var(--el-color-danger-light-3); --review-action-active: var(--el-color-danger-dark-2); }
 
 /* Preset naming shares the compact confirmation geometry and action colors. */

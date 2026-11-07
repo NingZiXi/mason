@@ -17,7 +17,7 @@ export function useExitConfirmation() {
           customClass: 'stencil-review-dialog exit-review-dialog', buttonSize: 'default',
           confirmButtonClass: 'stencil-review-confirm', cancelButtonClass: 'stencil-review-back',
           distinguishCancelAndClose: true, closeOnClickModal: false, autofocus: false,
-          modalClass: 'app-confirm-overlay',
+          modalClass: 'app-confirm-overlay', appendTo: 'body',
         });
         return true;
       } catch { return false; }
