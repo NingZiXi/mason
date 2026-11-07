@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod export_directory;
 mod error;
 mod generation;
 mod python_detect;
@@ -27,7 +28,7 @@ pub fn run() {
             commands::export_stl,
             commands::read_dropped_file,
             commands::write_file_bytes,
-            commands::ensure_dir,
+            commands::create_export_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

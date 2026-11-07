@@ -13,6 +13,7 @@ import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cach
 import { buildJigAssembly, disposeJigAssembly, setJigExplosion, setJigVisibility } from "../lib/jig-assembly";
 import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
 import { reviewStencilSizeForExport } from "../lib/stencil-export-review";
+import { defaultExportName, validExportName } from "../lib/export-name";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -1759,6 +1760,36 @@ async function ensureStencilSizeReviewed() {
   return result === 'ready';
 }
 
+async function chooseExportProjectName(): Promise<string | null> {
+  try {
+    const { value } = await ElMessageBox.prompt(
+      t("preview.exportNameMessage"),
+      t("preview.exportNameTitle"),
+      {
+        inputValue: defaultExportName(store.gerberSourceFilename ?? store.config.gerberFilename),
+        inputPlaceholder: t("preview.exportNamePlaceholder"),
+        appendTo: 'body',
+        customClass: "stencil-review-dialog preset-name-dialog",
+        confirmButtonClass: 'stencil-review-confirm',
+        cancelButtonClass: 'stencil-review-back',
+        buttonSize: "default",
+        confirmButtonText: t("preview.exportNameConfirm"),
+        cancelButtonText: t("preview.exportNameCancel"),
+        closeOnClickModal: false,
+        inputValidator: (input: string) => {
+          const name = input.trim();
+          if (!name) return t("preview.exportNameRequired");
+          return validExportName(name) || t("preview.exportNameInvalid");
+        },
+      },
+    );
+    return value.trim();
+  } catch (action) {
+    if (action === 'cancel' || action === 'close') return null;
+    throw action;
+  }
+}
+
 // 导出 STL / STEP:先核对钢网,再选目录并写文件。
 async function exportAll(fmt: "stl" | "step") {
   if (exporting.value || disposed) return;
@@ -1777,6 +1808,8 @@ async function exportAll(fmt: "stl" | "step") {
       title: fmt === "stl" ? t("preview.exportStl") : t("preview.exportStep"),
     });
     if (!parentDir || Array.isArray(parentDir)) return;
+    const projectName = await chooseExportProjectName();
+    if (!projectName || disposed) return;
     if (!await ensureStencilSizeReviewed()) return;
 
     const params: ReturnType<typeof buildScadParams> = JSON.parse(JSON.stringify(buildScadParams()));
@@ -1785,14 +1818,8 @@ async function exportAll(fmt: "stl" | "step") {
     const hasTop = store.config.stencilPadsTop.length > 0;
     const hasBottom = store.config.stencilPadsBottom.length > 0;
     const sep = parentDir.includes("\\") ? "\\" : "/";
-    // 自动生成子文件夹名:Mason_YYYYMMDD-HHmmss(同名不会撞,且一眼看出是 Mason 导出)
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const stamp =
-      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${String(now.getMilliseconds()).padStart(3, "0")}`;
-    const exportDir = `${parentDir}${sep}Mason_${stamp}`;
-    await invoke("ensure_dir", { path: exportDir });
+    // 按用户确认的项目名建立目录；同名目录自动追加序号，避免覆盖已有导出。
+    const exportDir = await invoke<string>("create_export_dir", { parentDir, name: projectName });
 
     // 钢网模式:只导出导入了焊盘的面(都没导入时导出顶层占位)
     const stencilParts: Array<{ name: PartName; rust: string; filename: string }> = [];

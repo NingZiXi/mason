@@ -569,18 +569,11 @@ pub async fn write_file_bytes(path: String, bytes: Vec<u8>) -> Result<(), AppErr
         .map_err(|e| AppError::Io(format!("写入文件失败 {}: {}", path, e)))
 }
 
-/// 确保目录存在,若不存在则递归创建(供前端导出 STL/STEP 时自动建 Mason_<时间戳>/)
+/// 原子创建独立导出目录，同名文件或目录存在时追加序号。
 #[tauri::command]
-pub async fn ensure_dir(path: String) -> Result<(), AppError> {
-    let p = PathBuf::from(&path);
-    if p.exists() {
-        if !p.is_dir() {
-            return Err(AppError::Io(format!("路径已存在但不是目录: {}", path)));
-        }
-        return Ok(());
-    }
-    std::fs::create_dir_all(&p)
-        .map_err(|e| AppError::Io(format!("创建目录失败 {}: {}", path, e)))
+pub async fn create_export_dir(parent_dir: String, name: String) -> Result<String, AppError> {
+    let path = crate::export_directory::create(std::path::Path::new(&parent_dir), &name)?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// 读取拖入的文件,供 drag-drop 后使用

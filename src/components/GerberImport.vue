@@ -19,6 +19,7 @@ const configStore = useConfigStore();
 /** 一次导入的完整结果:整版 / 单板两套口径一起交给 store */
 export interface GerberImportPayload {
   filename: string;
+  sourceFilename?: string;
   isPanel: boolean;
   panelGrid?: { nx: number; ny: number };
   hasPads: boolean;
@@ -53,6 +54,7 @@ const dialogBoardIndex = ref(0);
 function openPanelDialog() {
   if (!showPanelDialog.value && configStore.panelOverview && configStore.config.panelAvailable) {
     payload.value = { filename: configStore.config.gerberFilename ?? '', isPanel: true,
+      sourceFilename: configStore.gerberSourceFilename ?? undefined,
       hasPads: !!(configStore.panelOverview.topPads?.length || configStore.panelOverview.bottomPads?.length),
       panelGrid: configStore.config.panelGrid ?? undefined,
       variants: { panel: configStore.panelOverview, single: configStore.panelBoards[0] ?? configStore.panelOverview,
@@ -175,6 +177,7 @@ async function processFile(file: File) {
     if (r) {
       submit({
         filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
+        sourceFilename: file.name,
         isPanel: r.isPanel,
         panelGrid: r.panelGrid,
         hasPads: true,
@@ -201,6 +204,7 @@ async function processFile(file: File) {
 
   submit({
     filename: o.filename,
+    sourceFilename: file.name,
     isPanel: o.parse.isPanel,
     panelGrid: o.parse.panelGrid,
     hasPads: pads !== null,

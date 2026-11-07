@@ -68,7 +68,7 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Confirm unchecked metal stencil dimensions before export; closing unexported work prompts for confirmation
 - First-use guides and system-aware light/dark theme
 - Simplified Chinese / English / Japanese / Korean UI, with manual selection or system-language matching and English fallback
-- STL / STEP dual-format export with auto-created timestamp directories
+- STL / STEP dual-format export with custom folder names and automatic numbering for duplicates
 
 ---
 
@@ -121,7 +121,7 @@ Installer artifacts are in `src-tauri/target/release/bundle/` (Windows: `.msi` /
 2. Check PCB dimensions/thickness and enter the metal stencil’s actual outer length and width
 3. (Optional) Adjust advanced parameters: screw spacing, tray thickness, pocket clearance, etc.
 4. Preview the PCB tray (insert), B-side base, and A-side cover individually
-5. Click "Export", select a directory — a `Mason_<timestamp>/` subfolder is auto-created and STL / STEP files are written into it
+5. Click "Export", choose a location and confirm the export name — STL / STEP files are saved in a subfolder with that name
 
 ### PCB Stencil Mode
 
@@ -227,7 +227,7 @@ A: Board outline detection relies on `.GKO` / `*Edge.Cuts*` / `.GM1` files; sten
 A: Mason squares obround pads by default (matching stencil manufacturer process) and aligns to the PCB board outline center. If misalignment persists, check whether the Gerber coordinate system matches the outline layer.
 
 **Q: Where are exported files?**
-A: On export, a `Mason_<timestamp>/` subfolder is created in the selected directory, and all generated STL / STEP files are placed inside to avoid mixing with existing files.
+A: A subfolder with your export name is created in the selected directory. The name defaults to the imported filename and can be edited. All generated STL / STEP files go inside; a number is added if the name already exists, keeping previous files intact.
 
 ---
 

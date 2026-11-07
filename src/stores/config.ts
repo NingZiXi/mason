@@ -640,6 +640,7 @@ export const useConfigStore = defineStore("config", () => {
 
   /** 当前导入文件的整版与子板几何，用于切换预览和同步开孔选择。 */
   const gerberVariants = ref<GerberVariants | null>(null);
+  const gerberSourceFilename = ref<string | null>(null);
   const panelBoards = computed(() => config.value.panelAvailable && gerberVariants.value ? getPanelBoards(gerberVariants.value) : []);
   const panelOverview = computed(() => gerberVariants.value?.panel);
   const selectedPanelBoard = computed(() => gerberVariants.value
@@ -698,6 +699,7 @@ export const useConfigStore = defineStore("config", () => {
   /** 导入 Gerber:写入两套口径并按 mode 应用(hasPads = 是否带锡膏层结果) */
   function applyGerberImport(payload: {
     filename: string;
+    sourceFilename?: string;
     isPanel: boolean;
     panelGrid?: { nx: number; ny: number };
     hasPads: boolean;
@@ -715,6 +717,7 @@ export const useConfigStore = defineStore("config", () => {
     };
     const c = config.value;
     c.gerberFilename = payload.filename;
+    gerberSourceFilename.value = payload.sourceFilename ?? null;
     c.panelAvailable = payload.isPanel;
     c.panelGrid = payload.panelGrid ?? null;
     c.panelBoardIndex = payload.boardIndex ?? null;
@@ -760,6 +763,7 @@ export const useConfigStore = defineStore("config", () => {
   function clearPanelScope() {
     historyEpoch.value++;
     gerberVariants.value = null;
+    gerberSourceFilename.value = null;
     config.value.panelAvailable = false;
     config.value.panelGrid = null;
     config.value.panelMode = "panel";
@@ -879,6 +883,7 @@ export const useConfigStore = defineStore("config", () => {
 
   return {
     config,
+    gerberSourceFilename,
     stencilSizeReviewed,
     stencilSizeReviewRevision,
     confirmStencilSizeReview,
