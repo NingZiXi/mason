@@ -2,15 +2,18 @@
  * UI 全局状态:主题、语言、启动更新检查与默认导出格式
  * 持久化到 localStorage,主题写入 html class(Element Plus dark 也用同一 class)
  */
-import { defineStore } from "pinia";
+import { acceptHMRUpdate, defineStore } from "pinia";
 import { computed, onScopeDispose, ref, watch } from "vue";
 import { i18n } from "../i18n";
 import { getSystemLocale, SUPPORTED_LOCALES, type LocalePreference } from "../lib/locales";
 
 export type Theme = "light" | "dark" | "system";
+export type Skin = "classic" | "sakura";
 export type ExportFormat = "stl" | "step";
 
 const THEME_KEY = "psj_theme";
+const SKIN_KEY = "psj_skin";
+const SAKURA_UNLOCKED_KEY = "psj_sakura_unlocked";
 const LOCALE_KEY = "psj_locale";
 const STARTUP_UPDATES_KEY = "psj_check_updates_on_startup";
 const EXPORT_FORMAT_KEY = "psj_default_export_format";
@@ -36,6 +39,13 @@ function readBoolean(key: string, fallback: boolean): boolean {
 
 export const useUiStore = defineStore("ui", () => {
   const theme = ref<Theme>(readStored<Theme>(THEME_KEY, "light", ["light", "dark", "system"]));
+  const sakuraUnlocked = ref(readBoolean(SAKURA_UNLOCKED_KEY, false));
+  const savedSkin = readStored<Skin>(SKIN_KEY, "classic", ["classic", "sakura"]);
+  const skin = ref<Skin>(savedSkin === "sakura" && !sakuraUnlocked.value ? "classic" : savedSkin);
+  const skinCelebrationActive = ref(false);
+  const skinCelebrationWasUnlocked = ref(false);
+  const skinBeforeCelebration = ref<Skin>(skin.value);
+  const skinCelebrationTarget = computed<Skin>(() => skinBeforeCelebration.value === "classic" ? "sakura" : "classic");
   const locale = ref<LocalePreference>(readStored<LocalePreference>(LOCALE_KEY, "system", ['system', ...SUPPORTED_LOCALES]));
   const systemLocale = ref(getSystemLocale());
   const resolvedLocale = computed(() => locale.value === 'system' ? systemLocale.value : locale.value);
@@ -84,6 +94,39 @@ export const useUiStore = defineStore("ui", () => {
     theme.value = t;
   }
 
+  function applySkin() {
+    document.documentElement.setAttribute?.("data-skin", skin.value);
+  }
+
+  function setSkin(value: Skin) {
+    if (value !== "classic" && value !== "sakura") return;
+    if (value === "sakura" && !sakuraUnlocked.value) return;
+    skin.value = value;
+  }
+
+  function beginSkinCelebration(): boolean {
+    if (skinCelebrationActive.value) return false;
+    skinBeforeCelebration.value = skin.value;
+    skinCelebrationWasUnlocked.value = sakuraUnlocked.value;
+    skinCelebrationActive.value = true;
+    return true;
+  }
+
+  function previewCelebrationSkin() {
+    if (!skinCelebrationActive.value) return;
+    sakuraUnlocked.value = true;
+    // A repeated preview, skip or result callback always applies the same
+    // destination rather than toggling whichever skin is currently visible.
+    setSkin(skinCelebrationTarget.value);
+  }
+
+  function endSkinCelebration(keep: boolean) {
+    if (!skinCelebrationActive.value) return;
+    if (keep) previewCelebrationSkin();
+    else setSkin(skinBeforeCelebration.value);
+    skinCelebrationActive.value = false;
+  }
+
   function setLocale(l: LocalePreference) {
     if (l === 'system') onLanguageChange();
     locale.value = l;
@@ -91,6 +134,7 @@ export const useUiStore = defineStore("ui", () => {
 
   // 初始化时应用一次
   applyTheme();
+  applySkin();
   // Clear the former in-app override; desktop motion stays enabled independently of the OS.
   document.documentElement.classList.toggle("reduce-motion", false);
   watch(resolvedLocale, (value) => {
@@ -99,6 +143,14 @@ export const useUiStore = defineStore("ui", () => {
   }, { immediate: true });
 
   watch(resolvedTheme, applyTheme);
+  // Unlock and selection must survive an immediate app close, including during the reveal.
+  watch(sakuraUnlocked, (unlocked) => {
+    try { localStorage.setItem(SAKURA_UNLOCKED_KEY, String(unlocked)); } catch { /* keep usable without storage */ }
+  }, { flush: "sync" });
+  watch(skin, (value) => {
+    applySkin();
+    try { localStorage.setItem(SKIN_KEY, value); } catch { /* keep usable without storage */ }
+  }, { flush: "sync" });
   watch(theme, (t) => {
     try { localStorage.setItem(THEME_KEY, t); } catch { /* ignore */ }
   });
@@ -114,6 +166,12 @@ export const useUiStore = defineStore("ui", () => {
     try { localStorage.setItem(EXPORT_FORMAT_KEY, format); } catch { /* ignore */ }
   });
 
-  return { theme, resolvedTheme, locale, resolvedLocale, checkUpdatesOnStartup, defaultExportFormat,
+  return { theme, resolvedTheme, skin, sakuraUnlocked, skinCelebrationActive,
+    skinCelebrationWasUnlocked, skinBeforeCelebration, skinCelebrationTarget, setSkin, beginSkinCelebration,
+    previewCelebrationSkin, endSkinCelebration, locale, resolvedLocale, checkUpdatesOnStartup, defaultExportFormat,
     onboardingSeen, dismissOnboarding, inspectionOnboardingSeen, dismissInspectionOnboarding, setTheme, setLocale };
 });
+
+if (import.meta.hot) {
+  import.meta.hot.accept(acceptHMRUpdate(useUiStore, import.meta.hot));
+}

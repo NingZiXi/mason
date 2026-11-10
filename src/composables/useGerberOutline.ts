@@ -37,43 +37,51 @@ export function useGerberOutline() {
   const error = computed(() => formatImportError(failure.value));
   const result = ref<GerberOutlineResult | null>(null);
   const candidates = ref<OutlineCandidate[]>([]);
+  let revision = 0;
 
   const hasResult = computed(() => result.value !== null);
 
   /**
    * 处理用户上传的文件(支持 .zip,或单个 .gko/.gbr)
    */
-  async function processFile(file: File): Promise<void> {
+  async function processFile(file: File): Promise<GerberOutlineResult | null> {
+    const token = ++revision;
     loading.value = true;
     failure.value = null;
     result.value = null;
+    candidates.value = [];
 
     try {
       const lower = file.name.toLowerCase();
+      let parsed: { result: GerberOutlineResult; candidates: OutlineCandidate[] };
       if (lower.endsWith(".zip")) {
-        await processZip(file);
+        parsed = await processZip(file);
       } else if (
         lower.endsWith(".gko") ||
         lower.endsWith(".gm1") ||
         lower.endsWith(".gbr")
       ) {
-        await processSingleGerber(file);
+        parsed = await processSingleGerber(file);
       } else {
         throw new GerberImportError('gerber.unsupportedOutline', { name: file.name });
       }
+      if (token !== revision) return null;
+      result.value = parsed.result;
+      candidates.value = parsed.candidates;
+      return parsed.result;
     } catch (e) {
-      failure.value = e;
+      if (token === revision) failure.value = e;
+      return null;
     } finally {
-      loading.value = false;
+      if (token === revision) loading.value = false;
     }
   }
 
-  async function processZip(file: File): Promise<void> {
+  async function processZip(file: File): Promise<{ result: GerberOutlineResult; candidates: OutlineCandidate[] }> {
     const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(file);
     const filenames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
     const detected = detectOutlineFiles(filenames);
-    candidates.value = detected;
 
     if (detected.length === 0) {
       throw new GerberImportError('gerber.outlineNotFound');
@@ -81,18 +89,17 @@ export function useGerberOutline() {
 
     const top = detected[0];
     const content = await zip.files[top.filename].async("string");
-    finalize(top.filename, content);
+    return { result: finalize(top.filename, content), candidates: detected };
   }
 
-  async function processSingleGerber(file: File): Promise<void> {
+  async function processSingleGerber(file: File): Promise<{ result: GerberOutlineResult; candidates: OutlineCandidate[] }> {
     const text = await file.text();
-    candidates.value = [
+    return { result: finalize(file.name, text), candidates: [
       { filename: file.name, priority: 100, reason: "用户指定" },
-    ];
-    finalize(file.name, text);
+    ] };
   }
 
-  function finalize(filename: string, gerberText: string): void {
+  function finalize(filename: string, gerberText: string): GerberOutlineResult {
     const outline = extractOutline(gerberText, { panel: true });
 
     if (outline.points.length < 3) {
@@ -116,7 +123,7 @@ export function useGerberOutline() {
     };
     const applied = variants.panel;
 
-    result.value = {
+    return {
       bbox: outline.bbox,
       filename,
       width: applied.width,
@@ -130,6 +137,7 @@ export function useGerberOutline() {
   }
 
   function reset(): void {
+    revision++;
     loading.value = false;
     failure.value = null;
     result.value = null;

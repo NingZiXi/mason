@@ -117,8 +117,8 @@ const showAdvanced = ref(false);
           :width="windowRect.w"
           :height="windowRect.h"
           rx="8"
-          fill="rgba(62,125,98,0.12)"
-          stroke="var(--bg-brand)"
+          fill="var(--schematic-accent-fill)"
+          stroke="var(--interaction-ink)"
           stroke-width="1.5"
           stroke-dasharray="4,3"
         />
@@ -129,7 +129,7 @@ const showAdvanced = ref(false);
             :cx="s.cx"
             :cy="s.cy"
             :r="s.r"
-            fill="var(--bg-brand)"
+            fill="var(--interaction-ink)"
             stroke="var(--bg-base-default)"
             stroke-width="1"
           />
@@ -158,17 +158,21 @@ const showAdvanced = ref(false);
       </svg>
     </div>
 
-    <div class="auto-hint">
-      <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
+    <div class="auto-hint diagram-summary">
+      <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok" aria-hidden="true">
         <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
         <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <span>
-        <strong>{{ t('screwDiagram.count', { n: screwCount }) }}</strong>
-        · {{ t('screwDiagram.posts') }}
-        {{ t('screwDiagram.jigSize', { x: c.jigSize, y: c.jigSize }) }}
-        · {{ t('screwDiagram.windowSize', { s: windowSize }) }}
-      </span>
+      <div class="summary-content">
+        <div class="summary-heading">
+          <strong>{{ t('screwDiagram.count', { n: screwCount }) }}</strong>
+          <span class="summary-posts">{{ t('screwDiagram.posts') }}</span>
+        </div>
+        <div class="summary-sizes">
+          <span>{{ t('screwDiagram.jigSize', { x: c.jigSize, y: c.jigSize }) }}</span>
+          <span>{{ t('screwDiagram.windowSize', { s: windowSize }) }}</span>
+        </div>
+      </div>
     </div>
 
     <!-- 周圈螺丝(基础) -->
@@ -177,7 +181,10 @@ const showAdvanced = ref(false);
     <div class="field">
       <label class="field-label">
         {{ t('config.spacing') }}
-        <span class="field-value">{{ c.screwSpacing === 0 ? t('config.off') : `${c.screwSpacing}mm` }}</span>
+        <span class="field-value">
+          <template v-if="c.screwSpacing === 0">{{ t('config.off') }}</template>
+          <template v-else>{{ c.screwSpacing }}<small class="field-unit">mm</small></template>
+        </span>
       </label>
       <div class="slider-row">
         <el-slider
@@ -185,7 +192,7 @@ const showAdvanced = ref(false);
           :min="0"
           :max="60"
           :step="5"
-          :format-tooltip="(v: number) => v === 0 ? t('config.off') : `${v}mm`"
+          :format-tooltip="(v: number) => v === 0 ? t('config.off') : `${v} mm`"
         />
       </div>
     </div>
@@ -205,9 +212,9 @@ const showAdvanced = ref(false);
     <AssemblyHardware />
 
     <!-- 高级参数(默认折叠) -->
-    <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+    <button type="button" class="advanced-toggle" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">
       <span>{{ t('config.advanced') }}</span>
-      <svg class="chevron" :class="{ 'is-open': showAdvanced }" viewBox="0 0 16 16" width="14" height="14">
+      <svg class="chevron" :class="{ 'is-open': showAdvanced }" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
     </button>
@@ -264,7 +271,7 @@ const showAdvanced = ref(false);
         />
       </div>
       <div v-if="c.useHexNut" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon" aria-hidden="true">
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
           <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -296,11 +303,11 @@ const showAdvanced = ref(false);
 }
 
 .section-label {
-  font-size: 11px;
+  font-size: var(--heading-2xs-font-size);
   font-weight: var(--font-weight-strong);
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  line-height: var(--body-md-line-height);
+  color: var(--text-secondary);
+  letter-spacing: 0;
   margin: 20px 0 12px 0;
 }
 
@@ -332,9 +339,12 @@ const showAdvanced = ref(false);
 
 .field-value {
   float: right;
-  color: var(--text-tertiary);
+  color: var(--text-default);
   font-weight: var(--font-weight-default);
+  font-variant-numeric: tabular-nums;
 }
+
+.field-unit { margin-left: 4px; color: var(--text-tertiary); font-size: var(--body-sm-font-size); }
 
 .checkbox-field {
   margin-bottom: 8px;
@@ -365,7 +375,7 @@ const showAdvanced = ref(false);
 }
 
 .auto-hint .hint-icon {
-  color: var(--bg-brand);
+  color: var(--interaction-ink);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -380,6 +390,13 @@ const showAdvanced = ref(false);
   font-family: var(--font-family-metric);
   margin-right: 6px;
 }
+
+.summary-content { min-width: 0; display: grid; gap: 4px; }
+.summary-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+.summary-heading strong { margin-right: 0; }
+.summary-posts { font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); }
+.summary-sizes { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--text-tertiary); font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); font-variant-numeric: tabular-nums; }
+.summary-sizes span { overflow-wrap: anywhere; }
 
 .slider-row {
   padding: 0 4px;

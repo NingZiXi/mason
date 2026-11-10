@@ -1,6 +1,6 @@
 # Mason 开发文档
 
-[返回首页](../README.md) · [English](./DEVELOPMENT.en.md)
+[返回首页](../README.zh-CN.md) · [English](./DEVELOPMENT.en.md)
 
 ## 本地运行
 

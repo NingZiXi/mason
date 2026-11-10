@@ -569,11 +569,28 @@ pub async fn write_file_bytes(path: String, bytes: Vec<u8>) -> Result<(), AppErr
         .map_err(|e| AppError::Io(format!("写入文件失败 {}: {}", path, e)))
 }
 
-/// 原子创建独立导出目录，同名文件或目录存在时追加序号。
 #[tauri::command]
-pub async fn create_export_dir(parent_dir: String, name: String) -> Result<String, AppError> {
-    let path = crate::export_directory::create(std::path::Path::new(&parent_dir), &name)?;
-    Ok(path.to_string_lossy().into_owned())
+pub async fn begin_model_export(parent_dir: String, name: String, filenames: Vec<String>) -> Result<crate::export_directory::ExportTransaction, AppError> {
+    crate::export_directory::transactions().lock()
+        .map_err(|_| AppError::Other("Export transaction lock failed".into()))?
+        .begin(std::path::Path::new(&parent_dir), &name, filenames).map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn commit_model_export(token: String) -> Result<String, AppError> {
+    tokio::task::spawn_blocking(move || {
+        let path = crate::export_directory::transactions().lock()
+            .map_err(|_| AppError::Other("Export transaction lock failed".into()))?
+            .commit(&token)?;
+        Ok(crate::export_directory::display_path(&path))
+    }).await.map_err(|error| AppError::Other(format!("Export commit task failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn abort_model_export(token: String) -> Result<(), AppError> {
+    crate::export_directory::transactions().lock()
+        .map_err(|_| AppError::Other("Export transaction lock failed".into()))?
+        .abort(&token).map_err(AppError::from)
 }
 
 /// 读取拖入的文件,供 drag-drop 后使用

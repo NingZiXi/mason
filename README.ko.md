@@ -9,7 +9,7 @@
 
 [🌐 웹사이트](https://ningzixi.github.io/mason/) · [📝 변경 기록](https://github.com/NingZiXi/mason/releases) · [🐛 문제 제보](https://github.com/NingZiXi/mason/issues) · [👤 개발자](https://github.com/NingZiXi)
 
-[简体中文](./README.md) · [English](./README.en.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md)
+[简体中文](./README.zh-CN.md) · [English](./README.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#개발-환경)
 
@@ -43,6 +43,7 @@
 - G02/G03 원호, 여러 줄 D 코드, 비정형 기판 외곽 추출 지원
 - 원형·직사각형·장원형·둥근 직사각형·다각형·영역 채움 패드 분석
 - 동일 기판 배열과 서로 다른 기판이 섞인 패널 지원, 전체 패널 또는 특정 기판 선택
+- PCB 스텐실 모드에서 유효한 외곽이 없으면 패드 범위로 추정하며, 추정 상태를 표시하고 내보내기 전에 확인
 
 ### 스텐실 지그 모드
 
@@ -79,7 +80,7 @@
 - 처음 사용 시 간단한 안내, 밝게·어둡게·시스템 테마
 - 중국어 간체 / 영어 / 일본어 / 한국어, 직접 선택 또는 시스템 언어 자동 선택. 지원하지 않는 언어는 영어로 표시
 - 앱 내 업데이트 확인·설치, 설정에서 시작 시 자동 확인 해제 가능
-- STL / STEP 내보내기, 폴더 이름 지정 및 중복 이름에 번호 자동 추가
+- STL / STEP 내보내기, 폴더 이름 지정 및 중복 이름에 번호 자동 추가. 모든 부품 생성이 성공한 후 최종 폴더를 만들고, 실패하면 이번 임시 파일을 정리
 
 ---
 
@@ -254,7 +255,7 @@ mason/
 
 **Q: Gerber ZIP을 가져올 수 없습니다.**
 
-기판 외곽에는 `.GKO` / `.GM1` / `Edge.Cuts`, PCB 스텐실에는 `.GTP` / `.GBP` 등의 페이스트 레이어가 필요합니다. ZIP에 필요한 레이어가 있는지, 파일 이름을 인식할 수 있는지 확인하세요.
+기판 외곽은 `.GKO` / `.GM1` / `Edge.Cuts`에서 인식하며, PCB 스텐실에는 `.GTP` / `.GBP` 등의 페이스트 레이어가 필요합니다. 이 모드에서 유효한 외곽이 없으면 패드 범위로 추정하므로 내보내기 전에 확인하세요. 분석에 실패하면 ZIP 안의 레이어와 파일 이름을 확인하세요.
 
 **Q: 패드와 개구부가 일치하지 않습니다.**
 

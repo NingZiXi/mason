@@ -38,7 +38,7 @@ function target(selector: string) {
 <template>
   <ElTour :model-value="true" v-model:current="current" class="mason-onboarding"
     :z-index="4000" :gap="{ offset: 7, radius: 14 }" :target-area-clickable="false"
-    :mask="{ color: 'rgba(15, 24, 21, .48)' }" :scroll-into-view-options="false"
+    :mask="{ color: 'rgba(28, 27, 31, .48)' }" :scroll-into-view-options="false"
     :content-style="{ width: '350px', maxWidth: 'calc(100vw - 32px)' }" @close="emit('close')">
     <ElTourStep v-for="(step, index) in steps" :key="step.key"
       :target="step.selector ? () => target(step.selector) : undefined" :placement="step.placement"
@@ -61,7 +61,7 @@ function target(selector: string) {
   padding: 22px;
   background: var(--bg-base-default);
   color: var(--text-default);
-  box-shadow: 0 18px 60px rgba(12, 27, 20, .2);
+  box-shadow: 0 18px 60px rgba(28, 27, 31, .2);
 }
 .mason-onboarding .el-tour__title { font-size: 16px; font-weight: 600; }
 .mason-onboarding .el-tour__footer { margin-top: 18px; }

@@ -7,7 +7,7 @@
 **From Gerber to 3D-printable stencil — generate PCB solder paste printing tools in one click**
 *Gerber parsing · Parametric CAD · Real-time 3D preview · Zero cloud dependency*
 
-[🌐 Website](https://ningzixi.github.io/mason/) · [中文](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
+[🌐 Website](https://ningzixi.github.io/mason/) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#getting-started)
 
@@ -40,6 +40,7 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Supports G02/G03 arcs, multi-line D-codes, and irregular board outline extraction
 - Pad parsing covers circle / rectangle / obround / rounded rectangle / polygon / region fill aperture types
 - Supports repeated-board arrays and mixed-board panels; choose the entire panel or a specific PCB
+- In PCB Stencil mode, a missing or invalid outline is estimated from pad bounds, clearly marked and confirmed before export
 
 ### Stencil Jig Mode
 - Four-part assembly: PCB tray at the bottom, followed by the B-side base, metal stencil, and A-side cover; four integral tray posts align the clamped assembly as it drops onto the tray
@@ -68,7 +69,7 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Confirm unchecked metal stencil dimensions before export; closing unexported work prompts for confirmation
 - First-use guides and system-aware light/dark theme
 - Simplified Chinese / English / Japanese / Korean UI, with manual selection or system-language matching and English fallback
-- STL / STEP dual-format export with custom folder names and automatic numbering for duplicates
+- STL / STEP export with custom folder names and automatic numbering for duplicates; the final folder is created only after all parts succeed, with temporary files cleaned up on failure
 
 ---
 
@@ -221,7 +222,7 @@ mason/
 A: In development mode, the app probes PATH and standard install locations. If Python is in a custom path, manually specify `python.exe` in the "Python Environment" card — it must have `build123d`, `shapely`, and `numpy` installed. Release builds include a bundled engine, so this step is unnecessary.
 
 **Q: Gerber ZIP parsing fails?**
-A: Board outline detection relies on `.GKO` / `*Edge.Cuts*` / `.GM1` files; stencil mode also requires a `.GTP` or `.GBP` paste mask layer. For unusual naming, check the actual layer files and extensions inside the ZIP.
+A: Board outline detection relies on `.GKO` / `*Edge.Cuts*` / `.GM1` files; PCB Stencil mode requires a `.GTP` or `.GBP` paste mask layer. In that mode, a missing or invalid outline is estimated from pad bounds and must be checked before export. If parsing fails, check the actual layer files and extensions inside the ZIP.
 
 **Q: Stencil pads don't align with PCB pads?**
 A: Mason squares obround pads by default (matching stencil manufacturer process) and aligns to the PCB board outline center. If misalignment persists, check whether the Gerber coordinate system matches the outline layer.

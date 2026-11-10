@@ -13,6 +13,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 
 ALL_TESTS = [
     "test_screw_layout.py",   # 快:纯算法,无几何生成
+    "test_server_encoding.py",  # UTF-8 协议及 Windows 中文导出路径
     "test_screw_spec.py",     # 周圈螺丝规格联动(孔径随规格切换)
     "test_stencil.py",
     "test_stencil_pads.py",   # PCB 钢网(一体式)几何

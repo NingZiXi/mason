@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { PadPolygon } from "./gerber/pads";
 import { createStencilTexture } from "./gerber-pad-texture";
-import { buildPcbPreview } from "./pcb-preview";
+import { buildPcbPreview, recolorPcbPreview } from "./pcb-preview";
+import { getModelPalette, type ModelPalette } from "./model-palette";
 
 type Ring = readonly (readonly [number, number])[];
 // Visual sheet thickness only; this is not the independent printed-stencil setting.
@@ -24,6 +25,37 @@ export interface AssemblyOptions {
   stencilSizeY?: number;
   stencilPadsTop?: readonly PadPolygon[];
   stencilPadsBottom?: readonly PadPolygon[];
+  palette?: ModelPalette;
+}
+
+/** Retint the existing assembly without invalidating its geometry or pose. */
+export function recolorJigAssembly(group: THREE.Group, palette: ModelPalette) {
+  for (const object of group.children) {
+    if (!(object instanceof THREE.Mesh)) continue;
+    if (object.name === "pcb") {
+      recolorPcbPreview(object, palette);
+      continue;
+    }
+    const part = object.name as keyof ModelPalette["parts"];
+    const plastic = Object.prototype.hasOwnProperty.call(palette.parts, part);
+    const color = plastic ? palette.parts[part] : ({
+      "metal-stencil": palette.metalStencil,
+      "screw-shafts": palette.hardware,
+      "screw-heads": palette.hardware,
+      "screw-sockets": palette.socket,
+      nuts: palette.nut,
+    } as Record<string, number>)[object.name];
+    if (color === undefined) continue;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach(material => {
+      if (!(material instanceof THREE.MeshStandardMaterial)) return;
+      material.color.setHex(color);
+      if (plastic) {
+        material.metalness = palette.plastic.metalness;
+        material.roughness = palette.plastic.roughness;
+      }
+    });
+  }
 }
 
 export function setJigVisibility(group: THREE.Group, pcb: boolean, stencil: boolean) {
@@ -49,23 +81,24 @@ export function buildJigAssembly(
   parts: Record<"insert" | "base" | "cover", THREE.BufferGeometry>,
   options: AssemblyOptions,
 ) {
+  const palette = options.palette ?? getModelPalette("classic");
   const group = new THREE.Group();
   group.name = "jig-assembly";
-  const addPart = (name: keyof typeof parts, color: number) => {
+  const addPart = (name: keyof typeof parts) => {
     const mesh = new THREE.Mesh(parts[name].clone(), new THREE.MeshStandardMaterial({
-      color, metalness: 0.1, roughness: 0.65,
+      color: palette.parts[name], ...palette.plastic,
     }));
     mesh.name = name;
     group.add(mesh);
     return mesh;
   };
-  addPart("insert", 0x5a9b7f);
-  const base = addPart("base", 0x4c6f94);
+  addPart("insert");
+  const base = addPart("base");
   // The generated base already has its nut recesses at Y=0. Do not flip it:
   // the recesses must open downwards, toward the tray.
   base.position.y = options.insertHeight - options.baseHeight;
   const sheetThickness = options.stencilSizeX && options.stencilSizeY ? ASSEMBLY_STENCIL_THICKNESS : 0;
-  addPart("cover", 0xd9913d).position.y = options.insertHeight + sheetThickness;
+  addPart("cover").position.y = options.insertHeight + sheetThickness;
 
   if (options.pcbOutlinePoints && options.pcbOutlinePoints.length >= 3) {
     const thickness = options.pcbThickness ?? 1.6;
@@ -73,6 +106,7 @@ export function buildJigAssembly(
       outline: options.pcbOutlinePoints, holes: options.pcbOutlineHoles,
       thickness, topPads: options.stencilPadsTop, bottomPads: options.stencilPadsBottom,
       environmentMap: options.environmentMap,
+      palette,
     });
     pcb.name = "pcb";
     pcb.position.y = options.insertHeight - thickness;
@@ -84,7 +118,7 @@ export function buildJigAssembly(
     const geometry = new THREE.PlaneGeometry(width, height);
     geometry.rotateX(-Math.PI / 2);
     const stencil = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-      color: 0xc5ced2, roughness: 0.38, metalness: 0.45, side: THREE.DoubleSide,
+      color: palette.metalStencil, roughness: 0.38, metalness: 0.45, side: THREE.DoubleSide,
       alphaMap: createStencilTexture(width, height, pads), alphaTest: 0.5,
     }));
     stencil.name = "metal-stencil";
@@ -98,8 +132,8 @@ export function buildJigAssembly(
   const bottom = options.insertHeight - options.baseHeight + 0.2;
   const top = options.insertHeight + sheetThickness + options.topCoverHeight;
   const headHeight = diameter * 0.65;
-  const metal = new THREE.MeshStandardMaterial({ color: 0xb5bdc8, metalness: 0.8, roughness: 0.3 });
-  const socket = new THREE.MeshStandardMaterial({ color: 0x27303a, metalness: 0.5, roughness: 0.5 });
+  const metal = new THREE.MeshStandardMaterial({ color: palette.hardware, metalness: 0.8, roughness: 0.3 });
+  const socket = new THREE.MeshStandardMaterial({ color: palette.socket, metalness: 0.5, roughness: 0.5 });
   const addInstances = (name: string, geometry: THREE.BufferGeometry, y: number, material = metal) => {
     const instances = new THREE.InstancedMesh(geometry, material, options.screwPositions.length);
     instances.name = name;
@@ -129,7 +163,7 @@ export function buildJigAssembly(
       geometry.rotateX(-Math.PI / 2);
       geometry.translate(0, -options.nutHeight / 2, 0);
       const nutMetal = new THREE.MeshStandardMaterial({
-        color: 0xc5cbd1, metalness: 0.65, roughness: 0.4,
+        color: palette.nut, metalness: 0.65, roughness: 0.4,
         envMap: options.environmentMap ?? null, envMapIntensity: 0.65,
       });
       addInstances("nuts", geometry, options.insertHeight - options.baseHeight + options.nutHeight / 2, nutMetal);
@@ -148,6 +182,7 @@ export function buildJigAssembly(
     "screw-shafts": 4, "screw-heads": 4, "screw-sockets": 4, nuts: 0.5,
   };
   explosionStates.set(group, group.children.map(object => ({ object, y: object.position.y, lift: gap * levels[object.name] })));
+  recolorJigAssembly(group, palette);
   group.updateMatrixWorld(true);
   return group;
 }

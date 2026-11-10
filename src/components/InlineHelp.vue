@@ -27,11 +27,11 @@ const { t } = useI18n();
 </template>
 
 <style scoped>
-.help-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.help-label { min-width: 0; }
-.help-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; transition: var(--control-transition); }
-.help-button:active { scale: .94; transition-duration: var(--motion-press); }
-.help-button:hover, .help-button.active { background: var(--status-success-surface-l1); color: var(--text-brand); }
-.help-button:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
-.help-description { margin: 6px 0 8px; padding: 9px 11px; background: var(--surface-well); border-radius: var(--radius-control); corner-shape: var(--corner-shape); color: var(--text-secondary); font-size: 11px; font-weight: 400; line-height: 1.7; overflow-wrap: anywhere; }
+.help-heading { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; }
+.help-label { min-width: 0; line-height: var(--body-md-line-height); overflow-wrap: anywhere; }
+.help-button { --button-press-scale: .92; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; transition: var(--control-transition); }
+.help-button svg { display: block; }
+.help-button:hover, .help-button.active { background: var(--control-selection-surface); color: var(--interaction-ink); }
+.help-button:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 2px; }
+.help-description { margin: 6px 0 8px; padding: 10px 12px; background: var(--surface-well); border: 1px solid var(--surface-line); border-radius: var(--radius-control); corner-shape: var(--corner-shape); color: var(--text-secondary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); line-height: var(--body-md-line-height); overflow-wrap: anywhere; }
 </style>

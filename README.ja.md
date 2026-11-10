@@ -9,7 +9,7 @@
 
 [🌐 公式サイト](https://ningzixi.github.io/mason/) · [📝 更新履歴](https://github.com/NingZiXi/mason/releases) · [🐛 問題を報告](https://github.com/NingZiXi/mason/issues) · [👤 作者](https://github.com/NingZiXi)
 
-[简体中文](./README.md) · [English](./README.en.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md)
+[简体中文](./README.zh-CN.md) · [English](./README.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md)
 
 [![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#開発環境)
 
@@ -43,6 +43,7 @@ Mason は **Tauri 2 + Python (build123d)** を使ったデスクトップアプ�
 - G02/G03 の円弧、複数行の D コード、異形基板の輪郭を解析
 - 円形・長方形・長円形・角丸長方形・多角形・領域塗りのパッドに対応
 - 同一基板の配列と異なる基板の混載パネルに対応し、パネル全体または特定の基板を選択可能
+- PCB ステンシルモードで有効な外形がない場合はパッド範囲から推定し、推定であることを表示して書き出し前に確認
 
 ### ステンシル治具モード
 
@@ -80,7 +81,7 @@ Mason は **Tauri 2 + Python (build123d)** を使ったデスクトップアプ�
 - 初回操作ガイド、システムに合わせたライト・ダークテーマ
 - 簡体字中国語 / 英語 / 日本語 / 韓国語。手動選択またはシステム言語に合わせて選択し、未対応言語は英語にフォールバック
 - アプリ内の更新確認・ダウンロード・インストール。起動時の確認は設定で変更可能
-- STL / STEP の書き出し。フォルダー名を指定でき、同名の場合は番号を自動追加
+- STL / STEP の書き出し。フォルダー名を指定でき、同名の場合は番号を自動追加。全部品の生成成功後に最終フォルダーを作成し、失敗時は今回の一時ファイルを削除
 
 ---
 
@@ -240,7 +241,7 @@ mason/
 
 **Q: Gerber ZIP を読み込めません。**
 
-外形には `.GKO` / `.GM1` / `Edge.Cuts`、PCB ステンシルには `.GTP` / `.GBP` などのペースト層が必要です。ZIP に必要なレイヤーと認識できるファイル名があるか確認してください。
+外形は `.GKO` / `.GM1` / `Edge.Cuts` から認識し、PCB ステンシルには `.GTP` / `.GBP` などのペースト層が必要です。このモードで有効な外形がない場合はパッド範囲から推定するため、書き出し前に確認してください。解析に失敗した場合は ZIP 内のレイヤーとファイル名を確認してください。
 
 **Q: パッドと開口が一致しません。**
 

@@ -1,0 +1,503 @@
+/* Rose interaction and cobalt accents on a clear white workspace.
+   The skin is independent of the light / dark preference. */
+:root {
+  /* The settings sample also reads these while the classic skin is active. */
+  --sakura-accent: #4169D8;
+  --sakura-accent-hover: #365CC5;
+  --sakura-accent-active: #2E50B0;
+}
+
+html[data-skin='sakura'] {
+  --corner-shape: round;
+  --corner-scale: 1;
+  --radius-control: 12px;
+  --radius-inner: 9px;
+  --radius-panel: 22px;
+  --radius-dialog: 26px;
+  --radius-popover: 16px;
+
+  --bg-base-default: #FFFFFF;
+  --bg-base-secondary: #FFFFFF;
+  --bg-base-tertiary: #EDF0F1;
+  --bg-overlay-l1: rgba(44, 48, 52, .025);
+  --bg-overlay-l2: rgba(44, 48, 52, .05);
+  --bg-overlay-l3: rgba(44, 48, 52, .09);
+  --bg-overlay-l4: rgba(44, 48, 52, .14);
+  --bg-menu: #FFFFFF;
+  --bg-invert: #2C3034;
+  --scrim: rgba(255, 255, 255, .96);
+
+  --surface-sidebar: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-well: #FFFFFF;
+  --surface-selected: #FFFFFF;
+  --surface-line: #E5E9EA;
+  --surface-card-heading: var(--surface-raised);
+  --surface-highlight: transparent;
+  --shadow-card: none;
+  --shadow-card-hover: none;
+  --shadow-control: 0 0 0 1px rgba(44, 48, 52, .07);
+  --shadow-float: 0 16px 44px rgba(44, 48, 52, .08);
+
+  --bg-brand: #D85C8A;
+  --bg-brand-hover: #DE6693;
+  --bg-brand-active: #CE527F;
+  --bg-brand-disabled: rgba(216, 92, 138, .24);
+  --bg-brand-popup: #FBEAF1;
+  --brand-accent: var(--sakura-accent);
+  --brand-accent-hover: var(--sakura-accent-hover);
+  --brand-accent-active: var(--sakura-accent-active);
+  --brand-accent-surface: #EDF2FF;
+  --settings-logo-accent: #A9C7FF;
+  --skin-petal: #F5DCE8;
+  --skin-sky: var(--brand-accent);
+  --skin-sky-surface: #EDF2FF;
+  --skin-selection: #FBEAF1;
+  --confirmation-action: var(--bg-brand);
+  --confirmation-action-hover: var(--bg-brand-hover);
+  --confirmation-action-active: var(--bg-brand-active);
+  --control-selection-surface: var(--skin-selection);
+  --skin-canvas: #FFFFFF;
+  --outline-preview-fill: rgba(216, 92, 138, .12);
+  --outline-preview-stroke: var(--text-brand);
+  --schematic-accent-fill: rgba(216, 92, 138, .14);
+  --parameter-slider-track: #F6DCE7;
+
+  --text-default: #2C3034;
+  --text-secondary: #575F65;
+  --text-tertiary: #6E747A;
+  --text-disabled: #A4AAAE;
+  --text-onbrand: #171019;
+  --text-onaccent: #FFFFFF;
+  --control-mark: #FFFFFF;
+  --text-on-success: #FFFFFF;
+  --text-ondanger: #FFFFFF;
+  --text-brand: #AD3E69;
+  --text-brand-hover: #983257;
+  --interaction-ink: var(--text-brand);
+  --interaction-border: var(--text-brand);
+  --accent-ink: #365CC5;
+  --icon-default: var(--text-default);
+  --icon-secondary: var(--text-secondary);
+  --icon-tertiary: var(--text-tertiary);
+  --icon-disabled: var(--text-disabled);
+  --icon-onbrand: var(--text-onbrand);
+  --icon-brand: var(--text-brand);
+
+  --border-neutral-l1: #E5E9EA;
+  --border-neutral-l2: #D8DFE1;
+  --border-neutral-l3: #B7C1C5;
+  --border-brand: var(--interaction-border);
+
+  --brand-50: #FFF9FC;
+  --brand-100: #FBEAF1;
+  --brand-200: #F6DCE7;
+  --brand-300: #EBB8CE;
+  --brand-400: #E599B8;
+  --brand-500: #DE789F;
+  --brand-600: #D85C8A;
+  --brand-700: #AD3E69;
+  --brand-grey-50: #FFFFFF;
+  --brand-grey-100: #FFFFFF;
+  --brand-grey-200: #EDF0F1;
+  --brand-grey-300: #D8DFE1;
+  --brand-grey-400: #A4AAAE;
+  --brand-grey-500: #6E747A;
+  --brand-grey-600: #626B71;
+  --brand-grey-700: #575F65;
+  --brand-grey-800: #40494E;
+  --brand-grey-900: #2C3034;
+
+  /* Completed states follow the rose UI; cobalt identifies output and PCB. */
+  --status-success-default: var(--text-brand);
+  --status-success-surface-l1: var(--skin-selection);
+  --status-warning-default: #985D18;
+  --status-warning-surface-l1: #FFF2DE;
+  --status-error-default: #C24C54;
+  --status-error-surface-l1: #FCECEE;
+  --status-primary-default: #536C91;
+  --status-primary-surface-l1: #EDF1F7;
+
+  --inspection-original: #3E5FA4;
+  --inspection-opening: var(--brand-accent);
+  --inspection-filtered: #C59B32;
+  --inspection-filtered-stroke: #A67D21;
+  --inspection-closed: #C56E75;
+  --inspection-closed-stroke: #B95760;
+  --inspection-manual-open: var(--brand-accent);
+  --inspection-selection: #AD3E69;
+  --inspection-board-fill: #FFFFFF;
+  --inspection-board-stroke: #3E5FA4;
+  --panel-board-color: #3E5FA4;
+  --import-warning-text: var(--status-warning-default);
+
+  --el-color-primary: var(--bg-brand);
+  --el-color-primary-light-3: #DE789F;
+  --el-color-primary-light-5: #E599B8;
+  --el-color-primary-light-7: #EBB8CE;
+  --el-color-primary-light-8: #F6DCE7;
+  --el-color-primary-light-9: #FBEAF1;
+  --el-color-primary-dark-2: #CE527F;
+  --el-color-success: var(--status-success-default);
+  --el-color-success-light-3: color-mix(in srgb, var(--status-success-default) 75%, var(--surface-raised));
+  --el-color-success-light-5: color-mix(in srgb, var(--status-success-default) 55%, var(--surface-raised));
+  --el-color-success-light-7: color-mix(in srgb, var(--status-success-default) 30%, var(--surface-raised));
+  --el-color-success-light-8: color-mix(in srgb, var(--status-success-default) 20%, var(--surface-raised));
+  --el-color-success-light-9: var(--status-success-surface-l1);
+  --el-color-success-dark-2: color-mix(in srgb, var(--status-success-default) 85%, var(--text-default));
+  --el-color-warning: var(--status-warning-default);
+  --el-color-warning-light-3: color-mix(in srgb, var(--status-warning-default) 75%, var(--surface-raised));
+  --el-color-warning-light-5: color-mix(in srgb, var(--status-warning-default) 55%, var(--surface-raised));
+  --el-color-warning-light-7: color-mix(in srgb, var(--status-warning-default) 30%, var(--surface-raised));
+  --el-color-warning-light-8: color-mix(in srgb, var(--status-warning-default) 20%, var(--surface-raised));
+  --el-color-warning-light-9: var(--status-warning-surface-l1);
+  --el-color-warning-dark-2: color-mix(in srgb, var(--status-warning-default) 85%, var(--text-default));
+  --el-color-error: var(--status-error-default);
+  --el-color-danger: var(--status-error-default);
+  --el-color-error-light-3: color-mix(in srgb, var(--status-error-default) 75%, var(--surface-raised));
+  --el-color-error-light-5: color-mix(in srgb, var(--status-error-default) 55%, var(--surface-raised));
+  --el-color-error-light-7: color-mix(in srgb, var(--status-error-default) 30%, var(--surface-raised));
+  --el-color-error-light-8: color-mix(in srgb, var(--status-error-default) 20%, var(--surface-raised));
+  --el-color-error-light-9: var(--status-error-surface-l1);
+  --el-color-error-dark-2: color-mix(in srgb, var(--status-error-default) 85%, var(--text-default));
+  --el-color-danger-light-3: color-mix(in srgb, var(--status-error-default) 92%, var(--text-default));
+  --el-color-danger-light-5: var(--el-color-error-light-5);
+  --el-color-danger-light-7: var(--el-color-error-light-7);
+  --el-color-danger-light-8: var(--el-color-error-light-8);
+  --el-color-danger-light-9: var(--el-color-error-light-9);
+  --el-color-danger-dark-2: var(--el-color-error-dark-2);
+  --el-color-info: var(--text-tertiary);
+  --el-color-info-light-3: color-mix(in srgb, var(--text-tertiary) 75%, var(--surface-raised));
+  --el-color-info-light-5: color-mix(in srgb, var(--text-tertiary) 55%, var(--surface-raised));
+  --el-color-info-light-7: color-mix(in srgb, var(--text-tertiary) 30%, var(--surface-raised));
+  --el-color-info-light-8: color-mix(in srgb, var(--text-tertiary) 20%, var(--surface-raised));
+  --el-color-info-light-9: var(--surface-well);
+  --el-color-info-dark-2: color-mix(in srgb, var(--text-tertiary) 85%, var(--text-default));
+  --el-text-color-primary: var(--text-default);
+  --el-text-color-regular: var(--text-secondary);
+  --el-text-color-secondary: var(--text-tertiary);
+  --el-text-color-placeholder: var(--text-tertiary);
+  --el-text-color-disabled: var(--text-disabled);
+  --el-border-color: var(--border-neutral-l2);
+  --el-border-color-light: var(--border-neutral-l1);
+  --el-border-color-lighter: rgba(44, 48, 52, .06);
+  --el-border-color-extra-light: rgba(44, 48, 52, .04);
+  --el-border-color-dark: rgba(44, 48, 52, .22);
+  --el-border-color-darker: var(--border-neutral-l3);
+  --el-fill-color: var(--bg-overlay-l2);
+  --el-fill-color-light: var(--bg-overlay-l1);
+  --el-fill-color-lighter: rgba(44, 48, 52, .02);
+  --el-fill-color-extra-light: rgba(44, 48, 52, .01);
+  --el-fill-color-blank: var(--surface-raised);
+  --el-bg-color: var(--surface-raised);
+  --el-bg-color-page: var(--bg-base-secondary);
+  --el-bg-color-overlay: var(--surface-raised);
+  --el-box-shadow: var(--shadow-control);
+  --el-box-shadow-light: var(--shadow-control);
+  --el-disabled-bg-color: var(--bg-overlay-l1);
+  --el-disabled-text-color: var(--text-disabled);
+  --el-disabled-border-color: var(--border-neutral-l1);
+
+  /* Compatibility aliases for the floating measurement controls. */
+  --bg-elevated: var(--surface-raised);
+  --bg-page: var(--surface-well);
+  --border-lighter: var(--surface-line);
+}
+
+html.dark[data-skin='sakura'] {
+  --bg-base-default: #20262A;
+  --bg-base-secondary: #151A1D;
+  --bg-base-tertiary: #353D42;
+  --bg-overlay-l1: rgba(239, 244, 244, .045);
+  --bg-overlay-l2: rgba(239, 244, 244, .08);
+  --bg-overlay-l3: rgba(239, 244, 244, .13);
+  --bg-overlay-l4: rgba(239, 244, 244, .18);
+  --bg-menu: #293135;
+  --bg-invert: #F1F4F4;
+  --scrim: rgba(21, 26, 29, .96);
+
+  --surface-sidebar: #191F23;
+  --surface-raised: #293135;
+  --surface-well: #20262A;
+  --surface-selected: #384247;
+  --surface-line: rgba(239, 244, 244, .11);
+  --shadow-control: 0 0 0 1px rgba(239, 244, 244, .11);
+  --shadow-float: 0 18px 48px rgba(0, 0, 0, .28);
+
+  --bg-brand: #F0AAC6;
+  --bg-brand-hover: #F6BAD1;
+  --bg-brand-active: #DF99B5;
+  --bg-brand-disabled: rgba(240, 170, 198, .22);
+  --bg-brand-popup: #48313E;
+  --brand-accent-surface: #293652;
+  --settings-logo-accent: var(--brand-accent);
+  --skin-petal: #674656;
+  --skin-sky: var(--brand-accent);
+  --skin-sky-surface: #293652;
+  --skin-selection: #432E3B;
+  --skin-canvas: #171D21;
+  --outline-preview-fill: rgba(240, 170, 198, .15);
+  --schematic-accent-fill: rgba(240, 170, 198, .18);
+  --parameter-slider-track: #553B4A;
+
+  --text-default: #F1F4F4;
+  --text-secondary: #C5D0D0;
+  --text-tertiary: #9FAEB0;
+  --text-disabled: #738086;
+  --text-onbrand: #171019;
+  --text-onaccent: #FFFFFF;
+  --control-mark: #21131E;
+  --text-on-success: var(--text-onbrand);
+  --text-ondanger: var(--text-onbrand);
+  --text-brand: #F3B6CE;
+  --text-brand-hover: #FAD0E1;
+  --accent-ink: #8EB2FF;
+  --border-neutral-l1: rgba(239, 244, 244, .09);
+  --border-neutral-l2: rgba(239, 244, 244, .16);
+  --border-neutral-l3: rgba(239, 244, 244, .30);
+
+  --brand-50: #30232C;
+  --brand-100: #392A35;
+  --brand-200: #48313E;
+  --brand-300: #795267;
+  --brand-400: #B77C98;
+  --brand-500: #DF99B5;
+  --brand-600: #F0AAC6;
+  --brand-700: #F3B6CE;
+  --brand-grey-50: #20262A;
+  --brand-grey-100: #293135;
+  --brand-grey-200: #353D42;
+  --brand-grey-300: #4B5A5F;
+  --brand-grey-400: #738086;
+  --brand-grey-500: #9FAEB0;
+  --brand-grey-600: #B1C1C2;
+  --brand-grey-700: #C5D0D0;
+  --brand-grey-800: #DEE7E7;
+  --brand-grey-900: #F1F4F4;
+
+  --status-success-default: var(--text-brand);
+  --status-success-surface-l1: var(--skin-selection);
+  --status-warning-default: #E8C38E;
+  --status-warning-surface-l1: #443B2E;
+  --status-error-default: #ED9AA3;
+  --status-error-surface-l1: #472D33;
+  --status-primary-default: #A4B9D6;
+  --status-primary-surface-l1: #2C3748;
+
+  --inspection-original: #91B0F0;
+  --inspection-opening: var(--accent-ink);
+  --inspection-filtered: #E5C56D;
+  --inspection-filtered-stroke: #CDAA46;
+  --inspection-closed: #ED9AA3;
+  --inspection-closed-stroke: #DC7D89;
+  --inspection-manual-open: var(--accent-ink);
+  --inspection-selection: #F0AAC6;
+  --inspection-board-fill: #293135;
+  --inspection-board-stroke: #91B0F0;
+  --panel-board-color: #91B0F0;
+
+  --el-color-primary-light-3: #F6BAD1;
+  --el-color-primary-light-5: #FAD0E1;
+  --el-color-primary-light-7: #FDE5EE;
+  --el-color-primary-light-8: #48313E;
+  --el-color-primary-light-9: #392A35;
+  --el-color-primary-dark-2: #DF99B5;
+  --el-border-color-lighter: rgba(239, 244, 244, .07);
+  --el-border-color-extra-light: rgba(239, 244, 244, .045);
+  --el-border-color-dark: rgba(239, 244, 244, .22);
+  --el-fill-color-lighter: rgba(239, 244, 244, .025);
+  --el-fill-color-extra-light: rgba(239, 244, 244, .01);
+}
+
+/* Interaction stays rose; sky blue marks output and small accents. */
+html[data-skin='sakura'] :is(.brand-logo, .nav-indicator, .preset-status.is-saved,
+  .assembly-mode-btn.active, .el-select-dropdown__item.is-selected) {
+  background: var(--skin-selection);
+}
+html[data-skin='sakura'] .slot-step-dot[data-step]:not(.is-done),
+html[data-skin='sakura'] .app-sidebar :is(.preset-btn.active, .shape-btn.active, .notch-btn.active) {
+  background: var(--skin-selection);
+}
+html[data-skin='sakura'] .app-sidebar :is(.preset-btn.active, .shape-btn.active, .notch-btn.active) {
+  border-color: var(--interaction-border);
+}
+html[data-skin='sakura'] :is(.preset-group, .shape-row) {
+  --selection-background: var(--skin-selection);
+  --selection-border: var(--interaction-border);
+}
+html[data-skin='sakura'] :is(.help-button:hover, .help-button.active, .sidebar-toggle:hover, .sidebar-toggle:focus-visible) {
+  background: var(--skin-selection);
+}
+html[data-skin='sakura'] .app-sidebar :is(.el-input__wrapper.is-focus, .el-select__wrapper.is-focused),
+html[data-skin='sakura'] .preset-name-dialog .el-input__wrapper.is-focus {
+  box-shadow: inset 0 0 0 1px var(--interaction-border), 0 0 0 3px var(--skin-selection);
+}
+html[data-skin='sakura'] .app-sidebar .el-slider__button,
+html[data-skin='sakura'] .app-logo {
+  box-shadow: none;
+}
+html[data-skin='sakura'] .app-sidebar :is(.el-slider__button:hover, .el-slider__button.dragging) {
+  box-shadow: 0 0 0 4px var(--skin-selection);
+}
+html[data-skin='sakura'] .app-sidebar .el-slider__button {
+  border-color: var(--interaction-border);
+}
+html[data-skin='sakura'] .app-shell .slot-step-dot.is-done {
+  color: var(--text-on-success);
+}
+html[data-skin='sakura'] .el-button--success:not(.is-plain) {
+  --el-button-text-color: var(--text-on-success);
+  --el-button-hover-text-color: var(--text-on-success);
+  --el-button-active-text-color: var(--text-on-success);
+  --el-button-disabled-text-color: var(--text-on-success);
+}
+html[data-skin='sakura'] .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  --el-button-text-color: var(--text-onbrand);
+  --el-button-hover-text-color: var(--text-onbrand);
+  --el-button-active-text-color: var(--text-onbrand);
+  --el-button-disabled-text-color: var(--text-onbrand);
+}
+html[data-skin='sakura'] .el-button--primary:is(.is-plain, .is-text, .is-link) {
+  --el-button-text-color: var(--interaction-ink);
+  --el-button-hover-text-color: var(--text-brand-hover);
+  --el-button-active-text-color: var(--text-brand-hover);
+  --el-button-disabled-text-color: var(--text-disabled);
+  color: var(--interaction-ink);
+}
+html[data-skin='sakura'] .el-button--primary:is(.is-plain, .is-text, .is-link):is(:hover, :active) {
+  color: var(--text-brand-hover);
+}
+html[data-skin='sakura'] .settings-dialog .setting-switch.is-on span,
+html[data-skin='sakura'] .el-switch.is-checked .el-switch__action,
+html[data-skin='sakura'] .el-checkbox__input.is-indeterminate .el-checkbox__inner::before,
+html[data-skin='sakura'] .el-radio__input.is-checked .el-radio__inner::after {
+  background: var(--control-mark);
+  box-shadow: none;
+}
+html[data-skin='sakura'] .el-checkbox__input.is-checked .el-checkbox__inner::after {
+  border-color: var(--control-mark);
+}
+html[data-skin='sakura'] .app-shell .brand-trace {
+  stroke: var(--interaction-ink);
+}
+html[data-skin='sakura'] .app-shell .brand-start {
+  fill: var(--interaction-ink);
+}
+html[data-skin='sakura'] .app-shell :is(.brand-trail, .brand-ring) {
+  stroke: var(--brand-accent);
+}
+html[data-skin='sakura'] .app-shell .brand-end {
+  fill: var(--brand-accent);
+}
+html[data-skin='sakura'] .app-shell :is(.auto-hint, .info-row) .hint-icon.ok {
+  color: var(--status-success-default);
+}
+html[data-skin='sakura'] .app-sidebar .dropzone.active {
+  border-color: var(--interaction-border);
+  background: var(--skin-selection);
+}
+html[data-skin='sakura'] .app-sidebar .dropzone.active .drop-icon {
+  color: var(--interaction-ink);
+}
+html[data-skin='sakura'] .preview-wrapper .action-btn.active {
+  background: var(--skin-selection);
+  border-color: var(--interaction-border);
+  color: var(--interaction-ink);
+}
+html[data-skin='sakura'] .preview-wrapper .action-btn.active:hover {
+  background: var(--bg-brand-popup);
+}
+html[data-skin='sakura'] .decision-controls button.open.active {
+  color: var(--interaction-ink);
+}
+html[data-skin='sakura'] :is(button, a, [role='button'], input[type='checkbox'], input[type='radio']):focus-visible {
+  outline-color: var(--interaction-border);
+}
+html[data-skin='sakura'] .el-checkbox__input.is-checked + .el-checkbox__label,
+html[data-skin='sakura'] .el-radio__input.is-checked + .el-radio__label,
+html[data-skin='sakura'] .el-dropdown-menu__item:not(.is-disabled):is(:hover, :focus) {
+  color: var(--text-brand);
+}
+html[data-skin='sakura'] .el-radio-button {
+  --el-radio-button-checked-text-color: var(--text-onbrand);
+}
+html[data-skin='sakura'] .el-radio-button:not(.is-active):not(.is-disabled) .el-radio-button__inner:hover {
+  color: var(--interaction-ink);
+}
+html[data-skin='sakura'] .el-button:not(.el-button--primary, .el-button--success, .el-button--warning, .el-button--danger, .el-button--info) {
+  --el-button-hover-text-color: var(--interaction-ink);
+  --el-button-active-text-color: var(--interaction-ink);
+  --el-button-hover-border-color: var(--interaction-border);
+  --el-button-active-border-color: var(--interaction-border);
+}
+
+/* The clamp diagram uses the same rose grip and blue PCB as the model. */
+html[data-skin='sakura'] .app-sidebar .clamp-plan {
+  --grip-fill: rgba(216, 92, 138, .22);
+  --grip-ink: #AD3E69;
+  --pcb-fill: #DCE6FA;
+  --pcb-ink: #3E5FA4;
+}
+html.dark[data-skin='sakura'] .app-sidebar .clamp-plan {
+  --grip-fill: rgba(240, 170, 198, .22);
+  --grip-ink: #F3B6CE;
+  --pcb-fill: #2B3A5B;
+  --pcb-ink: #91B0F0;
+}
+
+/* Keep the workspace flat; the model supplies the depth. */
+html[data-skin='sakura'] .preview-wrapper .canvas-container,
+html[data-skin='sakura'] .preview-wrapper.is-dark .canvas-container {
+  background: var(--skin-canvas);
+}
+html[data-skin='sakura'] :is(.inspection-canvas, .map-surface) {
+  background-image: none;
+}
+html[data-skin='sakura'] :is(.viewport-tools, .empty-card, .assembly-explosion) {
+  box-shadow: none;
+}
+/* Opaque surfaces keep the white clear over both the canvas and models. */
+html[data-skin='sakura'] .preview-wrapper :is(.viewport-tools, .empty-card, .assembly-explosion) {
+  background: var(--surface-raised);
+  backdrop-filter: none;
+}
+html[data-skin='sakura'] .preview-wrapper .measure-panel,
+html[data-skin='sakura'] .preview-wrapper .measure-tag,
+html[data-skin='sakura'] .preview-wrapper.is-dark .measure-panel,
+html[data-skin='sakura'] .preview-wrapper.is-dark .measure-tag {
+  background: var(--surface-raised);
+}
+html[data-skin='sakura'] .preview-wrapper .measure-panel,
+html[data-skin='sakura'] .preview-wrapper.is-dark .measure-panel {
+  border-color: var(--surface-line);
+  box-shadow: var(--shadow-control);
+}
+html[data-skin='sakura'] .preview-wrapper .canvas-container .preview-overlays > .overlay,
+html[data-skin='sakura'] .preview-wrapper.is-dark .canvas-container .preview-overlays > .overlay {
+  background: color-mix(in srgb, var(--skin-canvas) 90%, transparent);
+}
+html[data-skin='sakura'] .preview-wrapper .canvas-container.has-preview .preview-overlays > .overlay,
+html[data-skin='sakura'] .preview-wrapper.is-dark .canvas-container.has-preview .preview-overlays > .overlay {
+  background: color-mix(in srgb, var(--skin-canvas) 36%, transparent);
+}
+html[data-skin='sakura'] .preview-wrapper .canvas-container .preview-overlays > .overlay.error,
+html[data-skin='sakura'] .preview-wrapper.is-dark .canvas-container .preview-overlays > .overlay.error,
+html[data-skin='sakura'] .preview-wrapper .canvas-container.has-preview .preview-overlays > .overlay.error,
+html[data-skin='sakura'] .preview-wrapper.is-dark .canvas-container.has-preview .preview-overlays > .overlay.error {
+  background: var(--scrim);
+}
+html[data-skin='sakura'] .export-actions:not(.is-disabled):hover {
+  box-shadow: none;
+}
+/* Keep the accent recognisable before import. Fade the disabled label rather
+   than blending the entire cobalt button into the white canvas. */
+html[data-skin='sakura'] .preview-wrapper .export-actions .action-btn.primary:disabled {
+  opacity: 1;
+  color: color-mix(in srgb, var(--text-onaccent) 55%, var(--brand-accent));
+}
+
+html[data-skin='sakura'] ::selection,
+html.dark[data-skin='sakura'] ::selection {
+  background: var(--bg-brand-popup);
+  color: var(--text-default);
+}

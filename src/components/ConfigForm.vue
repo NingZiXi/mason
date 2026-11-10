@@ -6,6 +6,7 @@ import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
 import ClampPlanPreview from "./ClampPlanPreview.vue";
+import SlidingIndicator from "./SlidingIndicator.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -168,11 +169,13 @@ function applyPreset(id: string) {
     <!-- 结构预设:一键套用常用螺丝 + 结构高度组合 -->
     <InlineHelp id="config-presetHint" class="section-help" :label="t('config.preset')" :text="t('config.presetHint')"><span>{{ t('config.preset') }}</span></InlineHelp>
     <div class="preset-group">
+      <SlidingIndicator />
       <button
         v-for="p in STRUCTURE_PRESETS"
         :key="p.id"
         class="preset-btn"
         :class="{ active: appliedPreset === p.id }"
+        :aria-pressed="appliedPreset === p.id"
         @click="applyPreset(p.id)"
       >{{ t(p.label) }}</button>
     </div>
@@ -220,13 +223,14 @@ function applyPreset(id: string) {
       />
     </div>
     </div>
-    <!-- 导入提示:长宽已从板框自动识别,板厚是物理属性须人工确认 -->
-    <div v-if="c.gerberFilename" class="auto-hint">
+    <!-- 导入提示需区分真实板框与焊盘估算范围。 -->
+    <div v-if="c.gerberFilename" class="auto-hint" :class="{ 'is-estimated': store.gerberOutlineSource === 'pads-bounds' }">
       <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
         <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-        <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+        <path v-if="store.gerberOutlineSource === 'pads-bounds'" d="M8 4.5v4M8 11v.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+        <path v-else d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <span>{{ t('config.gerberApplied', { f: c.gerberFilename }) }}</span>
+      <span>{{ t(store.gerberOutlineSource === 'pads-bounds' ? 'config.gerberEstimated' : 'config.gerberApplied', { f: c.gerberFilename }) }}</span>
     </div>
 
     </section>
@@ -290,7 +294,7 @@ function applyPreset(id: string) {
       <div class="platter-lip-slider">
         <label class="field-label">
           <span class="lbl-l">{{ t('config.stencilLip') }}</span>
-          <strong class="lip-current">{{ lipValue.toFixed(1) }} <small>mm</small></strong>
+          <strong class="lip-current"><span>{{ lipValue.toFixed(1) }}</span><small>mm</small></strong>
         </label>
         <el-slider
           :model-value="lipValue"
@@ -299,7 +303,7 @@ function applyPreset(id: string) {
           :max="Math.max(lipMax, 0.1)"
           :step="0.1"
           :show-tooltip="true"
-          :format-tooltip="(v: number) => `${t('config.stencilLip')} = ${v.toFixed(1)}mm`"
+          :format-tooltip="(v: number) => `${t('config.stencilLip')} = ${v.toFixed(1)} mm`"
           :disabled="lipMax <= 0"
         />
         <div class="slider-readout">
@@ -468,39 +472,41 @@ function applyPreset(id: string) {
           <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
         </el-checkbox>
       </div>
-      <div v-if="c.useHexNut" class="field-row">
+      <MotionCollapse :open="c.useHexNut">
+        <div class="field-row">
+          <div class="field">
+            <label class="field-label">{{ t('config.nutAcrossFlats') }}</label>
+            <el-input-number
+              v-model="c.nutAcrossFlats"
+              :min="3" :max="15" :step="0.1" :precision="2"
+              size="small" style="width: 100%"
+            />
+          </div>
+          <div class="field">
+            <label class="field-label">{{ t('config.nutHeight') }}</label>
+            <el-input-number
+              v-model="c.nutHeight"
+              :min="1.5" :max="6" :step="0.1" :precision="2"
+              size="small" style="width: 100%"
+            />
+          </div>
+        </div>
         <div class="field">
-          <label class="field-label">{{ t('config.nutAcrossFlats') }}</label>
+          <InlineHelp id="config-nutPocketClearanceHint" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')"><span class="field-label">{{ t('config.nutPocketClearance') }}</span></InlineHelp>
           <el-input-number
-            v-model="c.nutAcrossFlats"
-            :min="3" :max="15" :step="0.1" :precision="2"
+            v-model="c.nutPocketClearance"
+            :min="0" :max="1" :step="0.05" :precision="2"
             size="small" style="width: 100%"
           />
         </div>
-        <div class="field">
-          <label class="field-label">{{ t('config.nutHeight') }}</label>
-          <el-input-number
-            v-model="c.nutHeight"
-            :min="1.5" :max="6" :step="0.1" :precision="2"
-            size="small" style="width: 100%"
-          />
+        <div class="auto-hint">
+          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ t('config.useHexNutHint') }}</span>
         </div>
-      </div>
-      <div v-if="c.useHexNut" class="field">
-        <InlineHelp id="config-nutPocketClearanceHint" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')"><span class="field-label">{{ t('config.nutPocketClearance') }}</span></InlineHelp>
-        <el-input-number
-          v-model="c.nutPocketClearance"
-          :min="0" :max="1" :step="0.05" :precision="2"
-          size="small" style="width: 100%"
-        />
-      </div>
-      <div v-if="c.useHexNut" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('config.useHexNutHint') }}</span>
-      </div>
+      </MotionCollapse>
 
       <!-- 重置(只重置高级参数,基础区保留) -->
       <button class="reset-btn" @click="resetAll">{{ t('config.reset') }}</button>
@@ -575,11 +581,11 @@ function applyPreset(id: string) {
 }
 
 .section-label {
-  font-size: 11px;
+  font-size: var(--heading-2xs-font-size);
+  line-height: var(--body-md-line-height);
   font-weight: var(--font-weight-strong);
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  letter-spacing: 0;
   margin: 20px 0 12px 0;
 }
 
@@ -667,13 +673,18 @@ function applyPreset(id: string) {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 18px;
+  overflow-wrap: anywhere;
 }
+.auto-hint > span { min-width: 0; }
 
 .auto-hint .hint-icon {
-  color: var(--bg-brand);
+  color: var(--interaction-ink);
   flex-shrink: 0;
   margin-top: 2px;
 }
+
+.auto-hint.is-estimated { background: var(--status-warning-surface-l1); }
+.auto-hint.is-estimated .hint-icon { color: var(--status-warning-default); }
 
 .auto-hint strong {
   color: var(--text-brand);
@@ -709,9 +720,9 @@ function applyPreset(id: string) {
 }
 
 .notch-btn.active {
-  border-color: #3E7D62;
-  background: #E8F1EC;
-  color: #3E7D62;
+  border-color: var(--interaction-border);
+  background: var(--control-selection-surface);
+  color: var(--text-brand);
 }
 
 .notch-btn.notch-up { top: 0; left: 50%; transform: translateX(-50%); }
@@ -732,6 +743,7 @@ function applyPreset(id: string) {
   float: right;
   color: var(--text-tertiary);
   font-weight: var(--font-weight-default);
+  font-variant-numeric: tabular-nums;
 }
 
 .advanced-toggle {
@@ -787,17 +799,25 @@ function applyPreset(id: string) {
 
 /* 结构预设按钮组:横向三段式,active 高亮 */
 .preset-group {
+  --selection-background: var(--control-selection-surface);
+  --selection-border: var(--bg-brand);
+  --selection-shadow: none;
+  --selection-radius: var(--radius-control);
+  position: relative;
+  isolation: isolate;
   display: flex;
   gap: 8px;
   margin-bottom: 12px;
 }
 
-.preset-btn {
+.preset-group .preset-btn {
+  position: relative;
+  z-index: 1;
   flex: 1;
   padding: 7px 8px;
-  border: 1px solid var(--border-neutral-l2);
+  border: 1px solid transparent;
   border-radius: var(--radius-control); corner-shape: var(--corner-shape);
-  background: var(--bg-secondary, transparent);
+  background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
@@ -805,15 +825,17 @@ function applyPreset(id: string) {
   transition: var(--control-transition);
 }
 
-.preset-btn:hover {
+.preset-btn:not(.active) { border-color: var(--border-neutral-l2); }
+.preset-btn:hover:not(.active) {
   border-color: var(--border-neutral-l3);
+  background: var(--surface-well);
   color: var(--text-default);
 }
 
-.preset-btn.active {
-  border-color: #3E7D62;
-  background: #E8F1EC;
-  color: #3E7D62;
+.preset-group .preset-btn.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-brand);
 }
 
 /* 双向滑块卡片:凸台宽 ⇄ 唇宽 —— 独立卡片突出,整行独占 */
@@ -826,14 +848,15 @@ function applyPreset(id: string) {
   margin-bottom: 0;
 }
 .lip-section-heading { margin-bottom: 10px; }
-.lip-current { color: var(--text-brand); font-family: var(--font-family-metric); font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.lip-current small { color: var(--text-tertiary); font-size: 10px; font-weight: 400; }
+.lip-current { display: inline-flex; align-items: baseline; gap: 4px; flex-shrink: 0; color: var(--text-brand); font-family: var(--font-family-metric); font-size: 16px; font-weight: var(--font-weight-strong); line-height: 22px; font-variant-numeric: tabular-nums; }
+.lip-current small { color: var(--text-tertiary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); }
 .platter-lip-slider { padding-inline: 4px; }
 
 .platter-lip-slider .field-label {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 8px;
   margin-bottom: 2px;
 }
 
@@ -856,11 +879,7 @@ function applyPreset(id: string) {
 }
 
 .platter-lip-slider :deep(.el-slider__runway) {
-  background: linear-gradient(
-    to right,
-    rgba(62, 125, 98, 0.06) 0%,
-    rgba(62, 125, 98, 0.22) 100%
-  );
+  background: var(--parameter-slider-track);
 }
 
 .platter-lip-card .auto-hint {
@@ -909,6 +928,7 @@ function applyPreset(id: string) {
   font-size: 13px;
   font-weight: var(--font-weight-medium);
   color: var(--text-default);
+  font-variant-numeric: tabular-nums;
 }
 
 .slider-readout .rd-eq {

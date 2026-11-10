@@ -1896,10 +1896,17 @@ def serve():
             {"id": 2, "ok": true, "path": "C:/.../jig-xxx.stl"}
             {"id": 2, "ok": false, "error": "..."}
 
+    stdin/stdout 固定 UTF-8,不随 Windows 系统语言或继承的终端编码变化。
     stdin 关闭(父进程退出)即自然退出。stderr 仅写日志,不参与协议。
     """
     import tempfile
     import uuid as _uuid
+    # Rust sends and reads UTF-8 bytes. A GBK pipe can round-trip a JSON path
+    # while writing the file under a different, mojibake directory on disk.
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="strict")
     metrics = MetricsCache()
 
     def respond(obj):

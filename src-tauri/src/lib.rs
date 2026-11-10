@@ -7,6 +7,7 @@ mod error;
 mod generation;
 mod python_detect;
 mod scad;
+mod skin_icon;
 
 pub fn run() {
     tauri::Builder::default()
@@ -28,7 +29,10 @@ pub fn run() {
             commands::export_stl,
             commands::read_dropped_file,
             commands::write_file_bytes,
-            commands::create_export_dir,
+            commands::begin_model_export,
+            commands::commit_model_export,
+            commands::abort_model_export,
+            skin_icon::set_skin_icon,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

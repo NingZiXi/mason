@@ -37,6 +37,9 @@ export interface GerberStencilResult {
   bboxCenter: { x: number; y: number };
   /** 文件名(诊断) */
   outlineFile: string;
+  /** Whether the PCB boundary came from Gerber or was estimated from pad bounds. */
+  outlineSource: 'gerber' | 'pads-bounds';
+  outlineFallbackReason?: 'missing' | 'invalid';
   topPasteFile: string | null;
   bottomPasteFile: string | null;
   /** 焊盘数量 */
@@ -56,36 +59,43 @@ export function useGerberStencil() {
   const failure = shallowRef<unknown>(null);
   const error = computed(() => formatImportError(failure.value));
   const result = ref<GerberStencilResult | null>(null);
+  let revision = 0;
 
   const hasResult = computed(() => result.value !== null);
   const padCount = computed(() => result.value?.padCount ?? 0);
 
-  async function processFile(file: File): Promise<void> {
+  async function processFile(file: File): Promise<GerberStencilResult | null> {
+    const token = ++revision;
     loading.value = true;
     failure.value = null;
     result.value = null;
 
     try {
       const lower = file.name.toLowerCase();
+      let parsed: GerberStencilResult;
       if (lower.endsWith(".zip")) {
-        await processZip(file);
+        parsed = await processZip(file);
       } else if (
         lower.endsWith(".gtp") ||
         lower.endsWith(".gbp") ||
         lower.endsWith(".gbr")
       ) {
-        await processSingleGerber(file);
+        parsed = await processSingleGerber(file);
       } else {
         throw new GerberImportError('gerber.unsupportedPaste', { name: file.name });
       }
+      if (token !== revision) return null;
+      result.value = parsed;
+      return parsed;
     } catch (e) {
-      failure.value = e;
+      if (token === revision) failure.value = e;
+      return null;
     } finally {
-      loading.value = false;
+      if (token === revision) loading.value = false;
     }
   }
 
-  async function processZip(file: File): Promise<void> {
+  async function processZip(file: File): Promise<GerberStencilResult> {
     const { default: JSZip } = await import("jszip");
     const zip = await JSZip.loadAsync(file);
     const filenames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
@@ -117,7 +127,7 @@ export function useGerberStencil() {
       catch { console.warn("[gerber] ignored invalid FlyingProbeTesting.json"); }
     }
 
-    finalize(
+    return finalize(
       topText,
       bottomText,
       outlineText,
@@ -128,12 +138,12 @@ export function useGerberStencil() {
     );
   }
 
-  async function processSingleGerber(file: File): Promise<void> {
+  async function processSingleGerber(file: File): Promise<GerberStencilResult> {
     const text = await file.text();
     // 单文件模式:无板框 → 卡槽用锡膏层 bbox;扩展名判面,无法判断归 Top
     const lower = file.name.toLowerCase();
     const isBottom = lower.endsWith(".gbp") || lower.endsWith(".gpb");
-    finalize(
+    return finalize(
       isBottom ? null : text,
       isBottom ? text : null,
       null,
@@ -151,7 +161,7 @@ export function useGerberStencil() {
     bottomPasteFile: string | null,
     outlineFile: string,
     probeData?: unknown,
-  ): void {
+  ): GerberStencilResult {
     const topResult = topText ? extractPads(topText) : null;
     const bottomResult = bottomText ? extractPads(bottomText) : null;
     applyFlyingProbeRoles(topResult?.pads ?? [], bottomResult?.pads ?? [], probeData);
@@ -165,14 +175,20 @@ export function useGerberStencil() {
 
     // 板框:优先用 outline 层,否则用 pads 的 bbox 生成矩形
     let outline: GerberOutline;
+    let outlineSource: GerberStencilResult['outlineSource'] = 'gerber';
+    let outlineFallbackReason: GerberStencilResult['outlineFallbackReason'];
     if (outlineText) {
       outline = extractOutline(outlineText, { panel: true });
       if (outline.points.length < 3) {
         // 板框解析失败,回退到 pads bbox
         outline = bboxToOutline(allPads);
+        outlineSource = 'pads-bounds';
+        outlineFallbackReason = 'invalid';
       }
     } else {
       outline = bboxToOutline(allPads);
+      outlineSource = 'pads-bounds';
+      outlineFallbackReason = outlineFile === '(paste layer bounds)' ? 'missing' : 'invalid';
     }
 
     // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同
@@ -197,7 +213,7 @@ export function useGerberStencil() {
     };
     const applied = variants.panel;
 
-    result.value = {
+    return {
       outlinePoints: applied.outlinePoints,
       outlineHoles: applied.outlineHoles,
       topPads: applied.topPads ?? [],
@@ -206,6 +222,8 @@ export function useGerberStencil() {
       height: applied.height,
       bboxCenter: applied.center,
       outlineFile,
+      outlineSource,
+      ...(outlineFallbackReason ? { outlineFallbackReason } : {}),
       topPasteFile,
       bottomPasteFile,
       padCount: (applied.topPads?.length ?? 0) + (applied.bottomPads?.length ?? 0),
@@ -248,6 +266,7 @@ export function useGerberStencil() {
   }
 
   function reset(): void {
+    revision++;
     loading.value = false;
     failure.value = null;
     result.value = null;

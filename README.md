@@ -4,251 +4,252 @@
 
 # <img src="./public/logo.svg" height="48" style="vertical-align:bottom;margin-bottom:-10px;" /> Mason
 
-**从 Gerber 到 3D 打印钢网 — 一键生成 PCB 锡膏印刷工具**
-*Gerber 解析 · 参数化 CAD · 实时 3D 预览 · 零云依赖*
+**From Gerber to 3D-printable stencil — generate PCB solder paste printing tools in one click**
+*Gerber parsing · Parametric CAD · Real-time 3D preview · Zero cloud dependency*
 
-[🌐 官网](https://ningzixi.github.io/mason/) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [📝 更新日志](https://github.com/NingZiXi/mason/releases) · [🐛 反馈问题](https://github.com/NingZiXi/mason/issues) · [👤 作者主页](https://github.com/NingZiXi)
+[🌐 Website](https://ningzixi.github.io/mason/) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [📝 Changelog](https://github.com/NingZiXi/mason/releases) · [🐛 Report Issues](https://github.com/NingZiXi/mason/issues) · [👤 Author](https://github.com/NingZiXi)
 
-[![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#快速开始)
+[![CI](https://github.com/NingZiXi/mason/actions/workflows/ci.yml/badge.svg)](https://github.com/NingZiXi/mason/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-3E7D62.svg)](./LICENSE) [![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24C8DB.svg)](https://tauri.app) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883.svg)](https://vuejs.org) [![Rust](https://img.shields.io/badge/Rust-stable-DEA584.svg)](https://www.rust-lang.org) [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org) [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-3E7D62)](#getting-started)
 
-### ⬇️ 下载安装包
+### ⬇️ Download
 
 [![Windows](https://img.shields.io/badge/Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/NingZiXi/mason/releases/latest) [![macOS](https://img.shields.io/badge/macOS-222222?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/NingZiXi/mason/releases/latest) [![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/NingZiXi/mason/releases/latest)
 
-> 三个平台均提供预编译安装包，前往 [Releases](https://github.com/NingZiXi/mason/releases/latest) 下载对应版本。
+> Prebuilt installers are available for all three platforms. Get the latest from [Releases](https://github.com/NingZiXi/mason/releases/latest).
 
 </div>
 
 ---
 
-## 📌 概述
+## 📌 Overview
 
-Mason 是一款基于 Tauri 2 + Python (build123d) 的桌面应用，能将嘉立创 / JLCPCB 导出的 Gerber ZIP 文件直接转换为可 3D 打印的锡膏印刷工具。它提供两种工作模式，覆盖从原型验证到小批量生产的不同场景：
+**Mason** is a desktop application built with Tauri 2 + Python (build123d) that converts Gerber ZIP files exported from JLCPCB into 3D-printable solder paste printing tools. It offers two working modes covering different scenarios from prototyping to small-batch production:
 
-- **钢网夹具模式 (Jig)** — 生成 PCB 托盘、B 面底座和 A 面顶盖；金属钢网夹在底座与顶盖之间，再通过托盘上的四根定位柱定位落下进行印刷
-- **PCB 钢网模式 (Stencil)** — 直接根据锡膏层 (Paste Mask) 生成自带 PCB 卡槽的一体式钢网，独立使用无需夹具，适合快速原型
+- **Stencil Jig Mode** — Generates a PCB tray, B-side base, and A-side cover. The metal stencil is clamped between the base and cover, then the assembly drops onto the tray and is aligned by its four integral posts.
+- **PCB Stencil Mode** — Directly generates an all-in-one stencil with a built-in PCB pocket based on the Paste Mask layer. Works independently without a jig, perfect for rapid prototyping.
 
-核心设计目标是「拖入 Gerber → 导出 STL」的极简工作流，默认参数即可产出可用结果。
-
----
-
-## ✨ 特性
-
-### Gerber 解析
-- 自动识别板框层 (`.GKO` / `Edge.Cuts` / `.GM1`) 与锡膏层 (`.GTP` / `.GBP`)
-- 自研 RS-274X 解析器，支持 `%LM` 镜像、`%LR` 旋转、`%LS` 缩放等图层变换命令
-- 支持 G02/G03 弧线、多行 D 码、异形板框轮廓提取
-- 焊盘解析覆盖圆形 / 矩形 / 长圆形 / 圆角矩形 / 多边形 / 区域填充等光圈类型
-- 拼版识别支持相同板阵列和不同板混拼，可选择整版或其中一块子板
-
-### 钢网夹具模式
-- 四部分装配：PCB 托盘在最下方；B 面底座、金属钢网、A 面顶盖自下而上叠放，底座与顶盖夹紧钢网后通过托盘上的四根一体定位柱定位
-- 螺丝仅布置在 A/B 框周圈并按间距补位；四角是定位柱，不是螺丝。周圈螺丝支持 M2.5/M3/M3.5/M4/M5 等规格联动
-- 夹具尺寸按钢网尺寸自动计算 (20mm 步进)，同尺寸 PCB 可复用底座与顶盖
-- 异形 PCB 板框完整还原，卡槽间隙可调
-
-### PCB 钢网模式
-- 一体式钢网：PCB 外扩边框 + 顶面卡槽 (深度 = PCB 厚度) + 槽底薄钢网层
-- 焊盘开孔仅贯穿钢网层，与板框坐标精确对齐
-- 焊盘方形化 (obround → 直角矩形，匹配钢网厂工艺)
-- 测试点过滤（默认开启）：优先读取 Gerber X2 测试点 / 元件引脚属性，结合制板包中可选的 `FlyingProbeTesting.json` 元件与引脚信息辅助识别；无用途信息时综合正圆、尺寸与边缘孤立距离识别，保护密集圆孔与等间距孔列，方形、圆角矩形及未知类型不按形状过滤；无用途属性时仍需核对预览
-- 二维开孔核对：原始焊盘 / 实际开孔 / 叠加对比，查看自动过滤结果与依据
-- 手动开孔：仅在「原始焊盘」中编辑，左键点选或框选后批量开孔 / 封孔 / 恢复自动；右键拖动、滚轮缩放。支持撤销重做，整版与子板同步
-- 密脚错排、大孔开网格等后处理选项
-- 外框形状可在「跟随板形」与「矩形」间切换，外框圆角可调
-- 梯形取放缺口，便于从卡槽中取出 PCB
-
-### 通用
-- 实时 3D 预览 (three.js)，多部件后台预热，切换秒级响应
-- 钢网渲染采用快速 STL 路径与缓存，减少首次加载和重复调参的等待时间
-- 多配置预设：默认配置和自定义配置都可「另存为新预设」，支持保存修改、重命名与删除；切换前可保存、另存或放弃改动，重启恢复上次选中的已保存预设。仅保存打印与结构参数，不包含板子尺寸、厚度和 Gerber 数据
-- 参数撤销 / 重做：支持按钮与快捷键，连续调参合并记录，联动参数一起恢复
-- 整体装配预览：支持爆炸视图、PCB / 钢网显隐，查看定位柱及周圈螺丝、螺母的装配关系
-- 装配辅助：查看凸台与唇宽的平面夹持区域，实时估算周圈螺丝与螺母的规格、长度及数量
-- 导出前核对金属钢网的实际外缘尺寸；当前工作未导出时，退出前提醒确认
-- 首次启动简明引导，导入后提示核对钢网尺寸；主题支持跟随系统
-- 简体中文 / English / 日本語 / 한국어 四种界面语言，支持手动选择或跟随系统；未支持的系统语言回退到英语
-- STL / STEP 双格式导出，可自定义导出文件夹名称，同名自动加序号
+The core design goal is a minimal workflow of "drag in Gerber → export STL", with sensible defaults that produce usable results out of the box.
 
 ---
 
-## 🛠️ 快速开始
+## ✨ Features
 
-### 环境要求
+### Gerber Parsing
+- Auto-detects board outline layers (`.GKO` / `Edge.Cuts` / `.GM1`) and paste mask layers (`.GTP` / `.GBP`)
+- Self-developed RS-274X parser supporting layer transform commands: `%LM` mirror, `%LR` rotation, `%LS` scaling
+- Supports G02/G03 arcs, multi-line D-codes, and irregular board outline extraction
+- Pad parsing covers circle / rectangle / obround / rounded rectangle / polygon / region fill aperture types
+- Supports repeated-board arrays and mixed-board panels; choose the entire panel or a specific PCB
+- In PCB Stencil mode, a missing or invalid outline is estimated from pad bounds, clearly marked and confirmed before export
 
-| 工具 | 版本 | 说明 |
+### Stencil Jig Mode
+- Four-part assembly: PCB tray at the bottom, followed by the B-side base, metal stencil, and A-side cover; four integral tray posts align the clamped assembly as it drops onto the tray
+- Screws are placed only around the A/B frame perimeter. The four corners are alignment posts, not screws; perimeter screw spacing and M2.5/M3/M3.5/M4/M5 specs are configurable
+- Jig size auto-calculated from stencil size (20mm steps); base and cover reusable for same-size PCBs
+- Full irregular PCB outline reproduction with adjustable pocket clearance
+
+### PCB Stencil Mode
+- All-in-one stencil: PCB outer frame + top PCB pocket (depth = PCB thickness) + thin stencil layer at pocket bottom
+- Pad openings only penetrate the stencil layer, precisely aligned with board outline coordinates
+- Pad squaring (obround → right-angle rectangle, matching stencil manufacturer process)
+- Test-point filtering (on by default): combines Gerber purpose attributes, optional `FlyingProbeTesting.json` component/pin data, and isolated-circle geometry. Component pins, nearby circles and regular rows are protected; check the preview results.
+- 2D aperture inspection: compare source pads, actual apertures and overlays, with automatic filtering reasons
+- Manual apertures: edit only in Source pads; left-click or box-select to open, close or reset pads, right-drag to pan and scroll to zoom. Supports undo/redo and synchronization between panel and board scopes
+- Post-processing options: dense pin staggering, large-hole grid
+- Outer frame shape switchable between "follow board shape" and "rectangle", with adjustable corner radius
+- Trapezoidal pick-and-place notch for easy PCB removal from the pocket
+
+### General
+- Real-time 3D preview (three.js) with background preheating of multiple parts, sub-second switching
+- Fast STL generation and caching reduce initial loading and repeated parameter-editing delays
+- Configuration presets: save current Default or custom settings as a new preset, update, rename or delete. Save, save as, or discard edits before switching. Restores the last selected saved preset at startup; presets exclude board dimensions, thickness and Gerber data
+- Parameter undo/redo with buttons and shortcuts; continuous edits and linked changes are grouped
+- Assembly preview with exploded view, PCB/stencil visibility, alignment posts, perimeter screws and nuts
+- Clamping-area plan view and estimated screw/nut sizes, lengths and quantities
+- Confirm unchecked metal stencil dimensions before export; closing unexported work prompts for confirmation
+- First-use guides and system-aware light/dark theme
+- Simplified Chinese / English / Japanese / Korean UI, with manual selection or system-language matching and English fallback
+- STL / STEP export with custom folder names and automatic numbering for duplicates; the final folder is created only after all parts succeed, with temporary files cleaned up on failure
+
+---
+
+## 🛠️ Getting Started
+
+### Prerequisites
+
+| Tool | Version | Description |
 | --- | --- | --- |
-| Node.js | 20+ | 前端构建 |
-| Rust | 1.77+ | Tauri 后端编译 |
-| Python | 3.11+ | CAD 几何生成 (开发模式) |
+| Node.js | 20+ | Frontend build |
+| Rust | 1.77+ | Tauri backend compilation |
+| Python | 3.11+ | CAD geometry generation (dev mode) |
 
-### 开发模式运行
+### Development Mode
 
 ```bash
-# 1. 安装 Python 依赖
+# 1. Install Python dependencies
 pip install -r python/requirements.txt
 
-# 2. 安装前端依赖并启动
+# 2. Install frontend dependencies and start
 npm install
 npm run tauri:dev
 ```
 
-开发模式下应用会自动探测系统 Python (PATH / 常见安装位置)；若未检测到或缺少依赖，可在「Python 环境」卡片中手动指定路径或一键安装。
+In development mode, the app auto-detects system Python (PATH / common install locations). If not detected or dependencies are missing, you can manually specify the path or use one-click install in the "Python Environment" card.
 
-### 打包发布 (内置 Python 引擎，用户零配置)
+### Build & Release (Bundled Python Engine, Zero Configuration for End Users)
 
-发布包内嵌完整的 Python + build123d/shapely/numpy 运行时，最终用户无需安装任何环境：
+The release package embeds a complete Python + build123d/shapely/numpy runtime, so end users need to install nothing:
 
 ```bash
-# 1. 构建内置 Python 运行时 (~500MB)
+# 1. Build bundled Python runtime (~500MB)
 npm run build:python-env
 
-# 2. 打包桌面应用
+# 2. Package desktop app
 npm run tauri:build
 ```
 
-安装包产物位于 `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`)。
+Installer artifacts are in `src-tauri/target/release/bundle/` (Windows: `.msi` / `.exe`).
 
-> **注意**：`resources` 必须使用数组语法 `["resources/python-env"]`，map 语法会摊平 `site-packages` 目录树导致依赖丢失。
-
----
-
-## 📖 使用流程
-
-### 钢网夹具模式
-
-1. 拖入 Gerber ZIP，自动识别板框轮廓；拼版文件可选择整版或子板
-2. 确认 PCB 尺寸 / 厚度，并填写金属钢网的实际外缘长宽
-3. (可选) 调整螺丝间距、托盘厚度、卡槽间隙等高级参数
-4. 在右侧 3D 预览中分别查看 PCB 托盘 (insert)、B 面底座 (base) 和 A 面顶盖 (cover)
-5. 点击「导出」，选择保存位置并确认导出名称，在对应的子文件夹中写入 STL / STEP 文件
-
-### PCB 钢网模式
-
-1. 切换到「PCB 钢网」模式
-2. 拖入 Gerber ZIP (需包含 `.GTP` / `.GBP` 锡膏层)
-3. 选择钢网层厚度预设 (树脂 0.15mm / 标准 0.2mm / FDM 0.3mm)
-4. (可选) 调整焊盘缩小比例、边框宽、外框圆角、取放缺口等参数
-5. 在二维核对中确认开孔位置与自动过滤结果，必要时手动修改，再查看三维模型
-6. 导出 STL 用于切片打印，或导出 STEP 继续在 CAD 中编辑
+> **Note**: `resources` must use array syntax `["resources/python-env"]`. Map syntax `{"resources/python-env/**/*": "python-env/"}` flattens the `site-packages` directory tree and breaks dependencies.
 
 ---
 
-## 🏗️ 技术架构
+## 📖 Usage
 
-Mason 采用 **Tauri 2 (Rust) + Vue 3 + Python (build123d)** 的混合架构：
+### Stencil Jig Mode
+
+1. Drag in a Gerber ZIP to auto-detect the board outline; select the entire panel or a board if panelized
+2. Check PCB dimensions/thickness and enter the metal stencil’s actual outer length and width
+3. (Optional) Adjust advanced parameters: screw spacing, tray thickness, pocket clearance, etc.
+4. Preview the PCB tray (insert), B-side base, and A-side cover individually
+5. Click "Export", choose a location and confirm the export name — STL / STEP files are saved in a subfolder with that name
+
+### PCB Stencil Mode
+
+1. Switch to "PCB Stencil" mode
+2. Drag in a Gerber ZIP (must contain `.GTP` / `.GBP` paste mask layer)
+3. Select stencil layer thickness preset (Resin 0.15mm / Standard 0.2mm / FDM 0.3mm)
+4. (Optional) Adjust pad shrink ratio, frame width, outer corner radius, pick-and-place notch, etc.
+5. Check aperture positions and filtering in 2D inspection, edit if needed, then review the 3D model
+6. Export STL for slicing and printing, or STEP for further CAD editing
+
+---
+
+## 🏗️ Architecture
+
+Mason uses a hybrid architecture of **Tauri 2 (Rust) + Vue 3 + Python (build123d)**:
 
 ```
 ┌────────────────────┐   IPC    ┌─────────────┐   spawn   ┌──────────────────┐
-│  Vue 3 前端        │ ───────▶ │  Rust 后端   │ ────────▶ │ Python CAD 引擎  │
-│  three.js 3D 预览  │          │  参数 JSON   │           │ build123d+Shapely│
-│  Pinia 参数状态    │ ◀─────── │  STL bytes   │ ◀──────── │ jig_generator.py │
+│  Vue 3 Frontend    │ ───────▶ │  Rust Backend│ ────────▶ │ Python CAD Engine│
+│  three.js 3D View  │          │  Params JSON │           │ build123d+Shapely│
+│  Pinia State       │ ◀─────── │  STL bytes   │ ◀──────── │ jig_generator.py │
 └────────────────────┘          └─────────────┘           └──────────────────┘
 ```
 
-- 前端将参数通过 Tauri IPC 发送给 Rust，由 Rust 调度 `python/jig_generator.py` 生成模型
-- Python 以常驻进程方式运行 (stdin/stdout 行 JSON 协议)，避免重复启动开销
-- STL 按参数哈希缓存在前端，切换部件不重复计算；应用启动时后台预热各部件
-- 千级焊盘钢网采用快速 STL 路径 (numpy 直接生成三角面 + OCC 平面网格化)，渲染性能提升至秒级
+- The frontend sends parameters through Tauri IPC; Rust schedules `python/jig_generator.py` to generate models
+- Python runs as a persistent process (stdin/stdout line JSON protocol) to avoid repeated startup overhead
+- STL cached in frontend by parameter hash; switching parts does not recompute; background preheating on app startup
+- Thousand-pad stencils use a fast STL path (numpy directly generates triangle faces + OCC planar meshing), achieving second-level rendering performance
 
-### 关键文件
+### Key Files
 
-| 路径 | 说明 |
+| Path | Description |
 | --- | --- |
-| `python/jig_generator.py` | CAD 几何生成：`build_base` / `build_insert` / `build_cover` / `build_stencil` |
-| `src/lib/gerber/parser.ts` | RS-274X 板框解析器 |
-| `src/lib/gerber/pads.ts` | 锡膏层焊盘几何提取 |
-| `src/stores/config.ts` | Pinia 全局配置状态 |
-| `src/components/ModelPreview.vue` | three.js 3D 预览与 STL 缓存 |
-| `src/components/StencilForm.vue` | 钢网模式参数面板 |
-| `src/components/ConfigForm.vue` | 夹具模式参数面板 |
-| `src-tauri/src/commands.rs` | Tauri IPC 命令 |
-| `src-tauri/src/scad.rs` | Python 常驻进程管理 |
+| `python/jig_generator.py` | CAD geometry generation: `build_base` / `build_insert` / `build_cover` / `build_stencil` |
+| `src/lib/gerber/parser.ts` | RS-274X board outline parser |
+| `src/lib/gerber/pads.ts` | Paste mask pad geometry extraction |
+| `src/stores/config.ts` | Pinia global config state |
+| `src/components/ModelPreview.vue` | three.js 3D preview and STL cache |
+| `src/components/StencilForm.vue` | Stencil mode parameter panel |
+| `src/components/ConfigForm.vue` | Jig mode parameter panel |
+| `src-tauri/src/commands.rs` | Tauri IPC commands |
+| `src-tauri/src/scad.rs` | Python persistent process manager |
 
 ---
 
-## 🧪 测试
+## 🧪 Testing
 
-项目包含前端单元测试与 Python 几何验证测试：
+The project includes frontend unit tests and Python geometry verification tests:
 
 ```bash
-# 前端：Gerber 解析器单元测试
+# Frontend: Gerber parser unit tests
 npm test
 
-# 前端类型检查
+# Frontend type checking
 npx vue-tsc --noEmit
 
-# Rust 编译检查
+# Rust compilation check
 cd src-tauri && cargo check
 
-# Python 几何端到端验证 (build123d)
+# Python geometry end-to-end verification (build123d)
 python python/tests/run_all.py
 ```
 
-几何验证测试覆盖：螺丝布局一致性、三部件几何与孔位、异形板框、钢网焊盘开孔、取放缺口深度与方向、B 面六角螺母沉孔等 11 个测试脚本。
+Geometry verification tests cover: screw layout consistency, three-part geometry and hole positions, irregular board outlines, stencil pad openings, notch depth and direction, B-side hex nut countersink, etc. — 11 test scripts in total.
 
-CI 通过 GitHub Actions 串联以上全部检查，每次 push / PR 自动运行。
+CI runs all checks via GitHub Actions on every push / PR.
 
 ---
 
-## 📁 项目结构
+## 📁 Project Structure
 
 ```
 mason/
 ├── .github/workflows/ci.yml          # CI: vitest + vue-tsc + cargo check + python tests
-├── public/                           # 静态资源 (logo.svg)
-├── scripts/build-python-env.ps1      # 内嵌 Python 运行时构建脚本
-├── src/                              # Vue 3 前端
-│   ├── components/                   # 业务组件 (ConfigForm / StencilForm / ModelPreview ...)
+├── public/                           # Static assets (logo.svg)
+├── scripts/build-python-env.ps1      # Bundled Python runtime build script
+├── src/                              # Vue 3 frontend
+│   ├── components/                   # Business components (ConfigForm / StencilForm / ModelPreview ...)
 │   ├── composables/                  # useGerberOutline / useGerberStencil
-│   ├── lib/gerber/                   # 自研 Gerber 解析器 + 单元测试
-│   ├── i18n/                         # 中 / 英 / 日 / 韩文案
-│   └── stores/                       # Pinia 状态管理
-├── src-tauri/                        # Rust 后端 (Tauri)
+│   ├── lib/gerber/                   # Self-developed Gerber parser + unit tests
+│   ├── i18n/                         # Chinese / English / Japanese / Korean i18n
+│   └── stores/                       # Pinia state management
+├── src-tauri/                        # Rust backend (Tauri)
 │   └── src/{commands,scad,python_detect,generation,error}.rs
 ├── python/
-│   ├── jig_generator.py              # build123d CAD 生成 (base/insert/cover/stencil)
-│   └── tests/                        # 几何端到端测试
-├── test_gerber/                      # 示例 Gerber 文件
+│   ├── jig_generator.py              # build123d CAD generation (base/insert/cover/stencil)
+│   └── tests/                        # Geometry end-to-end tests
+├── test_gerber/                      # Sample Gerber files
 └── README.md
 ```
 
 ---
 
-## ❓ 常见问题
+## ❓ FAQ
 
-**Q: 启动后显示「未检测到 Python」？**
-A: 开发模式下应用会探测 PATH 和标准安装位置。若 Python 装在自定义路径，在「Python 环境」卡片手动指定 `python.exe`，需已安装 `build123d`、`shapely`、`numpy`。发布版自带内置引擎，无需此步骤。
+**Q: App shows "Python not detected" on startup?**
+A: In development mode, the app probes PATH and standard install locations. If Python is in a custom path, manually specify `python.exe` in the "Python Environment" card — it must have `build123d`, `shapely`, and `numpy` installed. Release builds include a bundled engine, so this step is unnecessary.
 
-**Q: Gerber ZIP 解析失败？**
-A: 板框识别依赖 `.GKO` / `*Edge.Cuts*` / `.GM1` 文件；钢网模式还需要 `.GTP` 或 `.GBP` 的锡膏层。若命名特殊，请检查 ZIP 中实际包含的层文件及其扩展名。
+**Q: Gerber ZIP parsing fails?**
+A: Board outline detection relies on `.GKO` / `*Edge.Cuts*` / `.GM1` files; PCB Stencil mode requires a `.GTP` or `.GBP` paste mask layer. In that mode, a missing or invalid outline is estimated from pad bounds and must be checked before export. If parsing fails, check the actual layer files and extensions inside the ZIP.
 
-**Q: 钢网焊盘和 PCB 焊盘对不上？**
-A: Mason 默认对长圆形焊盘做方形化处理 (匹配钢网厂工艺)，并按 PCB 板框居中对齐。若仍有偏差，检查 Gerber 坐标系是否与板框层一致。
+**Q: Stencil pads don't align with PCB pads?**
+A: Mason squares obround pads by default (matching stencil manufacturer process) and aligns to the PCB board outline center. If misalignment persists, check whether the Gerber coordinate system matches the outline layer.
 
-**Q: 导出的文件在哪里？**
-A: 导出时会在所选目录创建以导出名称命名的子文件夹，默认使用导入文件名，也可以自行修改。所有生成的 STL / STEP 文件放入其中；同名时自动追加序号，保留已有文件。
+**Q: Where are exported files?**
+A: A subfolder with your export name is created in the selected directory. The name defaults to the imported filename and can be edited. All generated STL / STEP files go inside; a number is added if the name already exists, keeping previous files intact.
 
 ---
 
-## 📄 许可证
+## 📄 License
 
 [MIT](./LICENSE)
 
 ---
 
-## 🙏 致谢
+## 🙏 Acknowledgements
 
-- [build123d](https://github.com/gumyr/build123d) — Python 参数化 CAD 内核
-- [Tauri](https://tauri.app/) — 桌面应用框架
+- [build123d](https://github.com/gumyr/build123d) — Python parametric CAD kernel
+- [Tauri](https://tauri.app/) — Desktop app framework
 - [Vue 3](https://vuejs.org/) / [Pinia](https://pinia.vuejs.org/) / [Element Plus](https://element-plus.org/) / [three.js](https://threejs.org/)
-- [Shapely](https://github.com/shapely/shapely) — 2D 几何运算
+- [Shapely](https://github.com/shapely/shapely) — 2D geometry operations
 
 ---
 
 <div align="center">
 
-如果觉得项目对您有帮助，请给个 ⭐ Star 支持一下！这对我非常重要 🙏
+If you find this project helpful, please give it a ⭐ Star! Your support means a lot 🙏
 
 [![Star History Chart](https://img.shields.io/github/stars/NingZiXi/mason?style=social)](https://github.com/NingZiXi/mason/stargazers)
 

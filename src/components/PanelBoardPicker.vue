@@ -122,7 +122,7 @@ function choose(index: unknown) {
 .board-map { display: block; width: 100%; height: 160px; padding: 8px; box-sizing: border-box; }
 .panel-boundary { fill: none; stroke: var(--text-tertiary); stroke-opacity: .45; stroke-width: 1; stroke-dasharray: 4 5; vector-effect: non-scaling-stroke; fill-rule: evenodd; pointer-events: none; }
 .panel-boundary.is-whole { fill: color-mix(in srgb, var(--bg-brand) 6%, transparent); stroke: var(--bg-brand); stroke-opacity: .8; }
-.board-shape { fill: color-mix(in srgb, var(--bg-brand) 7%, var(--surface-raised)); stroke: var(--text-tertiary); stroke-width: 1.2; vector-effect: non-scaling-stroke; fill-rule: evenodd; cursor: pointer; transition: fill var(--motion-fast) var(--ease-out), stroke var(--motion-fast) var(--ease-out); }
+.board-shape { fill: color-mix(in srgb, var(--panel-board-color, var(--bg-brand)) 7%, var(--surface-raised)); stroke: var(--text-tertiary); stroke-width: 1.2; vector-effect: non-scaling-stroke; fill-rule: evenodd; cursor: pointer; transition: fill var(--motion-fast) var(--ease-out), stroke var(--motion-fast) var(--ease-out); }
 .board-shape:focus { outline: none; }
 .board-shape:hover, .board-shape:focus-visible { fill: color-mix(in srgb, var(--bg-brand) 20%, var(--surface-raised)); stroke: var(--bg-brand); outline: none; stroke-width: 2; }
 .board-shape.selected { fill: color-mix(in srgb, var(--bg-brand) 24%, var(--surface-raised)); stroke: var(--bg-brand); stroke-width: 2; }
@@ -148,14 +148,14 @@ function choose(index: unknown) {
 .list-heading { display: flex; flex-direction: column; gap: 5px; padding: 3px 2px 14px; font-size: 12px; color: var(--text-default); font-weight: 500; }
 .list-heading span { color: var(--text-tertiary); font-size: 11px; font-weight: 400; }
 .board-list { display: flex; flex-direction: column; gap: 8px; max-height: clamp(210px, 38vh, 340px); overflow-y: auto; padding: 2px; scrollbar-width: thin; }
-.board-card { display: flex; align-items: center; gap: 10px; width: 100%; flex-shrink: 0; padding: 11px 10px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); background: var(--surface-raised); text-align: left; color: var(--text-default); cursor: pointer; transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
+.board-card { display: flex; align-items: center; gap: 10px; width: 100%; flex-shrink: 0; padding: 11px 10px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); background: var(--surface-raised); text-align: left; color: var(--text-default); cursor: pointer; transition: var(--control-transition); }
 .board-card:hover { background: var(--surface-well); border-color: var(--text-tertiary); }
 .board-card.selected { background: color-mix(in srgb, var(--bg-brand) 7%, var(--surface-raised)); border-color: var(--bg-brand); }
 .board-card:focus { outline: none; }
-.board-card:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 1px; }
+.board-card:focus-visible { outline: 2px solid var(--interaction-ink, var(--bg-brand)); outline-offset: 1px; }
 .board-thumbnail { display: flex; justify-content: center; align-items: center; width: 40px; height: 40px; flex-shrink: 0; background: var(--surface-well); border-radius: 8px; }
 .board-thumbnail svg { width: 32px; height: 32px; }
-.board-thumbnail path { fill: color-mix(in srgb, var(--bg-brand) 18%, var(--surface-raised)); stroke: var(--bg-brand); stroke-width: 1; vector-effect: non-scaling-stroke; fill-rule: evenodd; }
+.board-thumbnail path { fill: color-mix(in srgb, var(--panel-board-color, var(--bg-brand)) 18%, var(--surface-raised)); stroke: var(--panel-board-color, var(--bg-brand)); stroke-width: 1; vector-effect: non-scaling-stroke; fill-rule: evenodd; }
 .board-card-info { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .board-card-info strong { font-size: 12px; font-weight: 500; }
 .board-card-info > span { font-family: var(--font-family-mono); font-size: 10px; color: var(--text-secondary); }

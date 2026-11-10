@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { listen, type Event as TauriEvent } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useGerberOutline } from "../composables/useGerberOutline";
-import { useGerberStencil, type GerberStencilResult } from "../composables/useGerberStencil";
+import { useGerberStencil } from "../composables/useGerberStencil";
+import { useGerberImportSession, type GerberImportPayload } from "../composables/useGerberImportSession";
+import { useCompletionFeedback } from "../composables/useCompletionFeedback";
 import { getPanelBoards, resolvePanelSelection, type PanelMode, type PanelVariant } from "../lib/gerber/panel";
 import { useConfigStore } from "../stores/config";
 import PanelBoardPicker from "./PanelBoardPicker.vue";
+import ActionStatusIcon from "./ActionStatusIcon.vue";
 
 const props = withDefaults(defineProps<{
   mode?: "jig" | "stencil";
@@ -15,17 +18,10 @@ const props = withDefaults(defineProps<{
 
 const { t } = useI18n();
 const configStore = useConfigStore();
+const { completed: importCompleted, complete: completeImport, reset: resetImportFeedback } = useCompletionFeedback();
 
 /** 一次导入的完整结果:整版 / 单板两套口径一起交给 store */
-export interface GerberImportPayload {
-  filename: string;
-  sourceFilename?: string;
-  isPanel: boolean;
-  panelGrid?: { nx: number; ny: number };
-  hasPads: boolean;
-  boardIndex?: number;
-  variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
-}
+export type { GerberImportPayload } from "../composables/useGerberImportSession";
 
 const emit = defineEmits<{
   (e: "gerberLoaded", payload: GerberImportPayload & { mode: PanelMode }): void;
@@ -34,8 +30,11 @@ const emit = defineEmits<{
 const outline = useGerberOutline();
 const stencil = useGerberStencil();
 
-const loading = computed(() => (props.mode === "stencil" ? stencil.loading.value : outline.loading.value));
-const error = computed(() => (props.mode === "stencil" ? stencil.error.value : outline.error.value));
+const session = useGerberImportSession({ mode: () => props.mode, outline, stencil, submit,
+  onStart: () => { resetImportFeedback(); showPanelDialog.value = false; payload.value = null; } });
+const { loading, error, processFile } = session;
+watch(loading, value => { configStore.gerberImporting = value; }, { flush: 'sync' });
+watch(error, value => { if (value) resetImportFeedback(); }, { flush: 'sync' });
 const candidates = computed(() => (props.mode === "stencil" ? [] : outline.candidates.value));
 
 // ===== 拼版口径选择 =====
@@ -52,9 +51,12 @@ const dialogMode = ref<PanelMode>("panel");
 const dialogBoardIndex = ref(0);
 
 function openPanelDialog() {
+  resetImportFeedback();
   if (!showPanelDialog.value && configStore.panelOverview && configStore.config.panelAvailable) {
     payload.value = { filename: configStore.config.gerberFilename ?? '', isPanel: true,
       sourceFilename: configStore.gerberSourceFilename ?? undefined,
+      outlineSource: configStore.gerberOutlineSource ?? undefined,
+      outlineFallbackReason: configStore.gerberOutlineFallbackReason ?? undefined,
       hasPads: !!(configStore.panelOverview.topPads?.length || configStore.panelOverview.bottomPads?.length),
       panelGrid: configStore.config.panelGrid ?? undefined,
       variants: { panel: configStore.panelOverview, single: configStore.panelBoards[0] ?? configStore.panelOverview,
@@ -90,6 +92,8 @@ interface DisplayResult {
   boardIndex?: number;
   units?: string | null;
   arcs?: number;
+  outlineSource?: 'gerber' | 'pads-bounds';
+  outlineFallbackReason?: 'missing' | 'invalid';
 }
 const display = computed<DisplayResult | null>(() => {
   // Reflect the active board and pad edits when switching panel scopes.
@@ -98,6 +102,8 @@ const display = computed<DisplayResult | null>(() => {
     if (!c.pcbOutlinePoints.length && !c.stencilPadsTop.length && !c.stencilPadsBottom.length) return null;
     const sameImport = payload.value?.filename === c.gerberFilename;
     return { width: c.pcbSizeX, height: c.pcbSizeY, filename: c.gerberFilename ?? '',
+      outlineSource: configStore.gerberOutlineSource ?? undefined,
+      outlineFallbackReason: configStore.gerberOutlineFallbackReason ?? undefined,
       outlinePoints: c.pcbOutlinePoints, holes: c.pcbOutlineHoles,
       topPadCount: c.stencilPadsTop.length, bottomPadCount: c.stencilPadsBottom.length,
       skipped: sameImport ? stencil.result.value?.skipped : undefined,
@@ -117,6 +123,8 @@ const display = computed<DisplayResult | null>(() => {
     width: v.width,
     height: v.height,
     filename: p.filename,
+    outlineSource: p.outlineSource,
+    outlineFallbackReason: p.outlineFallbackReason,
     outlinePoints: v.outlinePoints,
     holes: v.outlineHoles,
     topPadCount: v.topPads?.length,
@@ -152,72 +160,28 @@ function submit(p: GerberImportPayload) {
     return;
   }
   emit("gerberLoaded", { ...p, mode: "panel" });
+  completeImport();
 }
 
 /** 弹窗选择完成:按选中口径应用 */
 function confirmPanelMode(mode: PanelMode, boardIndex = dialogBoardIndex.value) {
+  if (loading.value) return;
   showPanelDialog.value = false;
   const p = payload.value;
   if (p) {
     const selection = resolvePanelSelection(p.variants, mode, boardIndex);
+    resetImportFeedback();
     emit("gerberLoaded", { ...p, mode: selection.mode, boardIndex: selection.index ?? undefined });
+    completeImport();
   }
-}
-
-/**
- * 统一入口:按当前模式解析,并把结果同步到另一模式的数据源 ——
- * 治具模式导入 ZIP 时顺带解析锡膏层焊盘(best-effort,无锡膏层静默跳过),
- * 切到钢网模式后无需重复导入即可看到带开孔的钢网;
- * 钢网模式的板框已含在结果里(会写 pcbOutlinePoints),切回治具模式天然可用。
- */
-async function processFile(file: File) {
-  if (props.mode === "stencil") {
-    await stencil.processFile(file);
-    const r = stencil.result.value;
-    if (r) {
-      submit({
-        filename: [r.topPasteFile, r.bottomPasteFile].filter(Boolean).join(" + "),
-        sourceFilename: file.name,
-        isPanel: r.isPanel,
-        panelGrid: r.panelGrid,
-        hasPads: true,
-        variants: r.variants,
-      });
-    }
-    return;
-  }
-
-  await outline.processFile(file);
-  const o = outline.result.value;
-  if (!o) return;
-
-  // 治具模式:同一文件再跑一遍锡膏解析,拿到焊盘;纯板框文件则静默跳过
-  let pads: { variants: GerberStencilResult["variants"] } | null = null;
-  try {
-    await stencil.processFile(file);
-    const s = stencil.result.value;
-    if (s) pads = { variants: s.variants };
-    else stencil.reset();
-  } catch {
-    stencil.reset();
-  }
-
-  submit({
-    filename: o.filename,
-    sourceFilename: file.name,
-    isPanel: o.parse.isPanel,
-    panelGrid: o.parse.panelGrid,
-    hasPads: pads !== null,
-    variants: pads?.variants ?? o.variants,
-  });
 }
 
 async function onFileChange(e: Event) {
   const target = e.target as HTMLInputElement;
   const file = target.files?.[0];
   if (!file) return;
-  await processFile(file);
   target.value = "";
+  await processFile(file);
 }
 
 async function onDrop(e: DragEvent) {
@@ -243,35 +207,45 @@ async function processDroppedPaths(paths: string[]) {
   const path = paths[0];
   const fileName = path.split(/[/\\]/).pop() || path;
 
-  try {
+  await session.processSource(async () => {
     const bytes = await invoke<number[]>("read_dropped_file", { path });
     const u8 = new Uint8Array(bytes);
-    const file = new File([u8], fileName, {
+    return new File([u8], fileName, {
       type: fileName.toLowerCase().endsWith(".zip")
         ? "application/zip"
         : "text/plain",
     });
-    await processFile(file);
-  } catch (err) {
-    console.error("读取拖入文件失败:", err);
-  }
+  });
 }
 
 // Tauri 2 原生文件拖拽事件
 let unlistenDrop: (() => void) | null = null;
 let unlistenEnter: (() => void) | null = null;
 let unlistenLeave: (() => void) | null = null;
+let disposed = false;
+
+watch(() => props.mode, () => {
+  resetImportFeedback();
+  session.cancel();
+  payload.value = null;
+  showPanelDialog.value = false;
+}, { flush: 'sync' });
 
 onMounted(async () => {
+  const register = async <T,>(name: string, handler: (event: TauriEvent<T>) => void) => {
+    const unlisten = await listen<T>(name, event => { if (!disposed) handler(event); });
+    if (disposed) { unlisten(); return null; }
+    return unlisten;
+  };
   try {
-    unlistenDrop = await listen<{ paths: string[] }>(
+    unlistenDrop = await register<{ paths: string[] }>(
       "tauri://drag-drop",
       (e) => processDroppedPaths(e.payload.paths)
     );
-    unlistenEnter = await listen("tauri://drag-enter", () => {
+    unlistenEnter = await register("tauri://drag-enter", () => {
       dragOver.value = true;
     });
-    unlistenLeave = await listen("tauri://drag-leave", () => {
+    unlistenLeave = await register("tauri://drag-leave", () => {
       dragOver.value = false;
     });
   } catch (err) {
@@ -280,14 +254,17 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
+  session.cancel();
   unlistenDrop?.();
   unlistenEnter?.();
   unlistenLeave?.();
 });
 
 function clear() {
-  if (props.mode === "stencil") stencil.reset();
-  else outline.reset();
+  resetImportFeedback();
+  session.cancel();
+  showPanelDialog.value = false;
   payload.value = null;
   configStore.clearPanelScope();
   Object.assign(configStore.config, { gerberFilename: null, pcbOutlinePoints: [], pcbOutlineHoles: [],
@@ -326,15 +303,18 @@ const outlinePath = computed(() => {
       v-if="!display"
       class="dropzone"
       :class="{ active: loading || dragOver }"
+      :aria-busy="loading"
       @click="pickFile"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop"
     >
-      <svg class="drop-icon" viewBox="0 0 24 24" width="28" height="28">
-        <path d="M12 3v12m0-12l-4 4m4-4l4 4M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"
-          fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
+      <ActionStatusIcon class="drop-icon" :size="28" :state="loading ? 'busy' : 'idle'">
+        <svg viewBox="0 0 24 24" width="28" height="28">
+          <path d="M12 3v12m0-12l-4 4m4-4l4 4M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"
+            fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </ActionStatusIcon>
       <p v-if="!loading" class="drop-text">{{ t('gerber.drop') }}</p>
       <p v-else class="drop-text">{{ t('gerber.parsing') }}</p>
       <p class="drop-hint">{{ t('gerber.dropHint') }}</p>
@@ -346,12 +326,29 @@ const outlinePath = computed(() => {
     </el-alert>
 
     <!-- Result -->
-    <div v-if="display" class="result">
-      <div class="result-header">
-        <svg viewBox="0 0 16 16" width="16" height="16" class="check-icon">
-          <path d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span class="result-title">{{ t('gerber.recognized') }}</span>
+    <div v-if="display" class="result" :aria-busy="loading">
+      <p v-if="loading" class="import-progress" role="status">{{ t('gerber.parsing') }}</p>
+      <div class="result-header" :class="{
+        'is-estimated': display.outlineSource === 'pads-bounds',
+        'is-complete': importCompleted && !loading && !showPanelDialog && display.outlineSource !== 'pads-bounds',
+      }">
+        <ActionStatusIcon class="check-icon" :size="16"
+          :state="loading ? 'busy' : importCompleted && !showPanelDialog && display.outlineSource !== 'pads-bounds' ? 'success' : 'idle'">
+          <svg viewBox="0 0 16 16" width="16" height="16">
+            <g v-if="display.outlineSource === 'pads-bounds'" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <circle cx="8" cy="8" r="6.5" />
+              <path d="M8 4.5v4M8 11v.5" />
+            </g>
+            <path v-else d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </ActionStatusIcon>
+        <span class="result-title">{{ t(display.outlineSource === 'pads-bounds' ? 'gerber.estimatedOutlineTitle' : 'gerber.recognized') }}</span>
+      </div>
+
+      <div v-if="display.outlineSource === 'pads-bounds'" class="outline-estimate-note" role="status">
+        <p>{{ t(display.outlineFallbackReason === 'invalid' ? 'gerber.estimatedOutlineInvalid' : 'gerber.estimatedOutlineMissing') }}</p>
+        <p>{{ t('gerber.estimatedOutlineHint') }}</p>
+        <button class="link-btn" @click="pickFile">{{ t('gerber.chooseCompleteFile') }}</button>
       </div>
 
       <!-- SVG Preview -->
@@ -365,8 +362,8 @@ const outlinePath = computed(() => {
           <polygon
             :points="outlinePath"
             fill-rule="evenodd"
-            fill="rgba(62,125,98,0.10)"
-            stroke="#3E7D62"
+            fill="var(--outline-preview-fill)"
+            stroke="var(--outline-preview-stroke)"
             stroke-width="0.3"
           />
         </g>
@@ -385,41 +382,49 @@ const outlinePath = computed(() => {
         </text>
       </svg>
 
-      <!-- Info -->
+      <!-- Core dimensions and the current board stay prominent. -->
+      <div class="result-summary">
+        <div class="size-summary" :class="{ 'is-estimated': display.outlineSource === 'pads-bounds' }">
+          <span class="summary-label">{{ t(display.outlineSource === 'pads-bounds' ? 'gerber.estimatedSize' : 'gerber.pcbSize') }}</span>
+          <span class="size-value"><strong>{{ fmt(display.width) }} × {{ fmt(display.height) }}</strong><span>mm</span></span>
+        </div>
+        <div v-if="display.isPanel" class="summary-row">
+          <span class="summary-label">{{ t('gerber.panelScope') }}</span>
+          <div class="scope-value">
+            <span :title="t('gerber.panelScopeHint')">
+              {{ t(activeMode === 'board' ? 'gerber.scopeBoard' : 'gerber.scopePanel') }}
+              <template v-if="activeMode === 'board' && display.boardCount">
+                · {{ (display.boardIndex ?? 0) + 1 }} / {{ display.boardCount }}
+              </template>
+            </span>
+            <button class="link-btn" @click="openPanelDialog">{{ t('gerber.panelChange') }}</button>
+          </div>
+        </div>
+        <div v-if="props.mode === 'stencil'" class="summary-row">
+          <span class="summary-label">{{ t('stencil.padCountShort') }}</span>
+          <div class="pad-counts">
+            <span>{{ t('stencil.topShort') }} <strong>{{ display.topPadCount }}</strong></span>
+            <span class="pad-divider" aria-hidden="true">/</span>
+            <span>{{ t('stencil.bottomShort') }} <strong>{{ display.bottomPadCount }}</strong></span>
+          </div>
+        </div>
+      </div>
+      <div v-if="props.mode === 'stencil' && display.skipped && display.skipped > 0" class="result-warning">
+        <span>{{ t('stencil.skippedShort') }}</span>
+        <span>{{ t('stencil.skippedWarning', { n: display.skipped }) }}</span>
+      </div>
+
+      <!-- Source metadata remains visible, with quieter type and spacing. -->
       <div class="info-grid">
         <div class="info-row">
           <span class="info-label">{{ t('gerber.outlineFile') }}</span>
-          <span class="info-value" :title="display.filename">{{ display.filename }}</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">{{ t('gerber.pcbSize') }}</span>
-          <span class="info-value">{{ fmt(display.width) }} × {{ fmt(display.height) }} mm</span>
+          <span class="info-value info-filename" :title="display.filename">{{ display.filename }}</span>
         </div>
         <div v-if="display.isPanel" class="info-row">
           <span class="info-label">{{ t('gerber.panel') }}</span>
           <span class="info-value">
             {{ display.panelGrid ? t('gerber.panelGrid', display.panelGrid) : t('gerber.panelDetected') }}
           </span>
-        </div>
-        <div v-if="display.isPanel" class="info-row">
-          <span class="info-label">{{ t('gerber.panelScope') }}</span>
-          <span class="info-value" :title="t('gerber.panelScopeHint')">
-            {{ t(activeMode === 'board' ? 'gerber.scopeBoard' : 'gerber.scopePanel') }}
-            <template v-if="activeMode === 'board' && display.boardCount">
-              · {{ (display.boardIndex ?? 0) + 1 }} / {{ display.boardCount }}
-            </template>
-            <button class="link-btn" @click="openPanelDialog">{{ t('gerber.panelChange') }}</button>
-          </span>
-        </div>
-        <div v-if="props.mode === 'stencil'" class="info-row">
-          <span class="info-label">{{ t('stencil.padCountShort') }}</span>
-          <span class="info-value">
-            {{ t('stencil.topShort') }} {{ display.topPadCount }} / {{ t('stencil.bottomShort') }} {{ display.bottomPadCount }}
-          </span>
-        </div>
-        <div v-if="props.mode === 'stencil' && display.skipped && display.skipped > 0" class="info-row">
-          <span class="info-label">{{ t('stencil.skippedShort') }}</span>
-          <span class="info-value warn">{{ t('stencil.skippedWarning', { n: display.skipped }) }}</span>
         </div>
         <div v-if="props.mode !== 'stencil'" class="info-row">
           <span class="info-label">{{ t('gerber.units') }}</span>
@@ -530,29 +535,29 @@ const outlinePath = computed(() => {
 }
 
 .dropzone:hover {
-  border-color: var(--bg-brand);
+  border-color: var(--interaction-border);
   background: color-mix(in srgb, var(--bg-brand) 6%, var(--surface-well));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-brand) 12%, transparent);
 }
 
 /* 拖文件悬停/解析中:品牌橙提示"投入信号"(与 hover 的绿区分) */
 .dropzone.active {
-  border-color: var(--brand-accent);
+  border-color: var(--accent-ink);
   background: var(--brand-accent-surface);
 }
 
 .dropzone.active .drop-icon {
-  color: var(--brand-accent);
+  color: var(--accent-ink);
 }
 
 .drop-icon {
-  color: var(--bg-brand);
+  color: var(--interaction-ink);
   transition: color var(--motion-fast) var(--ease-out), transform var(--motion-release) var(--ease-settle);
 }
 
 .dropzone:hover .drop-icon {
   transform: translateY(-2px);
-  color: var(--bg-brand);
+  color: var(--interaction-ink);
 }
 
 .drop-text {
@@ -578,12 +583,34 @@ const outlinePath = computed(() => {
   margin-top: 0;
 }
 
+.result-header.is-estimated :is(.check-icon, .result-title) { color: var(--status-warning-default); }
+.import-progress { margin: 0 0 10px; color: var(--text-secondary); font-size: 12px; }
+.outline-estimate-note { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-control); background: var(--status-warning-surface-l1); color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.outline-estimate-note p { margin: 0; }
+.outline-estimate-note p + p { margin-top: 4px; }
+.outline-estimate-note .link-btn { margin-top: 6px; color: var(--status-warning-default); }
+
 .result-header {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 12px;
 }
+
+.result-header::before {
+  content: '';
+  position: absolute;
+  inset: -5px -7px;
+  z-index: -1;
+  border-radius: var(--radius-inner);
+  background: var(--status-success-surface-l1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out);
+}
+.result-header.is-complete::before { opacity: .75; }
 
 .check-icon {
   color: var(--status-success-default);
@@ -604,52 +631,140 @@ const outlinePath = computed(() => {
   border: 1px solid var(--border-neutral-l1);
 }
 
+.result-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-control);
+  background: var(--surface-well);
+}
+
+.size-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.summary-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.size-value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.size-value strong {
+  color: var(--text-default);
+  font-size: 21px;
+  font-weight: var(--font-weight-strong);
+  letter-spacing: -.025em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.size-summary.is-estimated :is(.summary-label, .size-value strong) {
+  color: var(--status-warning-default);
+}
+
+.summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.scope-value,
+.pad-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.scope-value > .link-btn {
+  flex-shrink: 0;
+  margin-left: 0;
+}
+
+.pad-counts strong {
+  margin-left: 3px;
+  color: var(--text-default);
+  font-weight: var(--font-weight-strong);
+  font-variant-numeric: tabular-nums;
+}
+.pad-divider { color: var(--text-disabled); }
+
+.result-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-inner);
+  background: var(--status-warning-surface-l1);
+  color: var(--status-warning-default);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .info-grid {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  border: 1px solid var(--border-neutral-l1);
-  border-radius: var(--radius-8);
-  overflow: hidden;
+  gap: 7px;
+  margin-top: 14px;
+  padding: 0 2px;
 }
 
 .info-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border-neutral-l1);
-}
-
-.info-row:last-child {
-  border-bottom: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  align-items: baseline;
+  gap: 12px;
+  line-height: 1.5;
 }
 
 .info-label {
   font-size: 11px;
   color: var(--text-tertiary);
-  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
 }
 
 .info-value {
-  font-size: 12px;
-  color: var(--text-default);
-  font-family: var(--font-family-mono);
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font-family-default);
+  font-variant-numeric: tabular-nums;
   text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 60%;
+  overflow-wrap: anywhere;
 }
+.info-filename { font-family: var(--font-family-mono); }
 
 .info-sub {
   color: var(--text-tertiary);
   font-size: 10px;
   margin-left: 4px;
-}
-
-.info-value.warn {
-  color: #D9913D;
 }
 
 .alt-candidates {
@@ -675,6 +790,8 @@ const outlinePath = computed(() => {
 }
 
 .candidate-item code {
+  display: inline-block;
+  max-width: 100%;
   font-family: var(--font-family-mono);
   font-size: 10px;
   background: var(--bg-base-default);
@@ -682,7 +799,9 @@ const outlinePath = computed(() => {
   border-radius: var(--radius-4);
   border: 1px solid var(--border-neutral-l1);
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
+.candidate-item { min-width: 0; max-width: 100%; }
 
 .reimport-btn {
   margin-top: 12px;
@@ -694,7 +813,7 @@ const outlinePath = computed(() => {
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background-color 0.12s ease;
+  transition: var(--control-transition);
 }
 
 .reimport-btn:hover {
@@ -708,7 +827,7 @@ const outlinePath = computed(() => {
   padding: 0;
   border: none;
   background: none;
-  color: var(--bg-brand);
+  color: var(--interaction-ink);
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
@@ -741,20 +860,20 @@ const outlinePath = computed(() => {
   background: var(--surface-raised);
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out);
+  transition: var(--control-transition);
 }
 
 .scope-option:hover {
-  border-color: var(--bg-brand);
+  border-color: var(--interaction-border);
   background: color-mix(in srgb, var(--bg-brand) 5%, var(--surface-raised));
 }
 
 .scope-option.is-active {
-  border-color: var(--bg-brand);
+  border-color: var(--interaction-border);
   background: color-mix(in srgb, var(--bg-brand) 8%, var(--surface-raised));
 }
 
-.scope-option:focus-visible, .scope-confirm:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 3px; }
+.scope-option:focus-visible, .scope-confirm:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 3px; }
 
 .scope-name {
   font-size: 13px;
@@ -774,7 +893,7 @@ const outlinePath = computed(() => {
   justify-content: center;
   gap: 12px;
   padding: 11px 18px;
-  border: 1px solid var(--bg-brand);
+  border: 1px solid var(--interaction-border);
   border-radius: var(--radius-control);
   background: var(--bg-brand);
   color: var(--text-onbrand);
@@ -782,13 +901,12 @@ const outlinePath = computed(() => {
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
+  transition: var(--control-transition);
 }
 
 .scope-confirm:hover {
   background: var(--bg-brand-hover);
 }
-.scope-confirm:active { transform: translateY(1px); }
 .panel-dialog-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 
 .dialog-foot {

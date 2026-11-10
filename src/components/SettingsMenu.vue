@@ -22,8 +22,13 @@ const confirmingUpdate = ref(false);
 const showSettings = ref(false);
 const appVersion = ref("");
 const activeTab = ref<"about" | "general">("about");
-const contentEl = ref<HTMLElement | null>(null);
-watch(activeTab, () => { if (contentEl.value) contentEl.value.scrollTop = 0; });
+const aboutPane = ref<HTMLElement | null>(null);
+const generalPane = ref<HTMLElement | null>(null);
+const settingsTransition = { name: 'settings-reveal', duration: { enter: 300, leave: 180 } };
+watch(activeTab, tab => {
+  const pane = tab === 'about' ? aboutPane.value : generalPane.value;
+  if (pane) pane.scrollTop = 0;
+});
 
 onMounted(async () => {
   try {
@@ -96,7 +101,7 @@ function onSettingsClosed() {
   </button>
 
   <!-- Escape the header stacking context so the mask covers all preview controls. -->
-  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" append-to-body align-center :z-index="3000" modal-class="settings-overlay" class="settings-dialog" @closed="onSettingsClosed">
+  <el-dialog v-model="showSettings" width="680px" :title="t('settings.button')" :show-close="false" append-to-body align-center :z-index="3000" modal-class="settings-overlay" class="settings-dialog" :transition="settingsTransition" @closed="onSettingsClosed">
     <div class="dialog-root">
       <!-- 顶部栏 -->
       <div class="dialog-header">
@@ -108,7 +113,7 @@ function onSettingsClosed() {
           </svg>
           <span class="header-title">{{ t('settings.button') }}</span>
         </div>
-        <button class="close-btn" :title="t('settings.close')" @click="closeSettings">
+        <button class="close-btn" :title="t('settings.close')" :aria-label="t('settings.close')" @click="closeSettings">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
@@ -145,15 +150,16 @@ function onSettingsClosed() {
           </button>
         </nav>
 
-        <div ref="contentEl" class="content">
+        <div class="content">
           <!-- 关于 -->
-          <div v-show="activeTab === 'about'" class="pane" :class="{ 'is-active': activeTab === 'about' }">
+          <div ref="aboutPane" class="pane pane-about" :class="{ 'is-active': activeTab === 'about' }"
+            :inert="activeTab !== 'about'" :aria-hidden="activeTab !== 'about'">
             <div class="about-hero">
               <div class="app-logo">
                 <svg viewBox="0 0 64 64" width="36" height="36">
-                  <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
-                  <circle cx="14" cy="14" r="5" fill="#fff" />
-                  <circle cx="14" cy="50" r="5" fill="#E07A3C" />
+                  <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+                  <circle cx="14" cy="14" r="5" fill="currentColor" />
+                  <circle cx="14" cy="50" r="5" fill="var(--settings-logo-accent, var(--brand-accent, #E07A3C))" />
                 </svg>
               </div>
               <div class="app-meta">
@@ -191,7 +197,7 @@ function onSettingsClosed() {
             </div>
 
             <div class="link-list">
-              <a class="link-row" @click="openLink(REPO_URL)">
+              <a class="link-row" :href="REPO_URL" @click.prevent="openLink(REPO_URL)">
                 <span class="link-label">{{ t('about.repo') }}</span>
                 <span class="link-cta">
                   {{ t('about.openRepo') }}
@@ -200,7 +206,7 @@ function onSettingsClosed() {
                   </svg>
                 </span>
               </a>
-              <a class="link-row" @click="openLink(ISSUE_URL)">
+              <a class="link-row" :href="ISSUE_URL" @click.prevent="openLink(ISSUE_URL)">
                 <span class="link-label">{{ t('about.feedback') }}</span>
                 <span class="link-cta">
                   {{ t('about.submitIssue') }}
@@ -209,7 +215,7 @@ function onSettingsClosed() {
                   </svg>
                 </span>
               </a>
-              <a class="link-row" @click="openLink(AUTHOR_URL)">
+              <a class="link-row" :href="AUTHOR_URL" @click.prevent="openLink(AUTHOR_URL)">
                 <span class="link-label">{{ t('about.author') }}</span>
                 <span class="link-cta">
                   {{ t('about.openAuthor') }}
@@ -230,7 +236,8 @@ function onSettingsClosed() {
           </div>
 
           <!-- 通用:界面与工作习惯 -->
-          <div v-show="activeTab === 'general'" class="pane" :class="{ 'is-active': activeTab === 'general' }">
+          <div ref="generalPane" class="pane pane-general" :class="{ 'is-active': activeTab === 'general' }"
+            :inert="activeTab !== 'general'" :aria-hidden="activeTab !== 'general'">
             <section class="setting-section">
               <h3 class="section-title">{{ t('settings.interface') }}</h3>
             <div class="setting-row">
@@ -283,6 +290,29 @@ function onSettingsClosed() {
                 <el-option v-for="(label, value) in LOCALE_NAMES" :key="value" :value="value" :label="label" />
               </el-select>
             </div>
+            </section>
+            <section v-if="ui.sakuraUnlocked" class="setting-section skin-section">
+              <h3 class="section-title">{{ t('skin.title') }}</h3>
+              <div class="skin-options" role="group" :aria-label="t('skin.title')">
+                <button v-for="skin in (['classic', 'sakura'] as const)" :key="skin" type="button"
+                  class="skin-card" :class="{ 'is-selected': ui.skin === skin }"
+                  :aria-pressed="ui.skin === skin" :disabled="ui.skinCelebrationActive" @click="ui.setSkin(skin)">
+                  <span class="skin-preview" :class="`skin-preview--${skin}`" aria-hidden="true">
+                    <span class="skin-preview-header"><i /><i /><i /></span>
+                    <span class="skin-preview-sidebar"><i /><i /><i /></span>
+                    <span class="skin-preview-workspace"><span class="skin-preview-board"><i /><i /><i /><i /></span></span>
+                  </span>
+                  <span class="skin-card-title">
+                    <span>{{ t(`skin.${skin}`) }}</span>
+                    <span class="skin-card-check" aria-hidden="true">
+                      <svg viewBox="0 0 12 12" width="10" height="10" fill="none">
+                        <path d="m2.5 6 2.3 2.3 4.7-4.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="skin-card-hint">{{ t(`skin.${skin}Hint`) }}</span>
+                </button>
+              </div>
             </section>
             <section class="setting-section">
               <h3 class="section-title">{{ t('settings.workflow') }}</h3>
@@ -347,6 +377,8 @@ function onSettingsClosed() {
   background: var(--bg-overlay-l1);
   color: var(--text-default);
 }
+.settings-btn > svg { transform: rotate(0deg); transform-origin: center; transition: transform var(--motion-release) var(--ease-out); }
+.settings-btn:hover:not(:disabled) > svg { transform: rotate(22deg); }
 
 /* 对话框根容器 */
 .dialog-root {
@@ -378,19 +410,23 @@ function onSettingsClosed() {
 }
 .header-title {
   font-size: 14px;
+  line-height: var(--body-base-line-height);
   font-weight: var(--font-weight-strong);
   color: var(--text-default);
 }
 .close-btn {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  border-radius: 50%;
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
   cursor: pointer;
   transition: var(--control-transition);
 }
@@ -398,6 +434,7 @@ function onSettingsClosed() {
   background: var(--bg-overlay-l1);
   color: var(--text-default);
 }
+.header-left > svg, .close-btn > svg, .nav-item > svg, .seg-btn > svg, .link-cta > svg { display: block; flex-shrink: 0; }
 
 /* The dialog frame stays fixed; each page scrolls inside the same content area. */
 .dialog-body {
@@ -408,11 +445,13 @@ function onSettingsClosed() {
 
 .update-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-brand); }
 .update-card { padding: 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-popover); corner-shape: var(--corner-shape); background: var(--surface-well); font-size: 12px; color: var(--text-secondary); }
-.update-card p { margin: 8px 0; line-height: 1.6; }
-.update-notes { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; }
+.update-card > strong { display: block; color: var(--text-default); font-size: var(--heading-2xs-font-size); font-weight: var(--font-weight-strong); line-height: var(--body-md-line-height); }
+.update-card p { margin: 8px 0; line-height: var(--body-md-line-height); }
+.update-notes { max-height: 140px; margin: 10px 0; padding-top: 10px; border-top: 1px solid var(--surface-line); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: var(--body-md-line-height); }
 .update-error { color: var(--el-color-danger); overflow-wrap: anywhere; }
 .update-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.update-actions .el-button { margin-left: 0; }
+.update-actions .el-button { max-width: 100%; height: auto; min-height: 24px; margin-left: 0; padding-block: 2px; line-height: 18px; white-space: normal; }
+.update-actions :deep(.el-button > span) { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 
 /* 侧边栏 */
 .sidebar {
@@ -437,7 +476,7 @@ function onSettingsClosed() {
   background: var(--status-success-surface-l1);
   box-shadow: none;
   transform: translateY(0);
-  transition: transform 320ms var(--ease-out);
+  transition: transform var(--motion-release) cubic-bezier(.2, .9, .24, 1);
   pointer-events: none;
 }
 .nav-indicator.is-general { transform: translateY(40px); }
@@ -468,29 +507,42 @@ function onSettingsClosed() {
 .nav-item.active {
   background: transparent;
   color: var(--text-brand);
-  font-weight: var(--font-weight-strong);
 }
 
 /* 内容区 */
 .content {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
-  scrollbar-gutter: stable;
-  padding: 22px 24px;
   background: var(--surface-raised);
-  overflow-y: auto;
+  overflow: hidden;
 }
 .pane {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding: 22px 24px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(7px);
+  transition: opacity 120ms var(--ease-out), transform 220ms var(--ease-out), visibility 220ms;
 }
+.pane > * { flex-shrink: 0; }
+.pane-about { transform: translateY(-7px); }
 
-.pane.is-active { animation: settings-arrive 180ms var(--ease-out) both; }
-@keyframes settings-arrive {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+.pane.is-active {
+  z-index: 1;
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: opacity 200ms 20ms var(--ease-out), transform 260ms var(--ease-out), visibility 0ms;
 }
 
 /* 关于页 - 头部 */
@@ -500,6 +552,7 @@ function onSettingsClosed() {
   gap: 12px;
 }
 .app-logo {
+  color: var(--control-mark, var(--text-onbrand, #fff));
   flex-shrink: 0;
   width: 48px;
   height: 48px;
@@ -508,7 +561,7 @@ function onSettingsClosed() {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(62, 125, 98, 0.22);
+  box-shadow: var(--settings-logo-shadow, 0 2px 8px rgba(62, 125, 98, 0.22));
 }
 .app-meta {
   display: flex;
@@ -520,18 +573,20 @@ function onSettingsClosed() {
   font-size: 15px;
   font-weight: var(--font-weight-strong);
   color: var(--text-default);
-  line-height: 1.3;
+  line-height: 22px;
 }
 .app-version {
-  font-size: 12px;
+  font-size: var(--body-md-font-size);
+  line-height: var(--body-md-line-height);
   color: var(--text-tertiary);
-  font-family: var(--font-family-mono);
+  font-family: var(--font-family-metric);
+  font-variant-numeric: tabular-nums;
 }
 .language-select { width: 180px; flex-shrink: 0; }
 .about-desc {
   margin: 0;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: var(--body-base-line-height);
   color: var(--text-secondary);
 }
 
@@ -545,9 +600,11 @@ function onSettingsClosed() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--spacer-12);
   padding: 10px 0;
   border-bottom: 1px solid var(--border-neutral-l1);
   font-size: 13px;
+  line-height: var(--body-base-line-height);
   cursor: pointer;
   text-decoration: none;
   transition: background-color 0.1s ease;
@@ -558,7 +615,13 @@ function onSettingsClosed() {
 a.link-row:hover .link-label {
   color: var(--text-default);
 }
+a.link-row:focus-visible {
+  outline: 2px solid var(--interaction-border);
+  outline-offset: 2px;
+  border-radius: var(--radius-inner);
+}
 .link-label {
+  min-width: 0;
   color: var(--text-tertiary);
   font-weight: var(--font-weight-medium);
   transition: color 0.1s ease;
@@ -567,6 +630,9 @@ a.link-row:hover .link-label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
   color: var(--text-brand);
   font-weight: var(--font-weight-medium);
 }
@@ -592,18 +658,60 @@ a.link-row:hover .link-label {
 }
 .setting-section { display: flex; flex-direction: column; gap: 12px; }
 .setting-section + .setting-section { border-top: 1px solid var(--border-neutral-l1); padding-top: 16px; }
-.section-title { margin: 0 0 2px; font-size: 11px; font-weight: 600; color: var(--text-tertiary); }
-.setting-hint { margin: 5px 0 0; font-size: 11px; line-height: 1.6; color: var(--text-tertiary); }
-.save-hint { margin: 0; padding-top: 2px; font-size: 11px; line-height: 1.6; color: var(--text-tertiary); }
+.section-title { margin: 0 0 2px; font-size: var(--heading-2xs-font-size); font-weight: var(--font-weight-strong); line-height: var(--body-md-line-height); color: var(--text-secondary); }
+.setting-hint { margin: var(--spacer-4) 0 0; font-size: var(--body-sm-font-size); line-height: var(--body-md-line-height); color: var(--text-tertiary); overflow-wrap: anywhere; }
+.save-hint { margin: 0; padding-top: 2px; font-size: var(--body-sm-font-size); line-height: var(--body-md-line-height); color: var(--text-tertiary); overflow-wrap: anywhere; }
 .setting-switch { flex: 0 0 36px; width: 36px; height: 22px; padding: 3px; border: 0; border-radius: 99px; background: var(--border-neutral-l2); cursor: pointer; transition: var(--control-transition); }
-.setting-switch span { display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); transform: translateX(0); transition: transform var(--motion-release) var(--ease-settle); }
+.setting-switch span { display: block; width: 16px; height: 16px; border-radius: 99px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); transform: translateX(0); transition: transform var(--motion-release) var(--ease-settle), width var(--motion-release) var(--ease-settle); }
 .setting-switch.is-on { background: var(--bg-brand); }
 .setting-switch.is-on span { transform: translateX(14px); }
+.setting-switch:active:not(:disabled) span { width: 19px; transition-duration: var(--motion-press); transition-timing-function: var(--ease-out); }
+.setting-switch.is-on:active:not(:disabled) span { transform: translateX(11px); }
 .label-text {
   font-size: 13px;
-  color: var(--text-secondary);
+  line-height: var(--body-base-line-height);
+  color: var(--text-default);
   font-weight: var(--font-weight-medium);
 }
+
+.skin-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.skin-card { display: flex; flex-direction: column; min-width: 0; padding: 8px; border: 1px solid var(--surface-line); border-radius: 13px; background: var(--surface-raised); text-align: left; cursor: pointer; }
+.skin-card:hover:not(:disabled) { background: var(--surface-well); }
+.skin-card.is-selected { border-color: var(--bg-brand); background: color-mix(in srgb, var(--bg-brand) 4%, var(--surface-raised)); }
+.skin-card:focus-visible { outline: 2px solid var(--interaction-ink, var(--bg-brand)); outline-offset: 2px; }
+.skin-card:disabled { cursor: default; }
+.skin-card-title { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; margin-top: 8px; color: var(--text-default); font-size: 12px; font-weight: 600; line-height: 18px; }
+.skin-card-check { display: grid; place-items: center; width: 15px; height: 15px; flex-shrink: 0; border-radius: 50%; background: var(--bg-brand); color: var(--text-onbrand); opacity: 0; transition: opacity var(--motion-fast) var(--ease-out); }
+.skin-card.is-selected .skin-card-check { opacity: 1; }
+.skin-card-hint { margin-top: 3px; color: var(--text-tertiary); font-size: 11px; line-height: 16px; }
+.skin-preview {
+  --preview-bg: #f1f5f2;
+  --preview-side: #e5eee8;
+  --preview-head: #fff;
+  --preview-line: #d2dfd6;
+  --preview-board: #dce9df;
+  --preview-brand: #3e7d62;
+  --preview-dot: #ce8c5d;
+  position: relative; display: block; width: 100%; height: 66px; overflow: hidden;
+  border: 1px solid var(--preview-line); border-radius: 8px; background: var(--preview-bg);
+}
+.skin-preview--sakura { --preview-bg: #fff; --preview-side: #fff; --preview-head: #fff; --preview-line: #e8e7eb; --preview-board: #fff7fa; --preview-brand: #d85c8a; --preview-dot: #f3d9e4; --preview-export: var(--sakura-accent); --preview-pad: var(--sakura-accent); }
+.skin-preview-header { position: absolute; inset: 0 0 auto; display: flex; align-items: center; gap: 3px; height: 11px; padding-left: 5px; border-bottom: 1px solid var(--preview-line); background: var(--preview-head); }
+.skin-preview-header i { width: 2px; height: 2px; border-radius: 50%; background: var(--preview-line); }
+.skin-preview-header i:first-child { background: var(--preview-brand); }
+.skin-preview-sidebar { position: absolute; top: 11px; bottom: 0; left: 0; display: flex; flex-direction: column; gap: 5px; width: 30%; padding: 9px 5px; border-right: 1px solid var(--preview-line); background: var(--preview-side); }
+.skin-preview-sidebar i { width: 100%; height: 3px; border-radius: 2px; background: var(--preview-line); }
+.skin-preview-sidebar i:first-child { width: 72%; background: var(--preview-brand); opacity: .65; }
+.skin-preview-workspace { position: absolute; inset: 11px 0 0 30%; display: grid; place-items: center; }
+.skin-preview-board { display: grid; grid-template-columns: repeat(2, 6px); justify-content: center; align-content: center; gap: 5px 8px; width: 42px; height: 30px; border: 1px solid var(--preview-brand); border-radius: 5px; background: var(--preview-board); transform: rotate(-8deg); }
+.skin-preview-board i { width: 6px; height: 3px; border-radius: 1px; background: var(--preview-brand); opacity: .7; }
+.skin-preview-board i:last-child { background: var(--preview-dot); opacity: 1; }
+.skin-preview--sakura .skin-preview-header::after { content: ''; width: 16px; height: 4px; margin: 0 5px 0 auto; border-radius: 2px; background: var(--preview-export); }
+.skin-preview--sakura .skin-preview-board { border-color: var(--preview-brand); }
+.skin-preview--sakura .skin-preview-board i { background: var(--preview-pad); opacity: 1; }
+.skin-preview--sakura .skin-preview-board i:last-child { background: var(--preview-dot); }
+html.dark .skin-preview { --preview-bg: #202825; --preview-side: #2b3730; --preview-head: #303a34; --preview-line: #45574b; --preview-board: #2c4335; --preview-brand: #7fb392; --preview-dot: #d49a70; }
+html.dark .skin-preview--sakura { --preview-bg: #242329; --preview-side: #29282e; --preview-head: #2e2d33; --preview-line: #45444c; --preview-board: #302e35; --preview-brand: #f0aac6; --preview-dot: #f3d9e4; }
 
 /* 分段控件 */
 .seg-group {
@@ -628,7 +736,7 @@ a.link-row:hover .link-label {
   background: var(--surface-selected);
   box-shadow: var(--shadow-control);
   transform: translateX(calc(var(--segment-index) * 100%));
-  transition: transform 320ms var(--ease-out);
+  transition: transform var(--motion-release) cubic-bezier(.2, .9, .24, 1);
   pointer-events: none;
 }
 .seg-btn {
@@ -656,6 +764,29 @@ a.link-row:hover .link-label {
   background: transparent;
   color: var(--text-brand);
 }
+
+@media (max-height: 600px) {
+  .pane { gap: 12px; padding-block: 16px; }
+  .update-notes { max-height: 100px; }
+}
+
+@media (max-width: 600px) {
+  .dialog-body { flex-direction: column; }
+  .sidebar { width: auto; flex-direction: row; padding: 8px; border-right: 0; border-bottom: 1px solid var(--border-neutral-l1); }
+  .nav-item { flex: 1; min-width: 0; }
+  .nav-indicator { top: 8px; right: auto; width: calc((100% - 20px) / 2); }
+  .nav-indicator.is-general { transform: translateX(calc(100% + 4px)); }
+  .pane { padding: 16px; }
+  .setting-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .setting-label { flex: auto; }
+  .setting-switch { flex: none; align-self: flex-start; }
+  .language-select, .seg-group { width: 100%; max-width: 100%; }
+  .seg-btn { min-width: 0; padding-inline: 8px; line-height: 18px; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 420px) {
+  .seg-btn { flex-direction: column; gap: 3px; }
+}
 </style>
 
 <style>
@@ -664,6 +795,7 @@ a.link-row:hover .link-label {
 /* settings-dialog 专用覆盖（非 scoped，因对话框 teleport 到 body，scoped :deep() 无法命中） */
 .settings-dialog.el-dialog {
   height: min(560px, calc(100vh - 48px));
+  height: min(560px, calc(100dvh - 48px));
   max-width: calc(100vw - 32px);
   margin: 0 auto !important;
   padding: 0 !important;
@@ -677,6 +809,15 @@ a.link-row:hover .link-label {
 .settings-overlay.el-overlay {
   z-index: 3000 !important;
 }
+/* Fade the mask while the fixed-size frame settles gently into place. */
+.settings-overlay.settings-reveal-enter-active { transition: opacity 220ms var(--ease-out); }
+.settings-overlay.settings-reveal-leave-active { transition: opacity 180ms ease; }
+.settings-overlay.settings-reveal-enter-from,
+.settings-overlay.settings-reveal-leave-to { opacity: 0; }
+.settings-reveal-enter-active .settings-dialog { transition: transform 300ms var(--ease-out); }
+.settings-reveal-leave-active .settings-dialog { transition: transform 180ms var(--ease-out); }
+.settings-reveal-enter-from .settings-dialog { transform: translateY(10px) scale(.98); }
+.settings-reveal-leave-to .settings-dialog { transform: translateY(5px) scale(.985); }
 .settings-dialog .el-dialog__header {
   display: none !important;
   margin: 0;

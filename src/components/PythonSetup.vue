@@ -351,7 +351,7 @@ function openPythonDownload() {
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
-  transition: background-color 0.12s ease;
+  transition: var(--control-transition);
 }
 
 .primary-btn:hover:not(:disabled) {
@@ -440,7 +440,10 @@ function openPythonDownload() {
 }
 
 .log-body {
-  background: var(--bg-invert);
+  --terminal-background: #20262A;
+  --terminal-text: #F1F4F4;
+  background: var(--terminal-background);
+  color: var(--terminal-text);
   padding: 10px 12px;
   max-height: 180px;
   overflow-y: auto;
@@ -450,7 +453,7 @@ function openPythonDownload() {
 }
 
 .log-line {
-  color: rgba(245, 245, 245, 0.85);
+  color: inherit;
   white-space: pre-wrap;
   word-break: break-all;
 }

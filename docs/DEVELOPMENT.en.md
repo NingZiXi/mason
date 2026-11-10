@@ -1,6 +1,6 @@
 # Mason development guide
 
-[Back to README](../README.en.md) · [简体中文](./DEVELOPMENT.md)
+[Back to README](../README.md) · [简体中文](./DEVELOPMENT.md)
 
 ## Run locally
 

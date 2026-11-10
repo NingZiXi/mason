@@ -1,6 +1,6 @@
 [package]
 name = "mason"
-version = "0.2.2"
+version = "0.3.0"
 description = "Mason - Generate 3D-printable solder-paste stencil jigs from Gerber"
 authors = ["you"]
 edition = "2021"
@@ -27,4 +27,4 @@ tokio = { version = "1", features = ["process", "io-util", "time", "sync", "macr
 regex = "1"
 
 [target.'cfg(windows)'.dependencies]
-# Windows-specific deps if needed
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }

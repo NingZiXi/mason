@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "mason"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",
@@ -2104,6 +2104,7 @@ dependencies = [
  "tauri-plugin-updater",
  "thiserror 1.0.69",
  "tokio",
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -409,6 +409,23 @@ export const useConfigStore = defineStore("config", () => {
   // Never reuse an acknowledgement from a different board.
   const stencilSizeReviewed = ref(false);
   const stencilSizeReviewRevision = ref(0);
+  const gerberOutlineSource = ref<'gerber' | 'pads-bounds' | null>(null);
+  const gerberImporting = ref(false);
+  const gerberOutlineFallbackReason = ref<'missing' | 'invalid' | null>(null);
+  const outlineEstimateReviewed = ref(false);
+  const outlineReviewRevision = ref(0);
+  function invalidateOutlineReview() {
+    outlineEstimateReviewed.value = false;
+    outlineReviewRevision.value++;
+  }
+  function confirmOutlineEstimateReview(revision = outlineReviewRevision.value) {
+    if (revision !== outlineReviewRevision.value || gerberOutlineSource.value !== 'pads-bounds') return false;
+    outlineEstimateReviewed.value = true;
+    return true;
+  }
+  watch(() => [config.value.gerberFilename, config.value.pcbOutlinePoints, config.value.pcbOutlineHoles,
+    config.value.pcbSizeX, config.value.pcbSizeY, config.value.panelMode, config.value.panelBoardIndex,
+    config.value.appMode, gerberOutlineSource.value], invalidateOutlineReview, { flush: 'sync' });
   function invalidateStencilSizeReview() {
     stencilSizeReviewed.value = false;
     stencilSizeReviewRevision.value++;
@@ -700,6 +717,8 @@ export const useConfigStore = defineStore("config", () => {
   function applyGerberImport(payload: {
     filename: string;
     sourceFilename?: string;
+    outlineSource?: 'gerber' | 'pads-bounds';
+    outlineFallbackReason?: 'missing' | 'invalid';
     isPanel: boolean;
     panelGrid?: { nx: number; ny: number };
     hasPads: boolean;
@@ -708,6 +727,7 @@ export const useConfigStore = defineStore("config", () => {
     variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
   }) {
     invalidateStencilSizeReview();
+    invalidateOutlineReview();
     historyEpoch.value++;
     gerberVariants.value = {
       panel: payload.variants.panel,
@@ -718,6 +738,8 @@ export const useConfigStore = defineStore("config", () => {
     const c = config.value;
     c.gerberFilename = payload.filename;
     gerberSourceFilename.value = payload.sourceFilename ?? null;
+    gerberOutlineSource.value = payload.outlineSource ?? 'gerber';
+    gerberOutlineFallbackReason.value = payload.outlineFallbackReason ?? null;
     c.panelAvailable = payload.isPanel;
     c.panelGrid = payload.panelGrid ?? null;
     c.panelBoardIndex = payload.boardIndex ?? null;
@@ -764,6 +786,9 @@ export const useConfigStore = defineStore("config", () => {
     historyEpoch.value++;
     gerberVariants.value = null;
     gerberSourceFilename.value = null;
+    gerberOutlineSource.value = null;
+    gerberOutlineFallbackReason.value = null;
+    invalidateOutlineReview();
     config.value.panelAvailable = false;
     config.value.panelGrid = null;
     config.value.panelMode = "panel";
@@ -884,6 +909,12 @@ export const useConfigStore = defineStore("config", () => {
   return {
     config,
     gerberSourceFilename,
+    gerberOutlineSource,
+    gerberImporting,
+    gerberOutlineFallbackReason,
+    outlineEstimateReviewed,
+    outlineReviewRevision,
+    confirmOutlineEstimateReview,
     stencilSizeReviewed,
     stencilSizeReviewRevision,
     confirmStencilSizeReview,

@@ -15,9 +15,10 @@ async function importZip(files: Record<string, string>) {
   // JSZip accepts a Buffer; processFile only needs the ZIP filename.
   const file = Object.assign(await zip.generateAsync({ type: "nodebuffer" }), { name: "board.zip" });
   const state = useGerberStencil();
-  await state.processFile(file as unknown as File);
+  const parsed = await state.processFile(file as unknown as File);
   expect(state.error.value).toBeNull();
   expect(state.result.value).not.toBeNull();
+  expect(parsed).toEqual(state.result.value);
   return state.result.value!;
 }
 
@@ -73,6 +74,8 @@ X200000Y0D02*\nX260000Y0D01*\nX260000Y50000D01*\nX200000Y50000D01*\nX200000Y0D01
     expect([result.topPads[0].cx, result.topPads[0].cy]).toEqual([-10, -5]);
     expect([result.bottomPads[0].cx, result.bottomPads[0].cy]).toEqual([10, 5]);
     expect(result.variants.single).toEqual(result.variants.panel);
+    expect(result.outlineSource).toBe('pads-bounds');
+    expect(result.outlineFallbackReason).toBe(invalid ? 'invalid' : 'missing');
   });
 
   it.each(["top.GTP", "bottom.GBP"])("keeps single-face fallback imports working: %s", async name => {
@@ -82,6 +85,8 @@ X200000Y0D02*\nX260000Y0D01*\nX260000Y50000D01*\nX200000Y50000D01*\nX200000Y0D01
     expect(result.height).toBeCloseTo(2.2);
     const pads = [...result.topPads, ...result.bottomPads];
     expect([pads[0].cx, pads[0].cy]).toEqual([0, 0]);
+    expect(result.outlineSource).toBe('pads-bounds');
+    expect(result.outlineFallbackReason).toBe('missing');
   });
 
   it("uses a valid board outline as the authoritative boundary", async () => {
@@ -102,5 +107,13 @@ M02*`,
     expect(result.height).toBeCloseTo(4);
     expect(result.topPads).toHaveLength(1);
     expect(result.bottomPads).toHaveLength(0);
+    expect(result.outlineSource).toBe('gerber');
+    expect(result.outlineFallbackReason).toBeUndefined();
+  });
+
+  it('labels an empty supplied board outline as invalid rather than missing', async () => {
+    const result = await importZip({ 'top.GTP': paste(0, 0), 'board.GKO': '' });
+    expect(result.outlineSource).toBe('pads-bounds');
+    expect(result.outlineFallbackReason).toBe('invalid');
   });
 });

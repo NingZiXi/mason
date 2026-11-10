@@ -5,6 +5,7 @@ import { useConfigStore } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
+import SlidingIndicator from "./SlidingIndicator.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -72,9 +73,11 @@ const showAdvanced = ref(false);
     <div class="field">
       <label class="field-label">{{ t('stencil.frameShape') }}</label>
       <div class="shape-row">
+        <SlidingIndicator />
         <button
           class="shape-btn"
           :class="{ active: c.stencilFrameShape === 'outline' }"
+          :aria-pressed="c.stencilFrameShape === 'outline'"
           @click="c.stencilFrameShape = 'outline'"
         >
           <svg viewBox="0 0 28 20" width="28" height="20">
@@ -85,6 +88,7 @@ const showAdvanced = ref(false);
         <button
           class="shape-btn"
           :class="{ active: c.stencilFrameShape === 'rect' }"
+          :aria-pressed="c.stencilFrameShape === 'rect'"
           @click="c.stencilFrameShape = 'rect'"
         >
           <svg viewBox="0 0 28 20" width="28" height="20">
@@ -107,7 +111,7 @@ const showAdvanced = ref(false);
           @click="store.config.stencilThickness = p.value"
         >
           <span class="preset-name">{{ t(p.label) }}</span>
-          <span class="preset-val">{{ p.value }}mm</span>
+          <span class="preset-val"><span>{{ p.value }}</span><small>mm</small></span>
         </button>
         <button
           class="preset-btn"
@@ -138,7 +142,7 @@ const showAdvanced = ref(false);
           <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
           <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <span>{{ t('stencil.totalThickness') }} = {{ c.pcbThickness }} + {{ c.stencilThickness }} = <strong>{{ totalThickness }}mm</strong></span>
+        <span>{{ t('stencil.totalThickness') }} = {{ c.pcbThickness }} + {{ c.stencilThickness }} = <strong class="thickness-total"><span>{{ totalThickness }}</span><small>mm</small></strong></span>
       </div>
     </div>
 
@@ -301,7 +305,7 @@ const showAdvanced = ref(false);
       <!-- 密脚错排 -->
       <div class="field">
         <InlineHelp id="stencil-staggerHint" :label="t('stencil.stagger')" :text="t('stencil.staggerHint')"><el-checkbox v-model="c.stencilStagger">{{ t('stencil.stagger') }}</el-checkbox></InlineHelp>
-        <template v-if="c.stencilStagger">
+        <MotionCollapse :open="c.stencilStagger">
           <div class="field-row">
             <div class="field">
               <label class="field-label">{{ t('stencil.staggerGap') }}</label>
@@ -328,13 +332,13 @@ const showAdvanced = ref(false);
               />
             </div>
           </div>
-        </template>
+        </MotionCollapse>
       </div>
 
       <!-- 测试点过滤 -->
       <div class="field">
         <el-checkbox v-model="c.stencilFilterTestPoints">{{ t('stencil.filterTestPoints') }}</el-checkbox>
-        <template v-if="c.stencilFilterTestPoints">
+        <MotionCollapse :open="c.stencilFilterTestPoints">
           <div class="field-row">
             <div class="field">
               <label class="field-label">{{ t('stencil.testPointMaxDia') }}</label>
@@ -361,7 +365,7 @@ const showAdvanced = ref(false);
               />
             </div>
           </div>
-        </template>
+        </MotionCollapse>
         <div class="auto-hint">
           <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
             <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
@@ -374,7 +378,7 @@ const showAdvanced = ref(false);
       <!-- 大孔开网格 -->
       <div class="field">
         <InlineHelp id="stencil-gridHint" :label="t('stencil.grid')" :text="t('stencil.gridHint')"><el-checkbox v-model="c.stencilGrid">{{ t('stencil.grid') }}</el-checkbox></InlineHelp>
-        <template v-if="c.stencilGrid">
+        <MotionCollapse :open="c.stencilGrid">
           <div class="field-row">
             <div class="field">
               <label class="field-label">{{ t('stencil.gridSize') }}</label>
@@ -401,7 +405,7 @@ const showAdvanced = ref(false);
               />
             </div>
           </div>
-        </template>
+        </MotionCollapse>
       </div>
     </div></MotionCollapse>
   </div>
@@ -411,11 +415,11 @@ const showAdvanced = ref(false);
 .stencil-form { padding: 16px; }
 
 .section-label {
-  font-size: 11px;
+  font-size: var(--heading-2xs-font-size);
+  line-height: var(--body-md-line-height);
   font-weight: var(--font-weight-strong);
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  letter-spacing: 0;
   margin: 20px 0 12px 0;
 }
 .section-label:first-child { margin-top: 0; }
@@ -445,7 +449,9 @@ const showAdvanced = ref(false);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 18px;
+  overflow-wrap: anywhere;
 }
+.auto-hint > span, .info-row > span { min-width: 0; }
 /* 合并信息卡片:多条提示共享一个背景框,行间细线分隔 */
 .info-card {
   display: flex;
@@ -463,13 +469,14 @@ const showAdvanced = ref(false);
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 18px;
+  overflow-wrap: anywhere;
 }
 .info-row + .info-row {
   border-top: 1px solid var(--el-border-color-light, rgba(115, 115, 115, 0.12));
 }
 .auto-hint .hint-icon,
 .info-row .hint-icon {
-  color: var(--bg-brand);
+  color: var(--interaction-ink);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -479,7 +486,10 @@ const showAdvanced = ref(false);
   color: var(--text-brand);
   font-weight: var(--font-weight-strong);
   font-family: var(--font-family-metric);
+  font-variant-numeric: tabular-nums;
 }
+.thickness-total { display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap; }
+.thickness-total small { font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); color: var(--text-secondary); }
 
 /* 钢网层厚度预设按钮 */
 .preset-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -504,33 +514,37 @@ const showAdvanced = ref(false);
   background: var(--brand-50, #E8F1EC);
 }
 .preset-name { font-size: 12px; font-weight: 600; color: var(--text-default); }
-.preset-val { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+.preset-val { display: inline-flex; align-items: baseline; gap: 3px; font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.preset-val small { font-size: inherit; color: var(--text-tertiary); }
 
 .slider-row { padding: 0 4px; }
 
 /* 外框形状切换(跟随板形 / 矩形) */
-.shape-row { display: flex; gap: 6px; }
-.shape-btn {
+.shape-row { --selection-background: var(--control-selection-surface); --selection-border: var(--bg-brand); --selection-shadow: none; --selection-radius: var(--radius-control); position: relative; isolation: isolate; display: flex; gap: 6px; }
+.shape-row .shape-btn {
+  position: relative;
+  z-index: 1;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 9px 4px;
-  border: 1px solid var(--border-neutral-l2);
+  border: 1px solid transparent;
   border-radius: var(--radius-control); corner-shape: var(--corner-shape);
-  background: var(--bg-secondary, transparent);
+  background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   transition: var(--control-transition);
 }
-.shape-btn:hover { border-color: var(--brand-500); }
-.shape-btn.active {
-  border-color: #3E7D62;
-  background: #E8F1EC;
-  color: #3E7D62;
+.shape-btn:not(.active) { border-color: var(--border-neutral-l2); }
+.shape-btn:hover:not(.active) { border-color: var(--brand-500); background: var(--surface-well); }
+.shape-row .shape-btn.active {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-brand);
 }
 
 /* 取放口方向选择器(与 ConfigForm 同款视觉) */
@@ -559,9 +573,9 @@ const showAdvanced = ref(false);
   color: var(--text-secondary);
 }
 .notch-btn.active {
-  border-color: #3E7D62;
-  background: #E8F1EC;
-  color: #3E7D62;
+  border-color: var(--interaction-border);
+  background: var(--control-selection-surface);
+  color: var(--text-brand);
 }
 .notch-btn.notch-up { top: 0; left: 50%; transform: translateX(-50%); }
 .notch-btn.notch-down { bottom: 0; left: 50%; transform: translateX(-50%); }
@@ -580,6 +594,7 @@ const showAdvanced = ref(false);
   float: right;
   color: var(--text-tertiary);
   font-weight: var(--font-weight-default);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 高级参数折叠(与 ConfigForm 同款) */

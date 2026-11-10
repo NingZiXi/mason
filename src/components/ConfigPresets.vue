@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, nextTick, ref } from "vue";
+import { computed, h, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { ElMessage, ElMessageBox, ElOptionGroup } from "element-plus";
 import type { SelectInstance } from "element-plus";
@@ -7,7 +7,10 @@ import { Check, Delete, EditPen, MoreFilled, Plus } from "@element-plus/icons-vu
 import { usePresetsStore } from "../stores/presets";
 import { DEFAULT_PRESET_ID, presetName } from "../lib/config-presets";
 import { presetCopyName, switchPresetWithEdits, type PresetSwitchChoice } from "../lib/preset-workflow";
+import { useCompletionFeedback } from "../composables/useCompletionFeedback";
+import ActionStatusIcon from "./ActionStatusIcon.vue";
 import InlineHelp from "./InlineHelp.vue";
+import MotionCollapse from "./MotionCollapse.vue";
 
 const { t } = useI18n();
 const store = usePresetsStore();
@@ -15,12 +18,19 @@ const working = ref(false);
 const presetSelect = ref<SelectInstance>();
 const disabled = computed(() => store.busy || working.value);
 const showUnsavedStatus = computed(() => !!store.selected && store.dirty);
+const statusKeys = ['presets.unsaved', 'presets.savedState', 'presets.builtIn'] as const;
+const statusKey = computed(() => showUnsavedStatus.value ? 'presets.unsaved' : store.selected ? 'presets.savedState' : 'presets.builtIn');
+const { completed: saveCompleted, complete: completeSave, reset: resetSave } = useCompletionFeedback();
+
+// Acknowledgement belongs to the saved preset and its unchanged parameters.
+watch(() => store.selectedId, resetSave, { flush: 'sync' });
+watch(() => store.dirty, dirty => { if (dirty) resetSave(); }, { flush: 'sync' });
 
 async function saveCurrent() {
   if (disabled.value || !store.selected || !store.dirty) return;
   await run(() => {
     store.update();
-    ElMessage.success(t("presets.saved"));
+    completeSave();
   });
 }
 
@@ -31,9 +41,11 @@ function managePreset(command: string | number | object) {
 }
 
 async function run(action: () => Promise<void> | void) {
+  resetSave();
   working.value = true;
   try { await action(); }
   catch (error) {
+    resetSave();
     if (error === "cancel" || error === "close") return;
     const key = error instanceof Error && error.message.startsWith("presets.") ? error.message : "presets.failed";
     ElMessage.error(t(key));
@@ -104,8 +116,13 @@ async function namePreset(rename = false) {
   if (disabled.value) return;
   await run(async () => {
     const value = await requestPresetName(rename);
-    if (rename) store.rename(value); else store.saveAs(value);
-    ElMessage.success(t("presets.saved"));
+    if (rename) {
+      store.rename(value);
+      ElMessage.success(t("presets.saved"));
+    } else {
+      store.saveAs(value);
+      completeSave();
+    }
   });
 }
 async function remove() {
@@ -128,9 +145,15 @@ async function remove() {
         <label id="preset-label" class="preset-heading">{{ t('presets.title') }}</label>
       </InlineHelp>
       <span class="preset-status" :class="{ 'is-dirty': showUnsavedStatus, 'is-saved': store.selected && !store.dirty }" role="status" aria-live="polite">
-        <span v-if="showUnsavedStatus" class="status-dot" aria-hidden="true" />
-        <Check v-else-if="store.selected" class="status-icon" aria-hidden="true" />
-        {{ t(showUnsavedStatus ? 'presets.unsaved' : store.selected ? 'presets.savedState' : 'presets.builtIn') }}
+        <span class="status-symbol" aria-hidden="true">
+          <span v-if="showUnsavedStatus" class="status-dot" />
+          <ActionStatusIcon v-else-if="store.selected" :size="12" :state="saveCompleted ? 'success' : 'idle'">
+            <Check class="status-icon" />
+          </ActionStatusIcon>
+        </span>
+        <span class="status-label">
+          <span v-for="key in statusKeys" :key="key" :class="{ 'is-visible': statusKey === key }" :aria-hidden="statusKey !== key">{{ t(key) }}</span>
+        </span>
       </span>
     </div>
     <el-select ref="presetSelect" class="preset-select" popper-class="config-preset-select-menu" :model-value="store.selectedId" :disabled="disabled" aria-labelledby="preset-label" @change="switchPreset">
@@ -147,10 +170,13 @@ async function remove() {
         </button>
       </template>
     </el-select>
-    <div v-if="store.selected" class="preset-actions">
-      <el-button class="preset-primary" :class="{ 'is-current': !store.dirty }" :disabled="disabled || !store.dirty" @click="saveCurrent">
-        <Check class="action-icon" aria-hidden="true" />
-        <span>{{ t('presets.saveChanges') }}</span>
+    <MotionCollapse :open="!!store.selected"><div class="preset-actions">
+      <el-button class="preset-primary" :class="{ 'is-current': !store.dirty, 'is-complete': saveCompleted }" :disabled="disabled || !store.selected || !store.dirty" :aria-label="t(saveCompleted ? 'presets.saved' : 'presets.saveChanges')" @click="saveCurrent">
+        <ActionStatusIcon :state="saveCompleted ? 'success' : 'idle'"><Check class="action-icon" /></ActionStatusIcon>
+        <span class="preset-save-label" aria-hidden="true">
+          <span :class="{ 'is-visible': !saveCompleted }">{{ t('presets.saveChanges') }}</span>
+          <span :class="{ 'is-visible': saveCompleted }">{{ t('presets.savedState') }}</span>
+        </span>
       </el-button>
       <el-dropdown class="preset-more" popper-class="config-preset-menu" trigger="click" placement="bottom-end" :disabled="disabled" @command="managePreset">
         <el-button class="preset-more-button" :disabled="disabled" :aria-label="t('presets.more')" :title="t('presets.more')">
@@ -163,19 +189,26 @@ async function remove() {
           </el-dropdown-menu>
         </template>
       </el-dropdown>
-    </div>
+    </div></MotionCollapse>
     <p v-if="store.loadError" role="alert" class="preset-error">{{ t(store.loadError) }}</p>
   </section>
 </template>
 
 <style scoped>
 .config-presets { flex-shrink: 0; padding: 14px 16px; border: 1px solid var(--surface-line); border-radius: var(--radius-panel); corner-shape: var(--corner-shape); background: var(--surface-raised); box-shadow: var(--shadow-card); }
-.preset-header { position: relative; margin-bottom: 10px; }
+.preset-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 8px; margin-bottom: 10px; }
 .preset-heading { font-size: 13px; font-weight: 600; color: var(--text-default); }
-.preset-help :deep(.help-heading) { padding-right: 70px; }
-.preset-status { position: absolute; top: 2px; right: 0; display: inline-flex; align-items: center; gap: 4px; min-height: 20px; padding: 0 6px; border-radius: 5px; background: var(--surface-well); color: var(--text-tertiary); font-size: 10px; line-height: 20px; white-space: nowrap; }
+.preset-help { display: contents; }
+.preset-help :deep(.help-heading) { grid-column: 1; grid-row: 1; }
+.preset-help :deep(.motion-collapse) { grid-column: 1 / -1; grid-row: 2; }
+.preset-status { grid-column: 2; grid-row: 1; margin-top: 2px; display: inline-flex; align-items: center; gap: 4px; min-height: 20px; padding: 0 6px; border-radius: 5px; background: var(--surface-well); color: var(--text-tertiary); font-size: 10px; line-height: 20px; white-space: nowrap; }
 .preset-status.is-dirty { color: var(--el-color-warning-dark-2); background: var(--el-color-warning-light-9); }
-.preset-status.is-saved { color: var(--text-brand); background: var(--status-success-surface-l1); }
+.preset-status.is-saved { color: var(--text-brand); background: var(--control-selection-surface); }
+.preset-status { transition: color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out); }
+.status-symbol { display: grid; place-items: center; width: 12px; height: 12px; flex-shrink: 0; }
+.status-label, .preset-save-label { display: inline-grid; }
+.status-label > span, .preset-save-label > span { grid-area: 1 / 1; opacity: 0; visibility: hidden; transition: opacity var(--motion-fast) var(--ease-out), visibility var(--motion-fast); }
+.status-label > .is-visible, .preset-save-label > .is-visible { opacity: 1; visibility: visible; }
 .status-dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
 .status-icon { width: 12px; height: 12px; }
 .preset-select { width: 100%; }
@@ -183,16 +216,16 @@ async function remove() {
 :global(.config-preset-select-menu .el-select-dropdown__footer) { padding: 6px; border-top: 1px solid var(--surface-line); }
 .preset-add { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 8px 10px; border: 0; border-radius: var(--radius-inner); background: transparent; color: var(--text-brand); font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: var(--control-transition); }
 .preset-add:hover:not(:disabled) { background: var(--surface-selected); }
-.preset-add:active:not(:disabled) { scale: .98; }
-.preset-add:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: -2px; }
+.preset-add:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: -2px; }
 .preset-add:disabled { opacity: .5; cursor: default; }
-.preset-actions { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.preset-actions { display: flex; align-items: center; gap: 6px; padding-top: 10px; }
 .preset-actions .el-button { height: 30px; min-width: 0; margin: 0; padding: 0 12px; border-radius: var(--radius-full); corner-shape: round; font-size: 12px; }
 .action-icon { width: 14px; height: 14px; flex-shrink: 0; }
 .preset-primary { flex: 1; border-color: transparent; background: var(--bg-brand); color: var(--text-onbrand); }
 .preset-primary :deep(> span) { gap: 5px; }
 .preset-primary:not(:disabled):hover { background: var(--bg-brand-hover); color: var(--text-onbrand); border-color: transparent; }
 .preset-primary.is-current { background: var(--surface-well); border-color: var(--surface-line); color: var(--text-tertiary); }
+.preset-primary.is-complete:disabled { background: var(--control-selection-surface); border-color: color-mix(in srgb, var(--interaction-border) 15%, transparent); color: var(--text-brand); }
 .preset-more-button { background: var(--surface-raised); border-color: var(--surface-line); color: var(--text-secondary); }
 .preset-more-button:not(:disabled):hover { background: var(--surface-well); border-color: var(--surface-line); color: var(--text-default); }
 .preset-more { flex-shrink: 0; }

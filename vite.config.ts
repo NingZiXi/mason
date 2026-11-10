@@ -22,12 +22,15 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // Film projects and the website have their own servers. Their generated
+      // files must not trigger desktop reloads or expand the watcher tree.
+      ignored: ["**/src-tauri/**", "**/films/**", "**/docs/**"],
     },
   },
-  // gerber-parser 是纯 JS,无需 WASM 排除
+  // Scan only the desktop entry; nested video projects contain many unrelated
+  // HTML entry points and dependency trees that can stall initial loading.
   optimizeDeps: {
-    exclude: [],
+    entries: ["index.html"],
   },
   build: {
     target:

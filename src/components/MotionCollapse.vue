@@ -3,8 +3,14 @@ import { onBeforeUnmount } from "vue";
 
 const props = defineProps<{ open: boolean; height?: number }>();
 let animation: Animation | undefined;
+let resizeObserver: ResizeObserver | undefined;
 let target: HTMLElement | undefined;
 let interrupted = false;
+
+function stopObserving() {
+  resizeObserver?.disconnect();
+  resizeObserver = undefined;
+}
 
 function restoreHeight(node: HTMLElement) {
   node.style.height = props.height === undefined ? "" : `${props.height}px`;
@@ -15,6 +21,7 @@ function restoreHeight(node: HTMLElement) {
 // jump back to the beginning. No timers or permanent animation frames.
 function cancel(el: Element) {
   const node = el as HTMLElement;
+  stopObserving();
   if (!animation) return;
   const height = node.getBoundingClientRect().height;
   const opacity = getComputedStyle(node).opacity;
@@ -42,14 +49,28 @@ function move(el: Element, done: () => void, opening: boolean) {
   const opacity = getComputedStyle(node).opacity;
   // Measure natural content, not the clipped/animated parent.
   const content = node.firstElementChild as HTMLElement;
-  const to = opening ? props.height ?? content.scrollHeight : 0;
-  animation = node.animate([
+  let to = opening ? props.height ?? content.scrollHeight : 0;
+  const keyframes = (height: number) => [
     { height: `${from}px`, opacity },
-    { height: `${to}px`, opacity: opening ? 1 : 0 },
-  ], { duration: opening ? 280 : 210, easing: "cubic-bezier(.22,1,.36,1)", fill: "both" });
+    { height: `${height}px`, opacity: opening ? 1 : 0 },
+  ];
+  animation = node.animate(keyframes(to), { duration: opening ? 280 : 210, easing: "cubic-bezier(.22,1,.36,1)", fill: "both" });
   const current = animation;
+  if (opening && props.height === undefined) {
+    // Nested parameter groups can keep changing size while this group opens.
+    // Follow their height without restarting the easing or extending the animation.
+    resizeObserver = new ResizeObserver(() => {
+      if (animation !== current) return;
+      const nextHeight = content.scrollHeight;
+      if (nextHeight === to) return;
+      to = nextHeight;
+      (current.effect as KeyframeEffect | null)?.setKeyframes(keyframes(to));
+    });
+    resizeObserver.observe(content);
+  }
   current.onfinish = () => {
     if (animation !== current) return;
+    stopObserving();
     restoreHeight(node);
     animation = undefined;
     current.cancel();
@@ -58,6 +79,7 @@ function move(el: Element, done: () => void, opening: boolean) {
 }
 
 onBeforeUnmount(() => {
+  stopObserving();
   animation?.cancel();
   animation = undefined;
   if (target) { target.style.height = ""; target.style.opacity = ""; }

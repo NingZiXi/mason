@@ -19,14 +19,19 @@ import HistoryControls from "./components/HistoryControls.vue";
 import SettingsMenu from "./components/SettingsMenu.vue";
 import ConfigPresets from "./components/ConfigPresets.vue";
 import MotionCollapse from "./components/MotionCollapse.vue";
+import ModeSwitch from "./components/ModeSwitch.vue";
+import BrandLogo from "./components/BrandLogo.vue";
 import { usePresetsStore } from "./stores/presets";
 import { useWorkSessionStore } from "./stores/work-session";
 import { useExitConfirmation } from "./composables/useExitConfirmation";
 import { createWindowCloseHandler } from "./lib/window-close";
+import { fitMainWindowToMonitor } from "./lib/window-layout";
+import { watchDesktopSkinIcon } from "./lib/desktop-icon";
 import { ElMessage } from "element-plus";
 import type { PanelMode } from "./lib/gerber/panel";
 
 const OnboardingTour = defineAsyncComponent(() => import("./components/OnboardingTour.vue"));
+const SkinUnlockCelebration = defineAsyncComponent(() => import("./components/SkinUnlockCelebration.vue"));
 // Render the application shell without waiting for the 3D engine to evaluate.
 const ModelPreview = defineAsyncComponent(() => import("./components/ModelPreview.vue"));
 
@@ -35,6 +40,7 @@ const workSession = useWorkSessionStore();
 void workSession.initialize(usePresetsStore().initialize());
 const confirmExit = useExitConfirmation();
 const ui = useUiStore();
+const stopDesktopIconSync = watchDesktopSkinIcon(ui);
 const { t } = useI18n();
 
 // Element Plus 内置组件文案(弹窗按钮等)跟随语言切换
@@ -47,6 +53,7 @@ const gerberDone = computed(() =>
     : configStore.config.pcbOutlinePoints.length > 0
 );
 function switchMode(mode: "jig" | "stencil") {
+  if (mode === appMode.value) return;
   configStore.setMode(mode);
 }
 
@@ -64,22 +71,40 @@ const appWindow = (() => {
   }
 })();
 const isMaximized = ref(false);
+let appDisposed = false;
 let unlistenMaximize: UnlistenFn | null = null;
 let unlistenClose: UnlistenFn | null = null;
 const handleCloseRequested = createWindowCloseHandler(
-  confirmExit,
-  () => appWindow.destroy(),
-  () => ElMessage.error(t('exit.failed')),
+  async () => !appDisposed && await confirmExit(),
+  async () => { if (!appDisposed) await appWindow.destroy(); },
+  () => { if (!appDisposed) ElMessage.error(t('exit.failed')); },
 );
 
 async function initWindowState() {
-  isMaximized.value = await appWindow.isMaximized();
-  // 旧版 @tauri-apps/api 无 onMaximizedChanged,用 onResized + 查询代替
-  unlistenMaximize = (await appWindow.onResized(async () => {
-    isMaximized.value = await appWindow.isMaximized();
-  })) as unknown as UnlistenFn;
+  if (appDisposed) return;
   if (isTauri()) {
-    unlistenClose = await appWindow.onCloseRequested(handleCloseRequested);
+    try { await fitMainWindowToMonitor(appWindow); }
+    catch (error) { console.warn('Could not fit the initial window to its monitor', error); }
+    if (appDisposed) return;
+  }
+  const maximized = await appWindow.isMaximized();
+  if (appDisposed) return;
+  isMaximized.value = maximized;
+  // 旧版 @tauri-apps/api 无 onMaximizedChanged,用 onResized + 查询代替
+  const stopMaximize = (await appWindow.onResized(async () => {
+    if (appDisposed) return;
+    const maximized = await appWindow.isMaximized();
+    if (!appDisposed) isMaximized.value = maximized;
+  })) as unknown as UnlistenFn;
+  // Native registration can resolve after unmount; release that late listener immediately.
+  if (appDisposed) { stopMaximize(); return; }
+  unlistenMaximize = stopMaximize;
+  if (isTauri()) {
+    const stopClose = await appWindow.onCloseRequested((event) => {
+      if (!appDisposed) return handleCloseRequested(event);
+    });
+    if (appDisposed) { stopClose(); return; }
+    unlistenClose = stopClose;
   }
 }
 
@@ -92,8 +117,12 @@ function onHeaderDblClick(e: MouseEvent) {
 
 onMounted(initWindowState);
 onBeforeUnmount(() => {
+  appDisposed = true;
+  stopDesktopIconSync();
   unlistenMaximize?.();
   unlistenClose?.();
+  unlistenMaximize = null;
+  unlistenClose = null;
 });
 
 // 侧栏宽度
@@ -142,7 +171,6 @@ const collapsed = ref<Record<string, boolean>>({
 
 const tourOpen = ref(false);
 let tourPreparing = false;
-let appDisposed = false;
 let tourLayout: { hidden: boolean; collapsed: Record<string, boolean>; auto: Record<string, boolean>; scroll: number } | undefined;
 
 async function startTour() {
@@ -226,9 +254,11 @@ function saveSettings() {
 let isResizingWidth = false;
 let widthStartX = 0;
 let widthStartW = 480;
+let resizeReleaseFrame = 0;
 
 function onWidthDown(e: MouseEvent) {
   if (sidebarHidden.value) return;
+  cancelAnimationFrame(resizeReleaseFrame);
   isResizingWidth = true;
   widthStartX = e.clientX;
   widthStartW = visibleSidebarWidth.value;
@@ -253,9 +283,12 @@ function onWidthUp() {
     document.body.style.userSelect = "";
     saveSettings();
     // 松手后下一帧开启 transition,产生"惯性到位"效果
-    requestAnimationFrame(() => {
-      sidebarAnimating.value = true;
-    });
+    if (!appDisposed) {
+      resizeReleaseFrame = requestAnimationFrame(() => {
+        resizeReleaseFrame = 0;
+        sidebarAnimating.value = true;
+      });
+    }
   }
 }
 
@@ -316,6 +349,12 @@ function onHeightUp() {
     document.body.style.userSelect = "";
     saveSettings();
   }
+}
+
+// Losing the window during a drag can consume mouseup outside the WebView.
+function finishLayoutResize() {
+  onWidthUp();
+  onHeightUp();
 }
 
 // 双击拖拽条 → 恢复自适应内容高度
@@ -406,6 +445,15 @@ async function revealStencilSizeForReview() {
   await configFormRef.value?.revealStencilSize(true);
 }
 
+async function revealBoardOutlineForReview() {
+  sidebarHidden.value = false;
+  collapsed.value.gerber = false;
+  autoHeights.value.gerber = true;
+  saveSettings();
+  await nextTick();
+  sidebarShell.value?.querySelector<HTMLElement>('#slot-gerber')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 onMounted(() => {
   configStore.detectPython();
   if (!ui.onboardingSeen) void startTour();
@@ -417,8 +465,10 @@ onMounted(() => {
   window.addEventListener("pointerup", configStore.endParameterInteraction);
   window.addEventListener("pointercancel", configStore.endParameterInteraction);
   window.addEventListener("blur", configStore.endParameterInteraction);
+  window.addEventListener("blur", finishLayoutResize);
   // 内容高度变化复查(等首帧渲染完再挂,避免初始布局抖动误判)
   void nextTick(() => {
+    if (appDisposed) return;
     contentObserver = new ResizeObserver(() => {
       for (const id of CARD_IDS) ensureHeightFits(id);
     });
@@ -427,7 +477,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  appDisposed = true;
   importGuideSequence++;
   window.removeEventListener("resize", updateViewportWidth);
   document.removeEventListener("mousemove", onWidthMove);
@@ -437,6 +486,11 @@ onBeforeUnmount(() => {
   window.removeEventListener("pointerup", configStore.endParameterInteraction);
   window.removeEventListener("pointercancel", configStore.endParameterInteraction);
   window.removeEventListener("blur", configStore.endParameterInteraction);
+  window.removeEventListener("blur", finishLayoutResize);
+  finishLayoutResize();
+  cancelAnimationFrame(resizeReleaseFrame);
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
   contentObserver?.disconnect();
   contentObserver = null;
 });
@@ -447,12 +501,7 @@ onBeforeUnmount(() => {
   <div class="app-shell">
     <header class="app-header" data-tauri-drag-region @dblclick="onHeaderDblClick">
       <div class="header-brand" data-tauri-drag-region>
-        <!-- Logo:B1 竖向蛇形砖墙(走线 = 砖墙灰缝 · 起绿终橙) -->
-        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true" data-tauri-drag-region>
-          <path d="M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50" fill="none" stroke="var(--bg-brand)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
-          <circle cx="14" cy="14" r="5" fill="var(--bg-brand)" />
-          <circle cx="14" cy="50" r="5" fill="var(--brand-accent)" />
-        </svg>
+        <BrandLogo />
         <div class="header-titles" data-tauri-drag-region>
           <h1 data-tauri-drag-region>{{ t('app.title') }}</h1>
           <span class="subtitle" :key="appMode" data-tauri-drag-region>
@@ -460,34 +509,7 @@ onBeforeUnmount(() => {
           </span>
         </div>
         <!-- 模式切换 -->
-        <div class="mode-switch">
-          <div class="mode-indicator" :class="{ 'pos-jig': appMode === 'jig', 'pos-stencil': appMode === 'stencil' }" aria-hidden="true" />
-          <button
-            class="mode-btn"
-            :class="{ active: appMode === 'jig' }"
-            @click="switchMode('jig')"
-          >
-            <svg class="mode-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
-              <path d="M5 5h6v3H8.5L7 9.5v1.5H5z" fill="currentColor"/>
-            </svg>
-            {{ t('mode.jig') }}
-          </button>
-          <button
-            class="mode-btn"
-            :class="{ active: appMode === 'stencil' }"
-            @click="switchMode('stencil')"
-          >
-            <svg class="mode-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" stroke-width="1.6"/>
-              <circle cx="5.5" cy="5.5" r="1" fill="currentColor"/>
-              <circle cx="10.5" cy="5.5" r="1" fill="currentColor"/>
-              <circle cx="5.5" cy="10.5" r="1" fill="currentColor"/>
-              <circle cx="10.5" cy="10.5" r="1" fill="currentColor"/>
-            </svg>
-            {{ t('mode.stencil') }}
-          </button>
-        </div>
+        <ModeSwitch :mode="appMode" @change="switchMode" />
       </div>
       <div class="spacer" data-tauri-drag-region />
       <HistoryControls />
@@ -543,12 +565,13 @@ onBeforeUnmount(() => {
           <button class="slot-header" :aria-expanded="!collapsed.python" aria-controls="body-python" @click="toggleCollapse('python')">
             <div class="slot-label">
               <span class="slot-step-dot" data-icon="py" :class="{ 'is-done': configStore.pythonDetected }">Py</span>
-              <span class="slot-title">{{ t('cards.python') }}</span>
+              <span class="slot-title" :title="t('cards.python')">{{ t('cards.python') }}</span>
             </div>
             <div class="slot-meta">
               <span
                 class="status-badge"
                 :class="configStore.pythonDetected ? 'is-ok' : configStore.pythonPath ? 'is-warn' : 'is-err'"
+                :title="configStore.pythonDetected ? t('cards.configured') : configStore.pythonPath ? t('cards.depsMissing') : t('cards.notDetected')"
               >
                 {{ configStore.pythonDetected ? t('cards.configured') : configStore.pythonPath ? t('cards.depsMissing') : t('cards.notDetected') }}
               </span>
@@ -575,7 +598,7 @@ onBeforeUnmount(() => {
           <button class="slot-header" :aria-expanded="!collapsed.gerber" aria-controls="body-gerber" @click="toggleCollapse('gerber')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="1" :class="{ 'is-done': gerberDone }">{{ gerberDone ? '✓' : '1' }}</span>
-              <span class="slot-title">{{ appMode === 'stencil' ? t('stencil.import') : t('cards.gerber') }}</span>
+              <span class="slot-title" :title="appMode === 'stencil' ? t('stencil.import') : t('cards.gerber')">{{ appMode === 'stencil' ? t('stencil.import') : t('cards.gerber') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.gerber }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -602,7 +625,7 @@ onBeforeUnmount(() => {
           <button class="slot-header" :aria-expanded="!collapsed.config" aria-controls="body-config" @click="toggleCollapse('config')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="2">2</span>
-              <span class="slot-title">{{ t('cards.config') }}</span>
+              <span class="slot-title" :title="t('cards.config')">{{ t('cards.config') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.config }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -626,7 +649,7 @@ onBeforeUnmount(() => {
           <button class="slot-header" :aria-expanded="!collapsed.screw" aria-controls="body-screw" @click="toggleCollapse('screw')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="3">3</span>
-              <span class="slot-title">{{ t('cards.screw') }}</span>
+              <span class="slot-title" :title="t('cards.screw')">{{ t('cards.screw') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.screw }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -652,7 +675,7 @@ onBeforeUnmount(() => {
           <button class="slot-header" :aria-expanded="!collapsed.stencil" aria-controls="body-stencil" @click="toggleCollapse('stencil')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="1">1</span>
-              <span class="slot-title">{{ t('cards.stencil') }}</span>
+              <span class="slot-title" :title="t('cards.stencil')">{{ t('cards.stencil') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.stencil }" viewBox="0 0 16 16" width="16" height="16">
               <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -691,10 +714,11 @@ onBeforeUnmount(() => {
       </button>
 
       <section class="app-preview">
-        <ModelPreview :class="{ 'is-layout-animating': sidebarAnimating }" @review-stencil-size="revealStencilSizeForReview" />
+        <ModelPreview :class="{ 'is-layout-animating': sidebarAnimating }" @review-stencil-size="revealStencilSizeForReview" @review-board-outline="revealBoardOutlineForReview" />
       </section>
     </main>
     <OnboardingTour v-if="tourOpen" :mode="appMode" @close="finishTour" />
+    <SkinUnlockCelebration v-if="ui.skinCelebrationActive" />
   </div>
   </el-config-provider>
 </template>
@@ -727,6 +751,7 @@ onBeforeUnmount(() => {
 /* ===== 窗口控制(融合标题栏) ===== */
 .window-controls {
   display: flex;
+  flex-shrink: 0;
   align-items: stretch;
   margin-left: auto;
   align-self: stretch;
@@ -757,8 +782,8 @@ onBeforeUnmount(() => {
 .sidebar-toggle.is-animating { transition: transform var(--sidebar-duration) var(--sidebar-ease), background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast); }
 .sidebar-toggle:hover, .sidebar-toggle:focus-visible { background: var(--status-success-surface-l1); border-color: var(--bg-brand); color: var(--bg-brand); }
 .sidebar-toggle:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
-.sidebar-toggle:active svg { scale: .94; }
-.sidebar-toggle-arrow { transform-origin: 10px 10px; transition: transform var(--motion-panel) var(--ease-out); }
+.sidebar-toggle:active:not(:disabled) .sidebar-toggle-arrow { scale: .9; transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-press) var(--ease-out); }
+.sidebar-toggle-arrow { scale: 1; transform-origin: 10px 10px; transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-release) var(--ease-settle); }
 .sidebar-toggle.is-hidden .sidebar-toggle-arrow { transform: rotate(180deg); }
 
 .win-btn {
@@ -802,16 +827,6 @@ onBeforeUnmount(() => {
   flex-shrink: 1;
 }
 
-.brand-mark {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  background: var(--status-success-surface-l1);
-  border-radius: var(--radius-control);
-  corner-shape: var(--corner-shape);
-  box-shadow: 0 0 0 4px var(--status-success-surface-l1);
-}
-
 .header-titles {
   display: flex;
   flex-direction: column;
@@ -827,6 +842,9 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--text-default);
   letter-spacing: -0.035em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .subtitle {
@@ -849,63 +867,25 @@ onBeforeUnmount(() => {
   top: 50%;
   transform: translateY(-50%);
   z-index: 1;
-  display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  background: var(--surface-well);
-  border: 1px solid var(--surface-line);
-  border-radius: var(--radius-full);
-  padding: 3px;
-  gap: 0;
-  /* 关键:模式按钮不允许被挤压消失 */
-  flex-shrink: 0;
-  box-shadow: none;
-}
-/* 滑动指示器:宽度 = 容器宽度的一半,根据 active 状态左右平移 */
-.mode-switch .mode-indicator {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: calc(50% - 3px);
-  height: calc(100% - 6px);
-  border-radius: var(--radius-full);
-  background: var(--surface-selected);
-  box-shadow: var(--shadow-control);
-  transition: transform 340ms var(--ease-out);
-  pointer-events: none;
-}
-.mode-switch .mode-indicator.pos-stencil {
-  transform: translateX(100%);
-}
-.mode-btn {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 18px;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  transition: var(--control-transition);
-  line-height: 1;
-}
-.mode-btn .mode-icon {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-}
-.mode-btn:hover:not(.active) {
-  color: var(--brand-500);
-}
-.mode-btn.active {
-  color: var(--text-brand);
 }
 .spacer {
   flex: 1 1 auto;
+}
+
+@media (max-width: 1000px) {
+  .app-header { padding-left: 16px; gap: 12px; }
+  .header-brand { max-width: none; flex: 1 1 auto; }
+  .header-titles { flex: 1 1 auto; }
+  .subtitle { display: none; }
+  .mode-switch { position: relative; left: auto; top: auto; transform: none; }
+  .spacer { display: none; }
+}
+
+@media (max-width: 760px) {
+  .app-header { gap: 8px; }
+  .header-brand { gap: 10px; }
+  .header-titles { display: none; }
+  .win-btn { width: 40px; }
 }
 
 /* ===== Main Layout ===== */
@@ -996,11 +976,19 @@ onBeforeUnmount(() => {
 .slot-header::after { content: ''; position: absolute; left: 16px; right: 16px; top: 43px; height: 1px; background: var(--surface-line); opacity: .45; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-out); }
 .slot-header[aria-expanded="false"]::after { opacity: 0; }
 .slot-header:hover .slot-title { color: var(--text-brand); }
+.slot-header:active:not(:disabled) .slot-label { scale: .99; translate: 1px 0; transition-duration: var(--motion-press); transition-timing-function: var(--ease-out); }
+.slot-header:active:not(:disabled) .chevron { scale: .9; transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-press) var(--ease-out); }
 
 .slot-label {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex: 1;
+  scale: 1;
+  translate: 0;
+  transform-origin: left center;
+  transition: scale var(--motion-release) var(--ease-settle), translate var(--motion-release) var(--ease-out);
 }
 
 .slot-step-dot {
@@ -1040,6 +1028,10 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-default);
   letter-spacing: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: color 180ms ease;
 }
 
@@ -1047,6 +1039,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 55%;
 }
 
 .status-badge {
@@ -1055,6 +1050,10 @@ onBeforeUnmount(() => {
   line-height: 16px;
   padding: 1px 6px;
   border-radius: var(--radius-4);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-badge.is-ok {
@@ -1075,7 +1074,8 @@ onBeforeUnmount(() => {
 .chevron {
   color: var(--text-tertiary);
   flex-shrink: 0;
-  transition: transform var(--motion-panel) var(--ease-out);
+  scale: 1;
+  transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-release) var(--ease-settle);
 }
 
 .chevron.is-collapsed {

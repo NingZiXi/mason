@@ -6,14 +6,23 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import { useUiStore } from "../stores/ui";
+import { observePreviewResize } from "../lib/preview-resize";
 import { useWorkSessionStore } from "../stores/work-session";
 import { buildScadParams as createScadParams, modelParamsHash, scadPartHash } from "../lib/model-params";
 import { GenerationTasks, isGenerationCancelled } from "../lib/generation-tasks";
 import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cache";
-import { buildJigAssembly, disposeJigAssembly, setJigExplosion, setJigVisibility } from "../lib/jig-assembly";
+import { buildJigAssembly, disposeJigAssembly, recolorJigAssembly, setJigExplosion, setJigVisibility } from "../lib/jig-assembly";
+import { getModelPalette } from "../lib/model-palette";
 import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
+import { useCompletionFeedback } from "../composables/useCompletionFeedback";
 import { reviewStencilSizeForExport } from "../lib/stencil-export-review";
+import { reviewOutlineForExport } from "../lib/outline-export-review";
 import { defaultExportName, validExportName } from "../lib/export-name";
+import { exportModels, ModelExportError } from "../lib/model-export";
+import { exportReadiness } from "../lib/export-readiness";
+import { createPreviewCameraMotion, type PreviewView } from "../lib/preview-camera-motion";
+import SlidingIndicator from "./SlidingIndicator.vue";
+import ActionStatusIcon from "./ActionStatusIcon.vue";
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -26,8 +35,24 @@ const StencilInspection = defineAsyncComponent(() => import("./StencilInspection
 
 const store = useConfigStore();
 const workSession = useWorkSessionStore();
-const emit = defineEmits<{ reviewStencilSize: [] }>();
+const emit = defineEmits<{ reviewStencilSize: []; reviewBoardOutline: [] }>();
 const ui = useUiStore();
+const modelPalette = computed(() => getModelPalette(ui.skin));
+const colorHex = (color: number) => `#${color.toString(16).padStart(6, "0")}`;
+const paletteStyles = computed(() => ({
+  '--model-pcb': colorHex(modelPalette.value.pcb),
+  '--model-metal': ui.skin === 'classic' ? '#99A8B5' : colorHex(modelPalette.value.metalStencil),
+  '--measure-selection-a': colorHex(modelPalette.value.selection.a),
+  '--measure-selection-b': colorHex(modelPalette.value.selection.b),
+  ...(ui.skin === 'sakura' ? {
+    '--measure-direct': colorHex(modelPalette.value.measurement.direct),
+    '--measure-horizontal': colorHex(modelPalette.value.measurement.horizontal),
+    '--measure-vertical': colorHex(modelPalette.value.measurement.vertical),
+    '--measure-direct-text': ui.resolvedTheme === 'dark' ? '#F5A6C5' : '#B63F70',
+    '--measure-horizontal-text': ui.resolvedTheme === 'dark' ? '#8EB2FF' : '#4169D8',
+    '--measure-vertical-text': ui.resolvedTheme === 'dark' ? '#CABADB' : '#78658B',
+  } : {}),
+}));
 const { t } = useI18n();
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const containerEl = ref<HTMLElement | null>(null);
@@ -37,6 +62,8 @@ const activePart = ref<PreviewName>(store.config.appMode === "stencil"
   : "insert");
 const loading = ref(false);
 const exporting = ref(false);
+const { completed: refreshCompleted, complete: completeRefresh, reset: resetRefresh } = useCompletionFeedback();
+const { completed: exportCompleted, complete: completeExport, reset: resetExport } = useCompletionFeedback();
 const inspectionOpen = ref(false);
 // Keep the inspected board and viewport mounted after the first visit.
 const inspectionLoaded = ref(false);
@@ -67,6 +94,47 @@ const scene = shallowRef<THREE.Scene | null>(null);
 const camera = shallowRef<THREE.PerspectiveCamera | null>(null);
 const renderer = shallowRef<THREE.WebGLRenderer | null>(null);
 const controls = shallowRef<OrbitControls | null>(null);
+const selectedView = ref<PreviewView | null>("iso");
+let cameraMotion: ReturnType<typeof createPreviewCameraMotion> | null = null;
+const cameraOffset = new THREE.Vector3();
+let syncingCamera = false;
+
+function cancelCameraMotion() {
+  if (cameraMotion) selectedView.value = null;
+  cameraMotion = null;
+}
+
+function onCameraInteraction() {
+  cancelCameraMotion();
+  selectedView.value = null;
+}
+
+function onCameraChange() {
+  if (!syncingCamera) invalidate();
+}
+
+// Clear the controller's remaining inertia through its public API, then put
+// the camera back before rendering. A preset must start at the visible pose.
+function settleCameraControls() {
+  const cam = camera.value;
+  const ctrl = controls.value;
+  if (!cam || !ctrl) return;
+  const position = cam.position.clone();
+  const target = ctrl.target.clone();
+  const damping = ctrl.enableDamping;
+  syncingCamera = true;
+  try {
+    ctrl.enableDamping = false;
+    ctrl.update();
+    cam.position.copy(position);
+    ctrl.target.copy(target);
+    ctrl.update();
+  } finally {
+    ctrl.enableDamping = damping;
+    syncingCamera = false;
+  }
+}
+
 const currentMesh = shallowRef<THREE.Mesh | null>(null);
 const currentAssembly = shallowRef<THREE.Group | null>(null);
 const explosionPercent = ref(0);
@@ -107,8 +175,8 @@ function initThreeScene() {
 
   const canvas = canvasEl.value;
   const container = canvas.parentElement!;
-  const w = container.clientWidth;
-  const h = container.clientHeight;
+  const w = Math.max(1, container.clientWidth);
+  const h = Math.max(1, container.clientHeight);
 
   const s = new THREE.Scene();
   // 背景交由 CSS 径向渐变(renderer alpha),场景只负责模型与网格
@@ -120,9 +188,8 @@ function initThreeScene() {
 
   const r = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
   // Let CSS own the display size; only the drawing buffer needs resizing.
-  r.setSize(w, h, false);
   // HiDPI 屏 cap 到 2x:3x 的像素增益肉眼不可辨,填充率/显存开销却翻倍
-  r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  r.setDrawingBufferSize(w, h, Math.min(window.devicePixelRatio || 1, 2));
 
   // 灯光
   s.add(new THREE.AmbientLight(0xffffff, 0.6));
@@ -135,6 +202,10 @@ function initThreeScene() {
 
   // 坐标轴
   const axesHelper = new THREE.AxesHelper(30);
+  axesHelper.userData.classicColors = (axesHelper.geometry.getAttribute('color').array as Float32Array).slice();
+  if (ui.skin === 'sakura') axesHelper.setColors(
+    modelPalette.value.measurement.direct, modelPalette.value.measurement.horizontal, modelPalette.value.measurement.vertical,
+  );
   s.add(axesHelper);
 
   // 网格地板(颜色随主题)
@@ -152,7 +223,8 @@ function initThreeScene() {
   ctrl.autoRotate = false;
   ctrl.autoRotateSpeed = 0.8;
   // 相机变化(拖拽/惯性)时唤醒渲染循环
-  ctrl.addEventListener("change", invalidate);
+  ctrl.addEventListener("change", onCameraChange);
+  ctrl.addEventListener("start", onCameraInteraction);
 
   scene.value = s;
   camera.value = cam;
@@ -177,6 +249,12 @@ function animate() {
   animationId.value = requestAnimationFrame(animate);
   if (!scene.value || !camera.value || !renderer.value) return;
   const now = performance.now();
+  if (cameraMotion && controls.value) {
+    const continuing = cameraMotion.sample(now, cameraOffset);
+    camera.value.position.copy(controls.value.target).add(cameraOffset);
+    if (!continuing) cameraMotion = null;
+    needsRender = true;
+  }
   const targetExplosion = explosionPercent.value / 100;
   let exploding = false;
   if (currentAssembly.value && displayedExplosion !== targetExplosion) {
@@ -196,7 +274,7 @@ function animate() {
     needsRender = false;
   }
   // 完全静止 → 暂停循环,等待下一次 invalidate 唤醒
-  if (!moved && !needsRender && !exploding && animationId.value !== null) {
+  if (!moved && !needsRender && !exploding && !cameraMotion && animationId.value !== null) {
     cancelAnimationFrame(animationId.value);
     animationId.value = null;
   }
@@ -229,14 +307,14 @@ function disposeMesh() {
 // 渲染序号:切 tab / 参数变化后,丢弃仍在途的旧请求结果,防止旧模型覆盖新 tab
 let renderSeq = 0;
 
-async function renderCurrent(force = false) {
-  if (disposed || inspectionOpen.value) return;
+async function renderCurrent(force = false): Promise<boolean> {
+  if (disposed || inspectionOpen.value) return false;
   cancelPreviewTasks(["preview"]);
   if (!scene.value || !store.pythonDetected) {
     if (!store.pythonDetected) {
       errorMsg.value = t("preview.noPythonRender");
     }
-    return;
+    return false;
   }
 
   // 未导入数据:不渲染 demo,清掉旧模型让引导卡片显示
@@ -245,7 +323,7 @@ async function renderCurrent(force = false) {
     disposeMesh();
     loading.value = false;
     errorMsg.value = null;
-    return;
+    return false;
   }
 
   const seq = ++renderSeq;
@@ -262,7 +340,7 @@ async function renderCurrent(force = false) {
     loading.value = false;
     errorMsg.value = null;
     schedulePreload();
-    return;
+    return true;
   }
 
   loading.value = true;
@@ -276,7 +354,7 @@ async function renderCurrent(force = false) {
     // in-flight preload rather than generating the same part a second time.
     for (const part of parts) {
       await ensurePart(part, generation, params, force);
-      if (!canCacheResult(hash, generation) || seq !== renderSeq || activePart.value !== partName) return;
+      if (!canCacheResult(hash, generation) || seq !== renderSeq || activePart.value !== partName) return false;
     }
     if (partName === "assembly") {
       applyAssembly();
@@ -294,6 +372,7 @@ async function renderCurrent(force = false) {
       if (rendered) schedulePreload();
     }
   }
+  return rendered;
 }
 
 // 解析 STL 为 BufferGeometry;同 hash 已解析过则直接复用(切 tab 零解析、瞬间上屏)
@@ -353,7 +432,7 @@ function applyAssembly() {
     insert: getOrParseGeometry("insert", stlCache.value.insert.bytes, stlCache.value.insert.paramsHash),
     base: getOrParseGeometry("base", stlCache.value.base.bytes, stlCache.value.base.paramsHash),
     cover: getOrParseGeometry("cover", stlCache.value.cover.bytes, stlCache.value.cover.paramsHash),
-  }, { ...store.config, screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture });
+  }, { ...store.config, screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture, palette: modelPalette.value });
   const entering = !currentAssembly.value;
   setMeasureMode(false);
   disposeMesh();
@@ -363,6 +442,9 @@ function applyAssembly() {
   displayedExplosion = explosionPercent.value / 100;
   explosionFrameTime = null;
   if (entering && camera.value && controls.value) {
+    cancelCameraMotion();
+    settleCameraControls();
+    selectedView.value = "iso";
     // Frame the full travel once, so dragging never moves the camera or clips
     // the raised screws. Keep the user's orbit/zoom on parameter refreshes.
     setJigExplosion(group, 1);
@@ -382,18 +464,13 @@ function applyAssembly() {
 // 把 geometry 应用到 mesh(独立函数,缓存命中时直接用)
 function applyStlToMesh(geometry: THREE.BufferGeometry) {
 
-  // 部件配色:insert=青瓷绿(品牌主部件)、base=石板蓝、cover=琥珀、
-  // 钢网顶层=琥珀、底层=石板蓝(与 tab 色标一致)
-  const color =
-    activePart.value === "base" || activePart.value === "stencil_bottom"
-      ? 0x4C6F94
-      : activePart.value === "insert"
-      ? 0x5A9B7F
-      : 0xD9913D;
+  // Single parts, assembly materials, and their legends share one palette.
+  const palette = modelPalette.value;
+  const color = activePart.value === 'assembly' ? palette.assembly : palette.parts[activePart.value];
   const material = new THREE.MeshStandardMaterial({
     color,
-    metalness: 0.1,
-    roughness: 0.7,
+    metalness: palette.plastic.metalness,
+    roughness: ui.skin === 'classic' ? 0.7 : palette.plastic.roughness,
   });
 
   const mesh = new THREE.Mesh(geometry, material);
@@ -446,11 +523,6 @@ interface MeasureFeature {
 
 // 三色距离线配色:直线/水平/垂直各一种颜色(同拓竹)
 type MeasureColorKey = "direct" | "horizontal" | "vertical";
-const MEASURE_COLORS: Record<MeasureColorKey, number> = {
-  direct: 0x15a877, // 直线距离:绿
-  horizontal: 0xd9913d, // 水平距离(XZ 平面):琥珀
-  vertical: 0x4c6f94, // 垂直距离(Y 轴):石板蓝
-};
 
 // 面板中的测量结果行
 interface MeasureRow {
@@ -548,9 +620,9 @@ function disposeMeasureMatSet(set: MeasureMatSet) {
 function getMeasureMats(span: number): Record<MeasureColorKey, MeasureMatSet> {
   if (measureMats) return measureMats;
   measureMats = {
-    direct: makeMeasureMatSet(MEASURE_COLORS.direct, span),
-    horizontal: makeMeasureMatSet(MEASURE_COLORS.horizontal, span),
-    vertical: makeMeasureMatSet(MEASURE_COLORS.vertical, span),
+    direct: makeMeasureMatSet(modelPalette.value.measurement.direct, span),
+    horizontal: makeMeasureMatSet(modelPalette.value.measurement.horizontal, span),
+    vertical: makeMeasureMatSet(modelPalette.value.measurement.vertical, span),
   };
   return measureMats;
 }
@@ -945,14 +1017,12 @@ function applyFeatureClick(f: MeasureFeature) {
 }
 
 // 依据 selA/selB/hover 重建全部测量可视化(特征高亮 + 测量线)与标签/面板行
-// 选中对象配色:A=橙,B=蓝(悬停仍是绿)
-const SEL_A_COLOR = 0xe07a3c;
-const SEL_B_COLOR = 0x4c8fd6;
+// Both selection slots retain their identity across the scene and the panel.
 // 每个"选中槽位"的成套材质,懒创建,clearMeasure 统一释放
 const selMats: Record<"a" | "b", MeasureMatSet | null> = { a: null, b: null };
 function getSelMats(slot: "a" | "b", span: number): MeasureMatSet {
   if (!selMats[slot]) {
-    selMats[slot] = makeMeasureMatSet(slot === "a" ? SEL_A_COLOR : SEL_B_COLOR, span);
+    selMats[slot] = makeMeasureMatSet(modelPalette.value.selection[slot], span);
   }
   return selMats[slot]!;
 }
@@ -1423,6 +1493,8 @@ function scheduleRender() {
 
 // 切换部件时立即渲染
 watch(activePart, () => {
+  cancelCameraMotion();
+  resetRefresh();
   setMeasureMode(false);
   renderCurrent();
 });
@@ -1463,6 +1535,8 @@ function schedulePreload(delay = 1200) {
 }
 
 watch(hashSource, () => {
+  resetRefresh();
+  resetExport();
   ++renderSeq; // Invalidate immediately, including during the render debounce.
   // A stale preload must not keep the Python worker busy while the user is
   // waiting for the newly selected parameters to appear in the preview.
@@ -1476,6 +1550,7 @@ watch(hashSource, () => {
 watch(
   () => store.pythonDetected,
   (detected) => {
+    resetRefresh();
     if (detected) {
       renderCurrent();
     }
@@ -1504,6 +1579,37 @@ watch(
     invalidate();
   }
 );
+
+// A skin change is visual only: keep geometry, camera, selection, and the
+// exploded positions intact, with no CAD generation or texture recreation.
+watch(() => ui.skin, () => {
+  const palette = modelPalette.value;
+  const material = currentMesh.value?.material;
+  if (material instanceof THREE.MeshStandardMaterial) {
+    material.color.setHex(activePart.value === 'assembly' ? palette.assembly : palette.parts[activePart.value]);
+    material.metalness = palette.plastic.metalness;
+    material.roughness = ui.skin === 'classic' ? 0.7 : palette.plastic.roughness;
+  }
+  if (currentAssembly.value) recolorJigAssembly(currentAssembly.value, palette);
+  if (measureMats) {
+    for (const kind of ['direct', 'horizontal', 'vertical'] as const) {
+      Object.values(measureMats[kind]).forEach(mat => mat.color.setHex(palette.measurement[kind]));
+    }
+  }
+  for (const slot of ['a', 'b'] as const) {
+    if (selMats[slot]) Object.values(selMats[slot]!).forEach(mat => mat.color.setHex(palette.selection[slot]));
+  }
+  const axes = scene.value?.children.find((object): object is THREE.AxesHelper => object instanceof THREE.AxesHelper);
+  if (axes) {
+    if (ui.skin === 'sakura') axes.setColors(palette.measurement.direct, palette.measurement.horizontal, palette.measurement.vertical);
+    else {
+      const colors = axes.geometry.getAttribute('color');
+      (colors.array as Float32Array).set(axes.userData.classicColors);
+      colors.needsUpdate = true;
+    }
+  }
+  invalidate();
+});
 
 // 预生成当前模式的所有部件(后台),填满缓存
 const preloading = ref<Map<string, { hash: string; generation: number }>>(new Map());
@@ -1541,10 +1647,13 @@ async function preloadAllParts() {
 
 // 手动刷新:清缓存 + 重新生成所有 3 个部件
 const refreshing = ref(false);
+const refreshState = computed(() => refreshing.value ? 'busy' : refreshCompleted.value ? 'success' : 'idle');
+const exportState = computed(() => exporting.value ? 'busy' : exportCompleted.value ? 'success' : 'idle');
 async function refreshAll() {
-  if (disposed || refreshing.value) return;
+  if (disposed || refreshing.value || inspectionOpen.value || store.gerberImporting || !hasData.value || !store.pythonDetected) return;
+  resetRefresh();
   refreshing.value = true;
-  ++cacheGeneration;
+  const generation = ++cacheGeneration;
   ++renderSeq;
   cancelPreviewTasks(["preview", "preload", "metrics"]);
   printMetrics.invalidate();
@@ -1553,6 +1662,7 @@ async function refreshAll() {
   renderTimer = preloadTimer = null;
   preloading.value.clear();
   const active = activePart.value;
+  const hash = paramsHash();
   const retainedParts = active === "assembly" ? ["insert", "base", "cover"] : [active];
   const staleCache = Object.fromEntries(
     Object.entries(stlCache.value).filter(([part]) => !retainedParts.includes(part as PreviewName))
@@ -1560,13 +1670,23 @@ async function refreshAll() {
   clearStlCache(staleCache, releaseGeometry);
   stlCache.value = Object.fromEntries(Object.entries(stlCache.value).filter(([part]) => retainedParts.includes(part as PreviewName)));
   try {
-    await renderCurrent(true);
+    const rendered = await renderCurrent(true);
+    if (rendered && canCacheResult(hash, generation) && activePart.value === active
+      && !inspectionOpen.value && !store.gerberImporting) completeRefresh();
     schedulePreload();
     scheduleMetrics();
   } finally {
     refreshing.value = false;
   }
 }
+
+watch(() => store.gerberImporting, importing => {
+  if (importing) {
+    resetRefresh();
+    resetExport();
+  }
+}, { flush: 'sync' });
+watch(inspectionOpen, resetRefresh);
 
 // —— 打印信息(体积/用料估算) ——
 // 体积由 Python 端 build123d 精确计算;克重按 PLA 密度 1.24 g/cm³ 估算
@@ -1611,6 +1731,7 @@ watch(inspectionOpen, visible => {
   ++renderSeq;
   loading.value = false;
   if (visible) {
+    cancelCameraMotion();
     if (renderTimer !== null) window.clearTimeout(renderTimer);
     if (preloadTimer !== null) window.clearTimeout(preloadTimer);
     if (metricsTimer !== null) window.clearTimeout(metricsTimer);
@@ -1637,7 +1758,7 @@ const metricsRows = computed(() =>
   allParts.value.map((pn) => ({
     name: pn,
     label: partTabs.value.find((t) => t.name === pn)?.label ?? pn,
-    color: partTabs.value.find((t) => t.name === pn)?.color ?? "#5A9B7F",
+    color: partTabs.value.find((t) => t.name === pn)?.color ?? colorHex(modelPalette.value.parts.insert),
     m: metrics.value[pn],
   }))
 );
@@ -1649,21 +1770,13 @@ const totalMass = computed(() =>
 );
 
 // 视图快捷切换:front 正视 / top 俯视 / iso 等轴(保持当前缩放距离)
-function setView(view: "front" | "top" | "iso") {
+function setView(view: PreviewView) {
   const cam = camera.value;
   const ctrl = controls.value;
-  if (!cam || !ctrl) return;
-  const dist = cam.position.distanceTo(ctrl.target);
-  // iso 方向与初始相机 (120, 80, 150) 归一化一致,切回即还原默认视角
-  const dirs: Record<typeof view, [number, number, number]> = {
-    front: [0, 0, 1],
-    top: [0, 1, 0.0001],
-    iso: [120, 80, 150],
-  };
-  const d = new THREE.Vector3(...dirs[view]).normalize();
-  cam.position.copy(ctrl.target).addScaledVector(d, dist);
-  cam.lookAt(ctrl.target);
-  ctrl.update();
+  if (!cam || !ctrl || inspectionOpen.value || selectedView.value === view) return;
+  settleCameraControls();
+  selectedView.value = view;
+  cameraMotion = createPreviewCameraMotion(cameraOffset.copy(cam.position).sub(ctrl.target), view, performance.now());
   invalidate();
 }
 
@@ -1675,14 +1788,15 @@ function onResize() {
   const h = container.clientHeight;
   if (w === 0 || h === 0) return;
   const r = renderer.value;
-  const pixelRatio = r.getPixelRatio();
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const ratioChanged = r.getPixelRatio() !== pixelRatio;
   const bufferChanged = canvasEl.value.width !== Math.floor(w * pixelRatio)
     || canvasEl.value.height !== Math.floor(h * pixelRatio);
   const aspectChanged = camera.value.aspect !== w / h;
   // Width animations can report the same rounded size near their soft landing.
   // Reassigning canvas dimensions clears/reallocates its buffer even at that size.
-  if (!bufferChanged && !aspectChanged) return;
-  if (bufferChanged) r.setSize(w, h, false);
+  if (!bufferChanged && !aspectChanged && !ratioChanged) return;
+  if (bufferChanged || ratioChanged) r.setDrawingBufferSize(w, h, pixelRatio);
   if (aspectChanged) {
     camera.value.aspect = w / h;
     camera.value.updateProjectionMatrix();
@@ -1693,14 +1807,13 @@ function onResize() {
 // Observe the stable scene layer: sidebar movement only translates it, so no
 // WebGL buffer allocation occurs on each animation frame. Window/toolbar height
 // changes still resize the renderer through this observer.
-let containerObserver: ResizeObserver | null = null;
+let stopPreviewResize: (() => void) | null = null;
 
 onMounted(() => {
   initThreeScene();
   window.addEventListener("keydown", onMeasureKeyDown);
   if (canvasEl.value?.parentElement) {
-    containerObserver = new ResizeObserver(() => onResize());
-    containerObserver.observe(canvasEl.value.parentElement);
+    stopPreviewResize = observePreviewResize(canvasEl.value.parentElement, onResize);
   }
   if (store.pythonDetected) renderCurrent();
 });
@@ -1708,6 +1821,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelPreviewTasks(["preview", "preload", "metrics"], true);
   disposed = true;
+  cancelCameraMotion();
   ++cacheGeneration;
   ++renderSeq;
   printMetrics.dispose();
@@ -1716,13 +1830,15 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onMeasureKeyDown);
   if (hoverRafId !== null) cancelAnimationFrame(hoverRafId);
   hoverRafId = null;
-  containerObserver?.disconnect();
-  containerObserver = null;
+  stopPreviewResize?.();
+  stopPreviewResize = null;
   if (animationId.value !== null) cancelAnimationFrame(animationId.value);
   disposeMesh();
   clearStlCache(stlCache.value);
   stlCache.value = {};
   if (preloadTimer !== null) window.clearTimeout(preloadTimer);
+  controls.value?.removeEventListener("change", onCameraChange);
+  controls.value?.removeEventListener("start", onCameraInteraction);
   controls.value?.dispose();
   pcbEnvironment?.dispose();
   pcbEnvironment = null;
@@ -1755,8 +1871,37 @@ async function ensureStencilSizeReviewed() {
       if (action === 'cancel' && !disposed) emit('reviewStencilSize');
       return false;
     }
-  }, () => !disposed);
+  }, () => !disposed && !store.gerberImporting);
   if (result === 'changed') ElMessage.warning(t('preview.reviewStencilSizeChanged'));
+  return result === 'ready';
+}
+
+async function ensureOutlineReviewed() {
+  const result = await reviewOutlineForExport(store, async size => {
+    try {
+      const message = h('div', { class: 'stencil-review-content' }, [
+        h('div', { class: 'stencil-review-dimensions' }, [
+          h('span', { class: 'stencil-review-label' }, t('gerber.estimatedSize')),
+          h('div', { class: 'stencil-review-value' }, [
+            h('strong', `${Number(size.x.toFixed(2))} × ${Number(size.y.toFixed(2))}`), h('span', 'mm'),
+          ]),
+        ]),
+        h('p', { class: 'stencil-review-note' }, t('preview.reviewOutlineMessage')),
+      ]);
+      await ElMessageBox.confirm(message, t('preview.reviewOutlineTitle'), {
+        appendTo: 'body', customClass: 'stencil-review-dialog', buttonSize: 'default',
+        confirmButtonText: t('preview.reviewOutlineContinue'), cancelButtonText: t('preview.reviewOutlineBack'),
+        confirmButtonClass: 'stencil-review-confirm', cancelButtonClass: 'stencil-review-back',
+        distinguishCancelAndClose: true, closeOnClickModal: false,
+      });
+      return true;
+    } catch (action) {
+      if (action === 'cancel' && !disposed) emit('reviewBoardOutline');
+      if (action === 'cancel' || action === 'close') return false;
+      throw action;
+    }
+  }, () => !disposed && !store.gerberImporting);
+  if (result === 'changed') ElMessage.warning(t('preview.reviewOutlineChanged'));
   return result === 'ready';
 }
 
@@ -1790,17 +1935,24 @@ async function chooseExportProjectName(): Promise<string | null> {
   }
 }
 
-// 导出 STL / STEP:先核对钢网,再选目录并写文件。
+const exportPartLabelKeys: Record<PartName, string> = {
+  base: 'preview.base', insert: 'preview.insert', cover: 'preview.cover',
+  stencil_top: 'preview.stencilTop', stencil_bottom: 'preview.stencilBottom',
+};
+
+// 导出 STL / STEP:先核对外形与钢网尺寸,再选目录并完整生成文件。
 async function exportAll(fmt: "stl" | "step") {
-  if (exporting.value || disposed) return;
+  if (exporting.value || disposed || store.gerberImporting || !hasData.value) return;
   if (!store.pythonDetected) {
     ElMessage.error(t("preview.noPythonExport"));
     return;
   }
 
   exporting.value = true;
+  resetExport();
   workSession.exporting = true;
   try {
+    if (!await ensureOutlineReviewed()) return;
     if (!await ensureStencilSizeReviewed()) return;
     const parentDir = await open({
       directory: true,
@@ -1810,17 +1962,22 @@ async function exportAll(fmt: "stl" | "step") {
     if (!parentDir || Array.isArray(parentDir)) return;
     const projectName = await chooseExportProjectName();
     if (!projectName || disposed) return;
+    if (!await ensureOutlineReviewed()) return;
     if (!await ensureStencilSizeReviewed()) return;
+
+    if (disposed) return;
+    const readiness = exportReadiness(store, hasData.value);
+    if (readiness !== 'ready') {
+      if (readiness === 'outline') ElMessage.warning(t('preview.reviewOutlineChanged'));
+      else if (readiness === 'sheet') ElMessage.warning(t('preview.reviewStencilSizeChanged'));
+      return;
+    }
 
     const params: ReturnType<typeof buildScadParams> = JSON.parse(JSON.stringify(buildScadParams()));
     const exportSnapshot = workSession.captureExport();
     const mode = appMode.value;
     const hasTop = store.config.stencilPadsTop.length > 0;
     const hasBottom = store.config.stencilPadsBottom.length > 0;
-    const sep = parentDir.includes("\\") ? "\\" : "/";
-    // 按用户确认的项目名建立目录；同名目录自动追加序号，避免覆盖已有导出。
-    const exportDir = await invoke<string>("create_export_dir", { parentDir, name: projectName });
-
     // 钢网模式:只导出导入了焊盘的面(都没导入时导出顶层占位)
     const stencilParts: Array<{ name: PartName; rust: string; filename: string }> = [];
     if (hasTop || !hasBottom) {
@@ -1838,18 +1995,15 @@ async function exportAll(fmt: "stl" | "step") {
             { name: "cover", rust: "top_cover", filename: `jig_top_cover.${fmt}` },
           ];
 
-    for (const p of parts) {
-      const fullPath = `${exportDir}${sep}${p.filename}`;
-      // STL 缓存命中(当前参数):bytes 直接落盘,跳过 Python 重新生成;STEP 无缓存
+    const exportParts = parts.map(p => {
       const cached = fmt === "stl" ? stlCache.value[p.name] : undefined;
-      if (cached && cached.paramsHash === partHash(p.name, params)) {
-        await invoke("write_file_bytes", { path: fullPath, bytes: cached.bytes });
-      } else {
-        await invoke("export_stl", { params, part: p.rust, outputPath: fullPath });
-      }
-    }
+      return { ...p, ...(cached && cached.paramsHash === partHash(p.name, params) ? { bytes: cached.bytes } : {}) };
+    });
+    const exportDir = await exportModels({ invoke, parentDir, name: projectName, params,
+      parts: exportParts, active: () => !disposed });
 
     workSession.markExported(exportSnapshot);
+    if (!disposed && !store.gerberImporting && !workSession.hasUnexportedChanges) completeExport();
     const n = parts.length;
     ElMessage.success(
       fmt === "stl"
@@ -1857,7 +2011,18 @@ async function exportAll(fmt: "stl" | "step") {
         : t("preview.exportedStep", { n, dir: exportDir })
     );
   } catch (e) {
-    ElMessage.error(t("preview.exportFailed", { msg: e instanceof Error ? e.message : String(e) }));
+    if (e instanceof ModelExportError) {
+      if (e.cancelled && !e.cleanupError) return;
+      const labelKey = exportPartLabelKeys[e.failedPart as PartName];
+      const part = labelKey ? t(labelKey) : e.failedPart;
+      const msg = e.failedPart
+        ? t('preview.exportPartFailed', { part, n: e.completed, total: e.total, msg: String(e.originalError) })
+        : String(e.originalError);
+      ElMessage.error(t('preview.exportFailed', { msg }));
+      if (e.cleanupError) ElMessage.warning(t('preview.exportCleanupFailed'));
+    } else {
+      ElMessage.error(t("preview.exportFailed", { msg: e instanceof Error ? e.message : String(e) }));
+    }
   } finally {
     exporting.value = false;
     workSession.exporting = false;
@@ -1870,18 +2035,18 @@ const partTabs = computed<Array<{ name: PreviewName; label: string; color: strin
     const tabs: Array<{ name: PartName; label: string; color: string }> = [];
     // 有焊盘的面才显示 tab(都没导入时显示顶层占位)
     if (c.stencilPadsTop.length > 0 || c.stencilPadsBottom.length === 0) {
-      tabs.push({ name: "stencil_top", label: t("preview.stencilTop"), color: "#D9913D" });
+      tabs.push({ name: "stencil_top", label: t("preview.stencilTop"), color: colorHex(modelPalette.value.parts.stencil_top) });
     }
     if (c.stencilPadsBottom.length > 0) {
-      tabs.push({ name: "stencil_bottom", label: t("preview.stencilBottom"), color: "#4C6F94" });
+      tabs.push({ name: "stencil_bottom", label: t("preview.stencilBottom"), color: colorHex(modelPalette.value.parts.stencil_bottom) });
     }
     return tabs;
   }
   return [
-    { name: "insert" as PartName, label: t("preview.insert"), color: "#5A9B7F" },
-    { name: "base" as PartName, label: t("preview.base"), color: "#4C6F94" },
-    { name: "cover" as PartName, label: t("preview.cover"), color: "#D9913D" },
-    { name: "assembly", label: t("preview.assembly"), color: "#929DAF" },
+    { name: "insert" as PartName, label: t("preview.insert"), color: colorHex(modelPalette.value.parts.insert) },
+    { name: "base" as PartName, label: t("preview.base"), color: colorHex(modelPalette.value.parts.base) },
+    { name: "cover" as PartName, label: t("preview.cover"), color: colorHex(modelPalette.value.parts.cover) },
+    { name: "assembly", label: t("preview.assembly"), color: colorHex(modelPalette.value.assembly) },
   ];
 });
 
@@ -1902,10 +2067,11 @@ watch(partTabs, (tabs) => {
 </script>
 
 <template>
-  <div class="preview-wrapper" :class="{ 'is-dark': ui.resolvedTheme === 'dark' }">
+  <div class="preview-wrapper" :class="{ 'is-dark': ui.resolvedTheme === 'dark' }" :style="paletteStyles">
     <div class="preview-header">
       <div class="preview-modes" role="group" :aria-label="t('preview.viewModes')">
         <div class="tab-group" role="group" :aria-label="t('preview.singleParts')">
+          <SlidingIndicator />
           <button
             v-for="tab in singlePartTabs"
             :key="tab.name"
@@ -1941,15 +2107,20 @@ watch(partTabs, (tabs) => {
         </template>
       </div>
       <div class="header-actions">
-        <span v-if="!inspectionOpen && preloading.size > 0" class="preload-badge" :title="t('preview.preloadingHint')">
-          {{ t('preview.preloading') }}
-        </span>
-        <button v-if="!inspectionOpen" class="action-btn" @click="refreshAll" :disabled="refreshing">
-          <svg viewBox="0 0 16 16" width="14" height="14" :class="{ spinning: refreshing }">
-            <path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"
-              fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          {{ t('preview.refresh') }}
+        <button v-if="!inspectionOpen" class="action-btn" :class="{ 'is-complete': refreshCompleted }"
+          @click="refreshAll" :disabled="refreshing || store.gerberImporting || !hasData || !store.pythonDetected"
+          :aria-busy="refreshing" :aria-label="t('preview.refresh')">
+          <ActionStatusIcon :state="refreshState">
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <path d="M13 8a5 5 0 1 1-1.5-3.5M13 3v3h-3"
+                fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </ActionStatusIcon>
+          <span class="action-label" aria-hidden="true">
+            <span :class="{ 'is-visible': refreshState === 'idle' }">{{ t('preview.refresh') }}</span>
+            <span :class="{ 'is-visible': refreshState === 'busy' }">{{ t('preview.refreshing') }}</span>
+            <span :class="{ 'is-visible': refreshState === 'success' }">{{ t('preview.refreshed') }}</span>
+          </span>
         </button>
         <button v-if="!inspectionOpen" class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" :title="t('preview.printInfo')">
           <svg viewBox="0 0 16 16" width="14" height="14">
@@ -1958,32 +2129,39 @@ watch(partTabs, (tabs) => {
           </svg>
           {{ t('preview.printInfo') }}
         </button>
-        <div class="export-actions">
+        <div class="export-actions" :class="{ 'is-disabled': exporting || store.gerberImporting || !hasData, 'is-complete': exportCompleted }" :aria-busy="exporting">
           <button class="action-btn primary export-default"
-            :disabled="exporting"
+            :disabled="exporting || store.gerberImporting || !hasData"
             :title="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
             :aria-label="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
             @click="exportAll(ui.defaultExportFormat)">
-            <svg viewBox="0 0 16 16" width="14" height="14">
-              <path d="M3 3v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6l-3-3H4a1 1 0 0 0-1 1zM6 3v3h4M8 8v3M6.5 9.5L8 11l1.5-1.5"
-                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            {{ t(exporting ? 'preview.exporting' : 'preview.export') }}
+            <ActionStatusIcon :state="exportState">
+              <svg viewBox="0 0 16 16" width="14" height="14">
+                <path d="M3 3v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6l-3-3H4a1 1 0 0 0-1 1zM6 3v3h4M8 8v3M6.5 9.5L8 11l1.5-1.5"
+                  fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </ActionStatusIcon>
+            <span class="action-label" aria-hidden="true">
+              <span :class="{ 'is-visible': exportState === 'idle' }">{{ t('preview.export') }}</span>
+              <span :class="{ 'is-visible': exportState === 'busy' }">{{ t('preview.exporting') }}</span>
+              <span :class="{ 'is-visible': exportState === 'success' }">{{ t('preview.exportComplete') }}</span>
+            </span>
           </button>
           <el-dropdown trigger="click" @command="(f: string | number | object) => exportAll(f as 'stl' | 'step')">
-            <button class="action-btn primary export-format-toggle" :disabled="exporting" :title="t('preview.exportOptions')" :aria-label="t('preview.exportOptions')">
+            <button class="action-btn primary export-format-toggle" :disabled="exporting || store.gerberImporting || !hasData" :title="t('preview.exportOptions')" :aria-label="t('preview.exportOptions')">
               <svg class="caret" viewBox="0 0 16 16" width="10" height="10">
                 <path d="M4 6.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="stl" :disabled="exporting">{{ t('preview.exportStl') }}</el-dropdown-item>
-              <el-dropdown-item command="step" :disabled="exporting">{{ t('preview.exportStep') }}</el-dropdown-item>
+              <el-dropdown-item command="stl" :disabled="exporting || store.gerberImporting || !hasData">{{ t('preview.exportStl') }}</el-dropdown-item>
+              <el-dropdown-item command="step" :disabled="exporting || store.gerberImporting || !hasData">{{ t('preview.exportStep') }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
           </el-dropdown>
         </div>
+        <span class="action-announcement" role="status">{{ refreshCompleted ? t('preview.refreshed') : '' }}</span>
       </div>
     </div>
 
@@ -2010,17 +2188,18 @@ watch(partTabs, (tabs) => {
       <div class="viewport-tools" role="group" :aria-label="t('preview.viewControls')" @pointerdown.stop @wheel.stop @dblclick.stop>
         <!-- 视图快捷切换 -->
         <div class="view-btns">
-          <button class="view-btn" :title="t('preview.viewFront')" @click="setView('front')">
+          <SlidingIndicator />
+          <button class="view-btn" :title="t('preview.viewFront')" :aria-label="t('preview.viewFront')" :aria-pressed="selectedView === 'front'" @click="setView('front')">
             <svg viewBox="0 0 16 16" width="14" height="14">
               <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4" />
             </svg>
           </button>
-          <button class="view-btn" :title="t('preview.viewTop')" @click="setView('top')">
+          <button class="view-btn" :title="t('preview.viewTop')" :aria-label="t('preview.viewTop')" :aria-pressed="selectedView === 'top'" @click="setView('top')">
             <svg viewBox="0 0 16 16" width="14" height="14">
               <path d="M8 3.5l4.5 4.5L8 12.5 3.5 8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
             </svg>
           </button>
-          <button class="view-btn" :title="t('preview.viewIso')" @click="setView('iso')">
+          <button class="view-btn" :title="t('preview.viewIso')" :aria-label="t('preview.viewIso')" :aria-pressed="selectedView === 'iso'" @click="setView('iso')">
             <svg viewBox="0 0 16 16" width="14" height="14">
               <path d="M8 2l5.2 3v6L8 14l-5.2-3V5zM8 8l5.2-3M8 8L2.8 5M8 8v6"
                 fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
@@ -2074,17 +2253,25 @@ watch(partTabs, (tabs) => {
           <span class="sel-badge badge-a">1</span>
           <div class="sel-info">
             <span class="sel-kind">{{ featureKindLabel(selA) }}</span>
-            <span class="sel-detail">{{ featureInfo(selA) }}</span>
+            <span class="sel-detail" :title="featureInfo(selA)">{{ featureInfo(selA) }}</span>
           </div>
-          <button class="sel-del" :title="t('preview.measureRemove')" @click="removeSelection(1)">✕</button>
+          <button type="button" class="sel-del" :title="t('preview.measureRemove')" :aria-label="t('preview.measureRemove')" @click="removeSelection(1)">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
+              <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+          </button>
         </div>
         <div v-if="selB" class="measure-sel-row">
           <span class="sel-badge badge-b">2</span>
           <div class="sel-info">
             <span class="sel-kind">{{ featureKindLabel(selB) }}</span>
-            <span class="sel-detail">{{ featureInfo(selB) }}</span>
+            <span class="sel-detail" :title="featureInfo(selB)">{{ featureInfo(selB) }}</span>
           </div>
-          <button class="sel-del" :title="t('preview.measureRemove')" @click="removeSelection(2)">✕</button>
+          <button type="button" class="sel-del" :title="t('preview.measureRemove')" :aria-label="t('preview.measureRemove')" @click="removeSelection(2)">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
+              <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            </svg>
+          </button>
         </div>
         <div v-if="measureRows.length" class="measure-results">
           <div v-for="(row, i) in measureRows" :key="i" class="measure-result-row">
@@ -2095,12 +2282,16 @@ watch(partTabs, (tabs) => {
       </div>
       </Transition>
       <!-- 测量模式提示 -->
+      <Transition name="preview-panel">
       <div v-if="measureMode" class="measure-hint">
         {{ t('preview.measureHint') }}
       </div>
+      </Transition>
       <!-- 空状态引导:无模型、无加载、无错误时显示(虚线卡片模拟拖放目标) -->
+      <Transition name="preview-state">
       <div
         v-if="!hasPreview && !loading && !errorMsg && store.pythonDetected"
+        key="empty"
         class="empty-state"
       >
         <div class="empty-card">
@@ -2113,47 +2304,56 @@ watch(partTabs, (tabs) => {
           <p class="empty-line2">{{ appMode === 'stencil' ? t('preview.emptyLine2Stencil') : t('preview.emptyLine2') }}</p>
         </div>
       </div>
-      <div v-if="loading" class="overlay">
+      <div v-else-if="loading" key="loading" class="overlay" role="status">
         <svg class="spin-icon" viewBox="0 0 16 16" width="20" height="20">
           <path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
         </svg>
         <span>{{ t('preview.rendering') }}</span>
       </div>
-      <div v-if="!store.pythonDetected && !loading" class="overlay warning">
+      <div v-else-if="errorMsg" key="error" class="overlay error" role="alert">
+        <span tabindex="0" @pointerdown.stop @wheel.stop @dblclick.stop>{{ errorMsg }}</span>
+      </div>
+      <div v-else-if="!store.pythonDetected" key="warning" class="overlay warning" role="status">
         <svg viewBox="0 0 16 16" width="16" height="16">
           <path d="M8 2L1 14h14L8 2zM8 6v4M8 12v.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <span>{{ t('preview.noPythonPreview') }}</span>
       </div>
-      <div v-if="errorMsg && !loading" class="overlay error">
-        <span>{{ errorMsg }}</span>
-      </div>
+      </Transition>
       <!-- 打印信息卡:体积/用料估算(懒加载,按当前参数缓存) -->
-      <Transition name="preview-panel"><div v-if="showMetrics" class="metrics-card">
+      <Transition name="preview-panel"><div v-if="showMetrics" class="metrics-card" :aria-busy="metricsLoading">
         <div class="metrics-head">
           <span>{{ t('preview.metricsTitle') }}</span>
-          <button class="metrics-close" :title="t('preview.metricsClose')" @click="showMetrics = false">
-            <svg viewBox="0 0 16 16" width="12" height="12">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          <span class="metrics-progress" role="status" :aria-label="metricsLoading ? t('preview.metricsLoading') : undefined">
+            <svg v-if="metricsLoading" class="spin-icon" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            </svg>
+          </span>
+          <button type="button" class="metrics-close" :title="t('preview.metricsClose')" :aria-label="t('preview.metricsClose')" @click="showMetrics = false">
+            <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
+              <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
           </button>
         </div>
-        <div v-if="metricsLoading" class="metrics-loading">{{ t('preview.metricsLoading') }}</div>
-        <template v-else>
           <ul class="metrics-list">
             <li v-for="row in metricsRows" :key="row.name" class="metrics-row">
               <span class="metrics-dot" :style="{ background: row.color }" />
-              <span class="metrics-label">{{ row.label }}</span>
+              <span class="metrics-label" :title="row.label">{{ row.label }}</span>
               <span class="metrics-val">
-                {{ row.m ? (row.m.volume_mm3 / 1000).toFixed(2) + ' cm³ · ' + massGrams(row.m.volume_mm3).toFixed(1) + ' g' : '—' }}
+                <span v-if="metricsLoading" class="metrics-placeholder" aria-hidden="true" />
+                <template v-else-if="row.m">{{ (row.m.volume_mm3 / 1000).toFixed(2) }} <span class="metric-unit">cm³</span><span class="metric-separator"> · </span>{{ massGrams(row.m.volume_mm3).toFixed(1) }} <span class="metric-unit">g</span></template>
+                <template v-else>—</template>
               </span>
             </li>
           </ul>
           <div class="metrics-foot">
             <span>{{ t('preview.total') }}</span>
-            <span class="metrics-total">{{ totalMass === null ? '—' : `${totalMass.toFixed(1)} g` }}</span>
+            <span class="metrics-total">
+              <span v-if="metricsLoading" class="metrics-placeholder is-total" aria-hidden="true" />
+              <template v-else-if="totalMass !== null">{{ totalMass.toFixed(1) }} <span class="metric-unit">g</span></template>
+              <template v-else>—</template>
+            </span>
           </div>
-        </template>
         <div class="metrics-note">{{ t('preview.metricsDensity') }}</div>
       </div>
       </Transition>
@@ -2173,6 +2373,7 @@ watch(partTabs, (tabs) => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 /* Sidebar motion never changes the WebGL backing buffer width. The scene and
@@ -2185,6 +2386,7 @@ watch(partTabs, (tabs) => {
 .preview-overlays {
   position: absolute;
   inset: 0 0 0 var(--preview-inset, 0px);
+  container: preview-controls / size;
   pointer-events: none;
 }
 .preview-overlays > .measure-panel, .preview-overlays > .metrics-card { pointer-events: auto; }
@@ -2226,6 +2428,8 @@ watch(partTabs, (tabs) => {
 }
 
 .tab-group {
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -2237,6 +2441,8 @@ watch(partTabs, (tabs) => {
 }
 
 .tab-btn {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2253,15 +2459,14 @@ watch(partTabs, (tabs) => {
   white-space: nowrap;
 }
 
-.tab-btn:hover {
+.tab-btn:hover:not(.active) {
   background: var(--bg-overlay-l1);
   color: var(--text-secondary);
 }
 
 .tab-btn.active {
-  background: var(--surface-raised);
+  background: transparent;
   color: var(--text-default);
-  box-shadow: 0 1px 3px rgba(25, 40, 34, .08), 0 0 0 1px var(--surface-line);
 }
 .tab-btn.active .tab-dot { transform: scale(1.2); }
 
@@ -2290,17 +2495,16 @@ watch(partTabs, (tabs) => {
   transition: var(--control-transition);
 }
 .assembly-mode-btn > svg { flex-shrink: 0; }
-.assembly-mode-btn:hover { background: var(--surface-well); color: var(--bg-brand); }
+.assembly-mode-btn:hover { background: var(--surface-well); color: var(--interaction-ink, var(--bg-brand)); }
 .assembly-mode-btn.active {
   background: var(--status-success-surface-l1);
   border-color: color-mix(in srgb, var(--bg-brand) 24%, transparent);
-  color: var(--bg-brand);
+  color: var(--interaction-ink, var(--bg-brand));
 }
 .tab-btn:focus-visible, .assembly-mode-btn:focus-visible {
-  outline: 2px solid var(--bg-brand);
+  outline: 2px solid var(--interaction-ink, var(--bg-brand));
   outline-offset: 2px;
 }
-.tab-btn:active, .assembly-mode-btn:active { transform: scale(.97); }
 
 .tab-dot {
   width: 6px;
@@ -2319,15 +2523,6 @@ watch(partTabs, (tabs) => {
   flex-wrap: wrap;
 }
 
-.preload-badge {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  padding: 2px 8px;
-  background: var(--bg-overlay-l1);
-  border-radius: var(--radius-full);
-  font-family: var(--font-family-mono);
-}
-
 .action-btn {
   display: inline-flex;
   align-items: center;
@@ -2344,7 +2539,7 @@ watch(partTabs, (tabs) => {
   font-family: inherit;
 }
 
-.action-btn:hover {
+.action-btn:hover:enabled {
   background: var(--surface-selected);
   border-color: var(--surface-line);
   color: var(--text-default);
@@ -2355,30 +2550,48 @@ watch(partTabs, (tabs) => {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.action-btn.primary:hover { box-shadow: none; }
+.action-label { display: inline-grid; white-space: nowrap; text-align: center; }
+.action-label > span { grid-area: 1 / 1; visibility: hidden; opacity: 0; transform: translateY(3px); transition: opacity 150ms var(--ease-out), transform 220ms var(--ease-out), visibility 150ms; }
+.action-label > .is-visible { visibility: visible; opacity: 1; transform: translateY(0); }
+.action-btn.is-complete:not(.primary) { color: var(--status-success-default); background: var(--status-success-surface-l1); border-color: color-mix(in srgb, var(--status-success-default) 18%, transparent); }
+.action-announcement { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .preview-panel-enter-active { transition: opacity 220ms ease, transform 260ms var(--ease-out); }
 .preview-panel-leave-active { transition: opacity 140ms ease, transform 160ms ease; pointer-events: none; }
 .preview-panel-enter-from, .preview-panel-leave-to { opacity: 0; transform: translateY(6px); }
+.preview-state-enter-active { transition: opacity 180ms var(--ease-out); }
+.preview-state-leave-active { transition: opacity 120ms ease; }
+.preview-state-enter-from, .preview-state-leave-to { opacity: 0; }
+.preview-overlays > .preview-panel-leave-active,
+.preview-overlays > .preview-panel-leave-active *,
+.preview-state-leave-active,
+.preview-state-leave-active * { pointer-events: none !important; }
 
-/* 导出(主 CTA)用品牌橙:绿=调节/导航,橙=动作/输出,与 Logo 起绿终橙呼应 */
+/* Output uses the skin's auxiliary accent. */
 .action-btn.primary {
   background: var(--brand-accent);
   border-color: var(--brand-accent);
-  color: var(--text-onbrand);
+  color: var(--text-onaccent, var(--text-onbrand));
 }
 
-.action-btn.primary:hover {
+.action-btn.primary:hover:enabled {
   background: var(--brand-accent-hover);
   border-color: var(--brand-accent-hover);
-  color: var(--text-onbrand);
+  color: var(--text-onaccent, var(--text-onbrand));
 }
 
 .action-btn svg {
   color: inherit;
 }
 
-.export-actions { display: inline-flex; align-items: stretch; }
+.export-actions { display: inline-flex; align-items: stretch; border-radius: var(--radius-full); transition: var(--control-transition); }
+.export-actions.is-complete { box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-accent) 14%, transparent); }
 .export-actions :deep(.el-dropdown) { display: inline-flex; }
+.export-actions .action-btn { --button-press-scale: 1; }
+/* Both halves move together so the split button never opens a gap. */
+@media (hover: hover) and (pointer: fine) {
+  .export-actions:not(.is-disabled):hover { translate: 0 -1px; box-shadow: 0 3px 9px color-mix(in srgb, var(--brand-accent) 20%, transparent), inset 0 1px rgba(255, 255, 255, .18); }
+}
+.export-actions:not(.is-disabled):active { scale: .97; translate: 0 0; box-shadow: none; transition-duration: var(--motion-press); transition-timing-function: var(--ease-out); }
 .export-default { border-radius: var(--radius-full) 0 0 var(--radius-full); }
 .export-format-toggle { height: 100%; padding-inline: 7px; border-left-color: rgba(255,255,255,.25) !important; border-radius: 0 var(--radius-full) var(--radius-full) 0; }
 .export-format-toggle .caret { margin: 0; }
@@ -2408,12 +2621,27 @@ watch(partTabs, (tabs) => {
   pointer-events: auto;
   user-select: none;
 }
-.viewport-tools .view-btns { border: none; padding: 0; background: transparent; }
+.viewport-tools .view-btns {
+  position: relative;
+  isolation: isolate;
+  border: none;
+  padding: 0;
+  background: transparent;
+  --selection-background: var(--control-selection-surface);
+  --selection-border: color-mix(in srgb, var(--interaction-ink) 14%, transparent);
+  --selection-shadow: none;
+}
 .viewport-tools .view-btn { width: 32px; height: 30px; }
+.viewport-tools .view-btn { position: relative; z-index: 1; }
+.viewport-tools .view-btn[aria-pressed="true"],
+.viewport-tools .view-btn[aria-pressed="true"]:hover {
+  color: var(--interaction-ink);
+  background: transparent;
+  box-shadow: none;
+}
 .viewport-tools .action-btn { min-height: 30px; white-space: nowrap; }
 .viewport-tool-divider { width: 1px; height: 18px; background: var(--surface-line); }
-.viewport-tools button:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
-.viewport-tools button:active:not(:disabled) { transform: scale(.95); }
+.viewport-tools button:focus-visible { outline: 2px solid var(--interaction-ink, var(--bg-brand)); outline-offset: 2px; }
 
 .view-btns {
   display: flex;
@@ -2440,7 +2668,7 @@ watch(partTabs, (tabs) => {
   transition: var(--control-transition);
 }
 
-.view-btn:hover {
+.view-btn:hover:enabled {
   background: var(--surface-selected);
   color: var(--text-default);
   box-shadow: var(--shadow-control);
@@ -2457,6 +2685,7 @@ watch(partTabs, (tabs) => {
 /* Canvas:背景用径向渐变模拟"工作台"顶光,模型区有纵深感 */
 .canvas-container {
   flex: 1 1 auto;
+  min-height: 0;
   position: relative;
   overflow: hidden;
   background: radial-gradient(100% 85% at 50% 36%, #FCFDFC 0%, #EEF2EF 64%, #E6EBE7 100%);
@@ -2502,30 +2731,30 @@ canvas {
 
 /* 三色距离标签:直线(绿)/水平(琥珀)/垂直(蓝),文字与边框同线色 */
 .measure-tag.direct {
-  color: #0f8a5f;
-  border-color: #15a877;
+  color: var(--measure-direct-text, #0f8a5f);
+  border-color: var(--measure-direct, #15a877);
 }
 
 .measure-tag.horizontal {
-  color: #a8641c;
-  border-color: #d9913d;
+  color: var(--measure-horizontal-text, #a8641c);
+  border-color: var(--measure-horizontal, #d9913d);
 }
 
 .measure-tag.vertical {
-  color: #3d5e80;
-  border-color: #4c6f94;
+  color: var(--measure-vertical-text, #3d5e80);
+  border-color: var(--measure-vertical, #4c6f94);
 }
 
 .is-dark .measure-tag.direct {
-  color: #3bc494;
+  color: var(--measure-direct-text, #3bc494);
 }
 
 .is-dark .measure-tag.horizontal {
-  color: #e8b06a;
+  color: var(--measure-horizontal-text, #e8b06a);
 }
 
 .is-dark .measure-tag.vertical {
-  color: #8fb0d6;
+  color: var(--measure-vertical-text, #8fb0d6);
 }
 
 .is-dark .measure-tag {
@@ -2544,42 +2773,42 @@ canvas {
   top: 12px;
   left: 36px;
   width: 232px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 116px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
-  border-radius: var(--radius-8, 8px);
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.95));
-  border: 1px solid var(--border-lighter, rgba(0, 0, 0, 0.08));
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-popover);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-raised);
+  border: 1px solid var(--surface-line);
+  box-shadow: var(--shadow-float);
   z-index: 5;
   user-select: none;
 }
 
-.is-dark .measure-panel {
-  background: rgba(30, 30, 32, 0.95);
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
 .measure-panel-head {
-  font-size: 12px;
+  font-size: var(--body-md-font-size);
+  line-height: var(--body-md-line-height);
   font-weight: var(--font-weight-strong, 600);
   color: var(--text-default);
 }
 
 .measure-panel-empty {
-  font-size: 11px;
+  font-size: var(--body-sm-font-size);
   color: var(--text-tertiary);
-  line-height: 1.4;
+  line-height: var(--body-sm-line-height);
 }
 
 .measure-sel-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 6px;
-  border-radius: 6px;
-  background: var(--bg-page, rgba(0, 0, 0, 0.03));
+  padding: 6px 8px;
+  border-radius: var(--radius-control);
+  background: var(--surface-well);
 }
 
 .sel-badge {
@@ -2597,11 +2826,11 @@ canvas {
 
 /* 槽位配色与 3D 高亮一致:1=橙,2=蓝 */
 .sel-badge.badge-a {
-  background: #e07a3c;
+  background: var(--measure-selection-a);
 }
 
 .sel-badge.badge-b {
-  background: #4c8fd6;
+  background: var(--measure-selection-b);
 }
 
 .sel-info {
@@ -2613,13 +2842,15 @@ canvas {
 }
 
 .sel-kind {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-sm-line-height);
+  font-weight: var(--font-weight-strong);
   color: var(--text-default);
 }
 
 .sel-detail {
-  font-size: 10px;
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-sm-line-height);
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2627,44 +2858,47 @@ canvas {
   text-overflow: ellipsis;
 }
 
-.sel-del {
+.sel-del, .metrics-close {
+  --button-press-scale: .92;
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-inner);
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 10px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: var(--control-transition);
 }
 
-.sel-del:hover {
-  background: rgba(0, 0, 0, 0.08);
+.sel-del:hover, .metrics-close:hover {
+  background: var(--control-selection-surface);
   color: var(--text-default);
 }
 
-.is-dark .sel-del:hover {
-  background: rgba(255, 255, 255, 0.12);
+.sel-del:focus-visible, .metrics-close:focus-visible {
+  outline: 2px solid var(--interaction-border);
+  outline-offset: 2px;
 }
 
 .measure-results {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-lighter, rgba(0, 0, 0, 0.08));
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--surface-line);
 }
 
 .measure-result-row {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-sm-line-height);
 }
 
 .result-label {
@@ -2675,6 +2909,7 @@ canvas {
   color: var(--text-default);
   font-variant-numeric: tabular-nums;
   font-weight: var(--font-weight-strong, 600);
+  text-align: right;
 }
 
 /* 测量模式提示条 */
@@ -2718,7 +2953,7 @@ canvas {
 }
 
 .empty-icon {
-  color: var(--bg-brand);
+  color: var(--interaction-ink, var(--bg-brand));
   margin-bottom: 6px;
 }
 
@@ -2774,6 +3009,7 @@ canvas {
 
 /* 崩溃诊断是多行文本(引擎路径 + 日志尾部),需保留换行并可滚动 */
 .overlay.error span {
+  pointer-events: auto;
   white-space: pre-wrap;
   word-break: break-word;
   text-align: left;
@@ -2783,9 +3019,10 @@ canvas {
   overflow: auto;
   padding: 0 12px;
 }
+.overlay.error span:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; border-radius: var(--radius-6); }
 
 .spin-icon {
-  color: var(--bg-brand);
+  color: var(--interaction-ink, var(--bg-brand));
   animation: spin 1s linear infinite;
 }
 
@@ -2816,6 +3053,9 @@ canvas {
   top: 50%;
   transform: translateY(-50%);
   width: 176px;
+  max-width: calc(100% - 40px);
+  max-height: calc(100% - 176px);
+  overflow-y: auto;
   padding: 14px 16px 12px;
   border: 1px solid var(--surface-line);
   border-radius: 20px;
@@ -2826,7 +3066,7 @@ canvas {
   font-size: 11px;
 }
 .assembly-panel-heading { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-weight: 600; margin-bottom: 18px; }
-.assembly-panel-heading > svg { color: var(--bg-brand); }
+.assembly-panel-heading > svg { color: var(--interaction-ink, var(--bg-brand)); }
 .explosion-reset {
   margin-left: auto;
   width: 24px;
@@ -2841,9 +3081,9 @@ canvas {
   cursor: pointer;
   transition: var(--control-transition);
 }
-.explosion-reset:hover { background: var(--bg-overlay-l1); color: var(--bg-brand); }
+.explosion-reset:hover { background: var(--bg-overlay-l1); color: var(--interaction-ink, var(--bg-brand)); }
 .explosion-label { display: flex; align-items: baseline; justify-content: space-between; color: var(--text-secondary); }
-.explosion-label output { color: var(--bg-brand); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.explosion-label output { color: var(--interaction-ink, var(--bg-brand)); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .explosion-label small { font-size: 10px; margin-left: 2px; opacity: .65; }
 .assembly-explosion :deep(.el-slider) { height: 28px; }
 .assembly-explosion :deep(.el-slider__runway) { height: 3px; background: var(--bg-overlay-l3); }
@@ -2856,19 +3096,22 @@ canvas {
 .assembly-layer-toggle:hover { background: var(--bg-overlay-l1); }
 .assembly-layer-toggle.is-on { color: var(--text-secondary); }
 .assembly-layer-toggle > svg { margin-left: auto; opacity: .5; }
-.assembly-layer-toggle.is-on > svg { color: var(--bg-brand); opacity: 1; }
+.assembly-layer-toggle > svg { transition: opacity var(--motion-fast) var(--ease-out), scale var(--motion-release) var(--ease-settle); }
+.assembly-layer-toggle.is-on > svg { opacity: 1; }
+.assembly-layer-toggle:active > svg { scale: .9; }
+.assembly-layer-toggle.is-on > svg { color: var(--interaction-ink, var(--bg-brand)); opacity: 1; }
 .assembly-layer-dot { width: 7px; height: 7px; border-radius: 50%; opacity: .3; }
 .assembly-layer-toggle.is-on .assembly-layer-dot { opacity: 1; }
-.pcb-dot { background: #397fbb; }
-.metal-dot { background: #99a8b5; }
+.pcb-dot { background: var(--model-pcb); }
+.metal-dot { background: var(--model-metal); }
 .assembly-explosion.preview-panel-enter-from, .assembly-explosion.preview-panel-leave-to { transform: translateY(calc(-50% + 6px)); }
-.assembly-layer-toggle:focus-visible, .explosion-reset:focus-visible { outline: 2px solid var(--bg-brand); outline-offset: 2px; }
+.assembly-layer-toggle:focus-visible, .explosion-reset:focus-visible { outline: 2px solid var(--interaction-ink, var(--bg-brand)); outline-offset: 2px; }
 
-/* 打印信息按钮激活态:与导出主 CTA 一致的橙色 */
+/* Print information shares the output accent. */
 .action-btn.active {
   background: var(--brand-accent);
   border-color: var(--brand-accent);
-  color: var(--text-onbrand);
+  color: var(--text-onaccent, var(--text-onbrand));
 }
 
 .action-btn.active:hover {
@@ -2882,11 +3125,15 @@ canvas {
   top: 12px;
   right: 12px;
   width: 224px;
-  background: var(--bg-base-default);
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-8);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
-  padding: 12px 14px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 116px);
+  overflow-y: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-popover);
+  corner-shape: var(--corner-shape);
+  box-shadow: var(--shadow-float);
+  padding: 12px;
   z-index: 10;
   font-family: var(--font-family-default);
 }
@@ -2895,33 +3142,31 @@ canvas {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--body-md-font-size);
+  line-height: var(--body-md-line-height);
   font-weight: var(--font-weight-strong);
   color: var(--text-default);
   margin-bottom: 8px;
 }
 
-.metrics-close {
-  border: none;
-  background: transparent;
-  color: var(--text-tertiary);
-  cursor: pointer;
+.metrics-progress {
   display: inline-flex;
   align-items: center;
-  padding: 2px;
-  border-radius: var(--radius-4);
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  margin-right: 8px;
 }
 
-.metrics-close:hover {
-  color: var(--text-default);
-  background: var(--bg-overlay-l1);
+.metrics-placeholder {
+  display: inline-block;
+  vertical-align: middle;
+  width: 88px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  background: var(--surface-line);
 }
-
-.metrics-loading {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  padding: 6px 0;
-}
+.metrics-placeholder.is-total { width: 40px; }
 
 .metrics-list {
   list-style: none;
@@ -2936,7 +3181,8 @@ canvas {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-sm-line-height);
 }
 
 .metrics-dot {
@@ -2948,14 +3194,23 @@ canvas {
 
 .metrics-label {
   flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-secondary);
 }
 
 .metrics-val {
-  color: var(--text-secondary);
+  color: var(--text-default);
   font-family: var(--font-family-metric);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.metric-unit, .metric-separator {
+  color: var(--text-tertiary);
+  font-weight: var(--font-weight-default);
 }
 
 .metrics-foot {
@@ -2964,20 +3219,45 @@ canvas {
   justify-content: space-between;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--border-neutral-l1);
-  font-size: 12px;
+  border-top: 1px solid var(--surface-line);
+  font-size: var(--body-md-font-size);
+  line-height: var(--body-md-line-height);
 }
 
 .metrics-total {
   font-weight: var(--font-weight-strong);
   color: var(--text-brand);
   font-family: var(--font-family-metric);
+  font-variant-numeric: tabular-nums;
 }
 
 .metrics-note {
-  margin-top: 6px;
-  font-size: 10px;
-  color: var(--text-disabled);
-  line-height: 1.4;
+  margin-top: 8px;
+  font-size: var(--body-sm-font-size);
+  color: var(--text-tertiary);
+  line-height: var(--body-sm-line-height);
 }
+
+/* The sidebar can leave only 440px for the preview even in a wide window.
+   Size these cards from that actual viewport, retaining space for its tools. */
+@container preview-controls (max-width: 540px) {
+  .measure-panel:has(~ .metrics-card), .measure-panel ~ .metrics-card {
+    max-height: calc((100% - 128px) / 2);
+  }
+  .measure-panel ~ .metrics-card {
+    top: calc((100% - 128px) / 2 + 24px);
+  }
+}
+
+/* Material estimates and assembly controls share the right edge. Keeping their
+   scroll areas separate also prevents overlap in shorter windows. */
+.assembly-explosion:has(~ .metrics-card), .assembly-explosion ~ .metrics-card {
+  max-height: calc((100% - 128px) / 2);
+}
+.assembly-explosion:has(~ .metrics-card) {
+  top: calc((100% - 128px) / 2 + 24px);
+  transform: none;
+}
+.assembly-explosion:has(~ .metrics-card).preview-panel-enter-from,
+.assembly-explosion:has(~ .metrics-card).preview-panel-leave-to { transform: translateY(6px); }
 </style>
