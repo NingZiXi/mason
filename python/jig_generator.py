@@ -20,17 +20,19 @@ A 面顶盖(cover)。周圈螺丝穿过顶盖和底座,将钢网夹紧在底座�
 落到 PCB 托盘上。四角柱是定位结构,不是螺丝。
 """
 import argparse
+import copy
 import json
 import math
 import os
 import sys
+from itertools import groupby
 from pathlib import Path
 
 import build123d as bd
 from build123d import (
     Cylinder, Axis, Mode,
     BuildPart, BuildSketch, BuildLine,
-    Plane, Polyline, RectangleRounded, make_face, add, chamfer,
+    Plane, Polyline, Rectangle, RectangleRounded, make_face, add, chamfer,
     extrude, export_stl, export_step, loft,
 )
 # OCC 原生 API:焊盘开孔性能关键路径(build123d 构建器随面数二次方变慢,
@@ -53,7 +55,9 @@ from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.StlAPI import StlAPI_Writer
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shapely_box
+from shapely.geometry import Point as ShapelyPoint
 from shapely.geometry.polygon import orient as shapely_orient
+from shapely.errors import ShapelyError
 from shapely.ops import unary_union as shapely_union
 from shapely.affinity import scale as shapely_scale_aff
 from shapely.affinity import translate as shapely_translate
@@ -118,7 +122,10 @@ def rounded_square_solid(size, height, radius):
     r = min(radius, size / 2 - 0.5, height)
     with BuildPart() as p:
         with BuildSketch(Plane.XY) as s:
-            RectangleRounded(size, size, r)
+            if r == 0:
+                Rectangle(size, size)
+            else:
+                RectangleRounded(size, size, r)
         extrude(amount=height)
     return p.part
 
@@ -234,8 +241,13 @@ def plater_radius(p, slot_poly, frame_poly=None):
     p["platter_margin"] = min(margin_x, margin_y)
     # 4 角定位柱用:沿对角线取两轴较大半宽(保守,不与凸台角部相撞)
     p["platter_half_for_post"] = max(platter_hx, platter_hy)
+    requested_radius = p.get("platter_corner_radius", 4.5)
+    # Explicit zero means square corners; retain the legacy fallback for empty values.
+    if not (isinstance(requested_radius, (int, float))
+            and not isinstance(requested_radius, bool) and requested_radius == 0):
+        requested_radius = requested_radius or 4.5
     r = min(
-        float(p.get("platter_corner_radius", 4.5) or 4.5),
+        float(requested_radius),
         min(platter_hx, platter_hy) - 0.5,
     )
     return margin_x, margin_y, max(0.0, r)
@@ -442,7 +454,10 @@ def chamfer_edges_at(part, z_level, length, max_radius):
     return bp.part
 
 
-def chamfer_platter_top(part, total_h, length=0.75):
+INSERT_PLATTER_TOP_CHAMFER = 0.75
+
+
+def chamfer_platter_top(part, total_h, length=INSERT_PLATTER_TOP_CHAMFER):
     """凸台顶外缘倒角(z=total_h,排除底板外缘:按半径区分不总是可靠,
     用边长 + 位置启发:凸台缘在 z=total_h 且不在 jig 外缘)"""
     with BuildPart() as bp:
@@ -467,95 +482,192 @@ def chamfer_platter_top(part, total_h, length=0.75):
 # 部件构建
 # ---------------------------------------------------------------------------
 
-def build_insert(p):
-    """PCB 托盘:底板 + 凸台(PCB 齐平槽)+ 梯形取放缺口 + 底部圆形顶出孔 + 4 角 boss + 内孔挖穿"""
-    jig = p["jig_size"]
-    total_h = p["insert_height"]
-    # 凸台高度 ≡ 底座板厚(不接受独立的 platter_height):
-    # 反向装配时凸台套进 B 面底座窗口;高度与底座板厚相等,使 PCB B 面
-    # 与底座顶面齐平,钢网才能零间隙平贴在板子和底座顶面上
+COMPONENT_RELIEF_FLOOR = 1.2
+MAX_COMPONENT_RELIEF_REGIONS = 100
+MAX_COMPONENT_RELIEF_POLYGON_POINTS = 128
+
+
+def _jig_component_params(p):
+    """Copy and orient jig-only inputs; the imported board stays in top-view coordinates.
+
+    Calling a builder directly has the same orientation/height rules as build_part.
+    Stencil builders do not enter this path, so their existing side transforms stay
+    independent from the optional second-face tray.
+    """
+    enabled = p.get("component_relief_enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("元件避空开关必须为布尔值")
+    if not enabled:
+        return p
+    side = p.get("jig_print_side", "top")
+    if side not in ("top", "bottom"):
+        raise ValueError("刷锡面必须为 top 或 bottom")
+    depth = p.get("component_relief_depth", 3.0)
+    if (isinstance(depth, bool) or not isinstance(depth, (int, float))
+            or not math.isfinite(depth) or not 0.5 <= depth <= 20):
+        raise ValueError("元件避空深度必须在 0.5~20 mm 之间")
+    regions = p.get("component_relief_regions", [])
+    if not isinstance(regions, list) or len(regions) > MAX_COMPONENT_RELIEF_REGIONS:
+        raise ValueError("元件避空区域最多 100 个")
+    ids = set()
+    normalized_regions = []
+    for region in regions:
+        if not isinstance(region, dict):
+            raise ValueError("元件避空区域格式不正确")
+        identity = region.get("id")
+        if (not isinstance(identity, str) or not identity or len(identity) > 128
+                or identity in ids):
+            raise ValueError("元件避空区域 ID 必须唯一且非空")
+        ids.add(identity)
+        if region.get("shape") not in ("rect", "circle", "polygon"):
+            raise ValueError("元件避空区域仅支持矩形、圆形或多边形")
+        normalized = dict(region)
+        through = region.get("through", False)
+        if not isinstance(through, bool):
+            raise ValueError("元件避空区域的贯穿开关必须为布尔值")
+        if through:
+            normalized["through"] = True
+        else:
+            normalized.pop("through", None)
+        region_depth = region.get("depth", depth)
+        if (isinstance(region_depth, bool) or not isinstance(region_depth, (int, float))
+                or not math.isfinite(region_depth) or not 0.5 <= region_depth <= 20):
+            raise ValueError("每个元件避空区域的深度必须在 0.5~20 mm 之间")
+        normalized["depth"] = float(region_depth)
+        if region["shape"] == "polygon":
+            points = region.get("points")
+            if not isinstance(points, list) or not 3 <= len(points) <= MAX_COMPONENT_RELIEF_POLYGON_POINTS:
+                raise ValueError("多边形避空区域需要 3~128 个顶点")
+            copied_points = []
+            for point in points:
+                if not isinstance(point, (list, tuple)) or len(point) != 2:
+                    raise ValueError("多边形顶点必须为二维毫米坐标")
+                if any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) or abs(value) > 600 for value in point):
+                    raise ValueError("多边形顶点坐标必须为 -600~600 mm 的有效数值")
+                copied_points.append([float(point[0]), float(point[1])])
+            # Keep the supplied ring exact; repairing it with buffer(0) would
+            # silently change crossed edges into a different component pocket.
+            if len({tuple(point) for point in copied_points}) != len(copied_points):
+                raise ValueError("多边形避空区域不能包含重复顶点或重复边")
+            if any(math.dist(start, end) <= 1e-6 for start, end in
+                   zip(copied_points, copied_points[1:] + copied_points[:1])):
+                raise ValueError("多边形避空区域不能包含退化边")
+            polygon = ShapelyPolygon(copied_points)
+            if not polygon.is_valid or not polygon.exterior.is_simple or polygon.area <= 1e-6:
+                raise ValueError("多边形避空区域不能自交或退化，请保留有效面积")
+            minx, miny, maxx, maxy = polygon.bounds
+            normalized.update(points=copied_points, x=(minx + maxx) / 2,
+                              y=(miny + maxy) / 2, width=maxx - minx, height=maxy - miny)
+            normalized_regions.append(normalized)
+            continue
+        for key in ("x", "y", "width", "height"):
+            value = region.get(key)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or abs(value) > 600
+                    or (key in ("width", "height") and value <= 0)):
+                raise ValueError("元件避空区域尺寸和坐标必须为有效的毫米数值")
+        if region["shape"] == "circle" and not math.isclose(
+                region["width"], region["height"], rel_tol=0, abs_tol=1e-6):
+            raise ValueError("圆形避空区域的长宽必须相同")
+        normalized_regions.append(normalized)
+
+    result = dict(p)
+    result["component_relief_depth"] = float(depth)
+    # Geometry in this copy is now in the printing view; never mutate caller data.
+    result["jig_print_side"] = "top"
+    result["component_relief_regions"] = normalized_regions
+    if side == "bottom":
+        result["pcb_outline_points"] = [[x, -y] for x, y in p.get("pcb_outline_points", [])]
+        result["pcb_outline_holes"] = [
+            [[x, -y] for x, y in ring] for ring in p.get("pcb_outline_holes", [])
+        ]
+        for region in result["component_relief_regions"]:
+            region["y"] = -region["y"]
+            if region["shape"] == "polygon":
+                region["points"] = [[x, -y] for x, y in region["points"]]
+    if regions:
+        board_t = float(p["pcb_thickness"])
+        requested_h = float(p["insert_height"])
+        if not all(math.isfinite(value) and value > 0 for value in (board_t, requested_h)):
+            raise ValueError("PCB 厚度和托盘高度必须为有效正数")
+        blind_depths = [region["depth"] for region in normalized_regions if not region.get("through", False)]
+        result["insert_height"] = (max(requested_h, board_t + max(blind_depths) + COMPONENT_RELIEF_FLOOR)
+                                   if blind_depths else requested_h)
+    return result
+
+
+def _requested_eject_hole_diameter(requested):
+    """Zero preserves legacy auto sizing; explicit values are diameters in mm."""
+    if (isinstance(requested, bool) or not isinstance(requested, (int, float))
+            or not math.isfinite(requested)
+            or requested != 0 and not 4 <= requested <= 40):
+        raise ValueError("底部顶出孔直径需为 4~40 mm，或设为 0 自动适配")
+    return float(requested)
+
+
+def _eject_hole_diameter(slot_poly, requested=0):
+    """Resolve a manual diameter without changing saved automatic-size plans.
+
+    Manual holes leave 2 mm on each side of the slot's short bounding-box edge.
+    Irregular boards are clipped separately; this limit is not a support proof.
+    """
+    requested = _requested_eject_hole_diameter(requested)
+    minx, miny, maxx, maxy = slot_poly.bounds
+    slot_min = min(maxx - minx, maxy - miny)
+    if requested:
+        available = max(0.0, slot_min - 4.0)
+        return min(requested, available) if available >= 4.0 else 0.0
+    diameter = slot_min * 0.35
+    if diameter < 12.0:
+        diameter = 12.0 if slot_min >= 26.0 else 0.0
+    diameter = min(diameter, 30.0)
+    return diameter if diameter >= 8.0 else 0.0
+
+
+def _eject_hole_geometry(slot_poly, eject_width, diameter=0):
+    """Share the exact auto/manual footprint between support checks and cuts.
+
+    eject_width remains the legacy on/off setting. A missing/zero diameter keeps
+    the original adaptive sizing, including small-board omission.
+    """
+    diameter = _eject_hole_diameter(slot_poly, diameter)
+    if eject_width <= 0 or diameter <= 0:
+        return None
+    center = slot_poly.centroid
+    if not slot_poly.contains(center):
+        center = slot_poly.representative_point()
+    footprint = center.buffer(diameter / 2, resolution=16).intersection(slot_poly)
+    # A concave arm can be tangent to the disk, returning a collection with
+    # a real pocket plus isolated points/lines. Only areas can be extruded;
+    # retain every polygon so preflight and the actual cut stay identical.
+    def polygons(geometry):
+        if geometry.geom_type == "Polygon":
+            return [geometry] if not geometry.is_empty and geometry.area > 0 else []
+        return [polygon for child in getattr(geometry, "geoms", [])
+                for polygon in polygons(child)]
+
+    areas = polygons(footprint)
+    return shapely_union(areas) if areas else None
+
+
+def _insert_pry_notches(p, slot_poly, platter_poly):
+    """Return the exact (floor, footprints) shared by support checks and cuts.
+
+    Notches normally reach below the PCB support plane, but a thick PCB or low
+    platter can leave their floor above it. Only the former remove support.
+    """
+    total_h, pcb_t = p["insert_height"], p["pcb_thickness"]
     platter_h = min(p.get("base_height", 4.0), total_h - 1.0)
     plate_h = total_h - platter_h
-    pcb_t = p["pcb_thickness"]
-    clearance = p["pcb_pocket_clearance"]
-    r_out = p.get("outer_corner_radius", 5.0)
-    eject_w = p.get("eject_slot_width", 22.0)
-    corner_d = p.get("corner_screw_d", 5.0)
-
-    slot_poly, platter_poly, window_poly, is_shaped = get_polys(p)
-
-    # 1. 底板(z: 0..plate_h)
-    plate = rounded_square_solid(jig, plate_h, r_out)
-
-    # 2. 凸台(z: plate_h..total_h):先在原位倒顶角再落位
-    #    (落位后过滤 z=platter_h 会命中底缘,倒错方向)
-    platter = poly_solid(platter_poly.exterior.coords, platter_h)
-    platter = chamfer_platter_top(platter, platter_h, 0.75)
-    platter = platter.moved(bd.Location((0, 0, plate_h)))
-    part = plate + platter
-
-    # 3. PCB 槽:凸台顶面往下 pcb_t(PCB 与凸台顶齐平)
-    slot = poly_solid(slot_poly.exterior.coords, pcb_t + 0.05)
-    slot = slot.moved(bd.Location((0, 0, total_h - pcb_t)))
-    part = part - slot
-
-    # 4. 板内孔挖穿(从凸台顶到托盘底)
-    for hole in p.get("pcb_outline_holes", []):
-        if len(hole) < 3:
-            continue
-        hp = ShapelyPolygon(hole)
-        if not hp.is_valid:
-            hp = hp.buffer(0)
-        if hp.is_empty or hp.area < 0.01:
-            continue
-        if clearance > 0:
-            hp = hp.buffer(clearance)
-        solid = poly_solid(hp.exterior.coords, total_h + 0.2)
-        if solid is not None:
-            part = part - solid.moved(bd.Location((0, 0, -0.1)))
-
-    # 5. 底部圆形顶出孔:托盘底面 → PCB 槽底的竖直圆孔(从下方把 PCB 顶出)。
-    #    直径随板子尺寸自适应(各种边界条件):
-    #      d = 槽最小边 × 0.35,封顶 30mm(大板无需更大)
-    #      d < 12mm(指尖下限)时:槽最小边 ≥ 26mm 仍开 12mm 最小圆,否则取消
-    #      (板实在太小 → 槽底承托不足,不开孔,取板走取放缺口)
-    #    footprint 与槽形状求交:圆越界部分自动裁掉,凸台/端墙完全不动
     minx, miny, maxx, maxy = slot_poly.bounds
-    if eject_w > 0:
-        slot_min = min(maxx - minx, maxy - miny)
-        d = slot_min * 0.35
-        if d < 12.0:
-            d = 12.0 if slot_min >= 26.0 else 0.0
-        d = min(d, 30.0)
-        if d >= 8.0:
-            # 圆心:优先质心(凹形板质心可能在槽外 → 退回 representative_point)
-            ctr = slot_poly.centroid
-            if not slot_poly.contains(ctr):
-                ctr = slot_poly.representative_point()
-            circ = ctr.buffer(d / 2, resolution=16).intersection(slot_poly)
-            ch_polys = (
-                list(circ.geoms) if circ.geom_type == "MultiPolygon"
-                else ([] if circ.is_empty else [circ])
-            )
-            for fp in ch_polys:
-                solid = poly_solid(fp.exterior.coords, total_h - pcb_t + 0.1)
-                if solid is not None:
-                    part = part - solid
-
-    # 5.5 双梯形取放缺口:槽边缘两个对称 U 型缺口(梯形,短边朝向板子),
-    #      手指从顶面伸入缺口即可托住 PCB 底部,把板从卡槽中抠出
-    #      - 位置 pry_notch_sides:up/down/left/right 任意组合(空列表 = 关闭)
-    #      - 尺寸 pry_notch_scale(0.5~1.5,默认 1.0)× 自动基准(边长 15%,夹 12~24mm),
-    #        比例化钳位(6%~50% 边长)保证任何板子全滑程有效
-    #      - 外口张开成漏斗导入手指;约束:外端距槽角 ≥2mm,放不下等比缩,短边 <6mm 取消
-    #      - 缺口底低于 PCB 底面 0.8mm(指尖可探入板下),底部留 ≥0.8mm 不切穿
-    #      - 每条缺口按槽局部边缘定位(条带∩槽),异形板同样有效
+    floor_n = max(total_h - pcb_t - 0.8, plate_h + 0.8)
+    notches = []
     sides = [
         s for s in (str(x).strip().lower() for x in p.get("pry_notch_sides", ["down"]))
         if s in ("down", "up", "left", "right")
     ]
     if sides:
-        floor_n = max(total_h - pcb_t - 0.8, plate_h + 0.8)
         if floor_n < total_h - 0.5:
             margin = p.get("platter_margin", 5.0)
             overlap = min(2.5, margin)   # 探入槽内板下的深度
@@ -643,9 +755,532 @@ def build_insert(p):
                                 if not rounded.is_empty and rounded.geom_type == "Polygon":
                                     notch_poly = rounded
                             if not notch_poly.is_empty and notch_poly.geom_type == "Polygon":
-                                solid = poly_solid(notch_poly.exterior.coords, total_h - floor_n)
-                                if solid is not None:
-                                    part = part - solid.moved(bd.Location((0, 0, floor_n)))
+                                notches.append(notch_poly)
+    return floor_n, notches
+
+
+def _insert_support_footprint(p, platter_poly):
+    """Platter material reaching the PCB datum; None means the plate supports it.
+
+    The platter is a polygonal prism with equal-distance top-edge chamfers,
+    so a horizontal section is its mitred inward parallel offset. A PCB that
+    reaches the lower plate must not be restricted by the platter outline.
+    """
+    platter_h = min(p.get("base_height", 4.0), p["insert_height"] - 1.0)
+    pcb_t = p["pcb_thickness"]
+    if pcb_t >= platter_h:
+        return None
+    # An over-height chamfer cannot be applied by chamfer_platter_top(); its
+    # existing fallback preserves the straight-sided prism in that case.
+    bevel = INSERT_PLATTER_TOP_CHAMFER if platter_h > INSERT_PLATTER_TOP_CHAMFER else 0.0
+    inset = max(0.0, bevel - pcb_t)
+    return platter_poly.buffer(-inset, join_style=2) if inset > 0 else platter_poly
+
+
+def _insert_board_holes(p):
+    """The exact full-height board-cutout footprints used by the tray builder."""
+    footprints = []
+    clearance = p.get("pcb_pocket_clearance", 0)
+    for ring in p.get("pcb_outline_holes", []):
+        if len(ring) < 3:
+            continue
+        hole = ShapelyPolygon(ring)
+        if not hole.is_valid:
+            hole = hole.buffer(0)
+        if hole.is_empty or hole.area < 0.01:
+            continue
+        if clearance > 0:
+            hole = hole.buffer(clearance)
+        # Retraced Gerber contours can repair into separate cutouts. Buffer
+        # the complete repair first so clearance can still join nearby holes.
+        holes = list(hole.geoms) if hole.geom_type == "MultiPolygon" else [hole]
+        for component in holes:
+            # Match the existing extrusion contract: its wire is the exterior.
+            footprints.append(ShapelyPolygon(component.exterior.coords))
+    return footprints
+
+
+def _validate_insert_connectivity(p, eject_hole=None, through_relief=None):
+    """Reject detached tray pieces using only the actual through-cut footprints.
+
+    Board cutouts and the eject hole can close a ring without any through
+    relief. Blind pockets and takeout notches retain material below their
+    floors, so they cannot disconnect the bottom plate and are excluded here.
+    """
+    cuts = _insert_board_holes(p)
+    if eject_hole is not None:
+        cuts.append(eject_hole)
+    if through_relief is not None:
+        cuts.append(through_relief)
+    if not cuts:
+        return
+    jig = p["jig_size"]
+    platter_h = min(p.get("base_height", 4.0), p["insert_height"] - 1.0)
+    plate_h = p["insert_height"] - platter_h
+    radius = min(p.get("outer_corner_radius", 5.0), jig / 2 - 0.5, plate_h)
+    outer = rounded_rect_poly(-jig / 2, -jig / 2, jig / 2, jig / 2, radius)
+    remaining = outer.difference(shapely_union(cuts))
+
+    def polygons(geometry):
+        if geometry.geom_type == "Polygon":
+            return [geometry] if not geometry.is_empty and geometry.area > 1e-8 else []
+        return [polygon for child in getattr(geometry, "geoms", [])
+                for polygon in polygons(child)]
+
+    if len(polygons(remaining)) != 1:
+        raise ValueError("板内孔、顶出孔或贯穿避空区域合围后会切断托盘底板并留下悬空部分，请关闭对应开孔或调整避空区域")
+
+
+def _component_relief_layout(p, eject_hole=None, pry_notches=None):
+    """Union pockets and split their floor depths, retaining PCB support.
+
+    p has already been validated/oriented by _jig_component_params. Clipping to
+    PCB material preserves locating walls and existing board cutouts. Multiple
+    pockets can surround retained support islands without adding another tool.
+    """
+    regions = p.get("component_relief_regions", [])
+    if not p.get("component_relief_enabled", False) or not regions:
+        return None, []
+    outline = p.get("pcb_outline_points", [])
+    board = (ShapelyPolygon(outline) if len(outline) >= 3 else
+             shapely_box(-p["pcb_size_x"] / 2, -p["pcb_size_y"] / 2,
+                         p["pcb_size_x"] / 2, p["pcb_size_y"] / 2))
+    if not board.is_valid:
+        board = board.buffer(0)
+    holes = []
+    for ring in p.get("pcb_outline_holes", []):
+        if len(ring) >= 3:
+            hole = ShapelyPolygon(ring)
+            holes.append(hole if hole.is_valid else hole.buffer(0))
+    if holes:
+        board = board.difference(shapely_union(holes))
+    if board.is_empty or board.area < 1e-6:
+        raise ValueError("PCB 可承托区域为空")
+
+    def area_polygons(geometry):
+        if geometry.geom_type == "Polygon":
+            return [geometry]
+        return [poly for child in getattr(geometry, "geoms", [])
+                for poly in area_polygons(child)]
+
+    pockets = []
+    pockets_by_depth = {}
+    for region in regions:
+        if region["shape"] == "polygon":
+            pocket = ShapelyPolygon(region["points"])
+        else:
+            x, y = region["x"], region["y"]
+            hx, hy = region["width"] / 2, region["height"] / 2
+            pocket = (ShapelyPoint(x, y).buffer(hx, resolution=24)
+                      if region["shape"] == "circle" else
+                      shapely_box(x - hx, y - hy, x + hx, y + hy))
+        # A box tangent to another arm of a concave board can produce a
+        # GeometryCollection containing both a polygon and isolated lines.
+        # Keep its polygonal material so the extrusion cannot silently vanish.
+        pocket = shapely_union(area_polygons(pocket.intersection(board)))
+        if pocket.is_empty or pocket.area < 1e-6:
+            raise ValueError("避空区域必须与 PCB 的实体区域相交")
+        pockets.append(pocket)
+        depth = None if region.get("through", False) else region.get("depth", p["component_relief_depth"])
+        pockets_by_depth.setdefault(depth, []).append(pocket)
+    relief = shapely_union(pockets)
+    support = board.difference(relief)
+    if support.area < max(1e-4, board.area * 1e-5):
+        raise ValueError("避空区域覆盖了整块 PCB，请保留无元件区域承托板子")
+    # Rounded corners and top bevels can remove the last nominal board-edge
+    # support. Count only the platter material reaching the actual PCB datum.
+    support_params = dict(p)
+    slot_poly, platter_poly, _, _ = get_polys(support_params)
+    support_footprint = _insert_support_footprint(p, platter_poly)
+    if support_footprint is not None:
+        support = support.intersection(support_footprint)
+    if support.area < max(1e-4, board.area * 1e-5):
+        raise ValueError("避空区域与凸台圆角、倒角合并后没有可承托区域，请缩小避空区域或增加凸台台阶宽")
+    # A retained island must also survive existing through cuts. Relief pockets
+    # may connect to the eject hole, but their combination cannot erase all of
+    # the bare-board support surface. Match the cutout clearance used below.
+    if holes:
+        support = support.difference(shapely_union(_insert_board_holes(p)))
+    if eject_hole is not None:
+        support = support.difference(eject_hole)
+    if pry_notches is None:
+        pry_notches = _insert_pry_notches(support_params, slot_poly, platter_poly)
+    notch_floor, notch_polys = pry_notches
+    support_z = p["insert_height"] - p["pcb_thickness"]
+    if notch_polys and notch_floor < support_z - 1e-6:
+        support = support.difference(shapely_union(notch_polys))
+    if support.area < max(1e-4, board.area * 1e-5):
+        raise ValueError("避空区域与顶出孔、板内孔或取放缺口合并后没有可承托区域，请缩小避空区域或关闭对应开孔")
+    through_footprint = pockets_by_depth.get(None)
+    if through_footprint:
+        _validate_insert_connectivity(p, eject_hole, shapely_union(through_footprint))
+    # Tools with different floors must not overlap: an OCC compound of
+    # intersecting prisms can leave internal faces. Through cuts take priority,
+    # then give each remaining XY area only to its deepest blind pocket.
+    layers = []
+    covered = None
+    order = ([None] if None in pockets_by_depth else []) + sorted(
+        [depth for depth in pockets_by_depth if depth is not None], reverse=True)
+    for depth in order:
+        footprint = shapely_union(pockets_by_depth[depth])
+        exposed = footprint if covered is None else footprint.difference(covered)
+        exposed = shapely_union(area_polygons(exposed))
+        if not exposed.is_empty and exposed.area >= 1e-6:
+            layers.append((depth, exposed))
+        covered = footprint if covered is None else covered.union(footprint)
+    return relief, layers
+
+
+def _component_relief_geometry(p, eject_hole=None, pry_notches=None):
+    """The complete footprint used by support checks, independent of depths."""
+    return _component_relief_layout(p, eject_hole, pry_notches)[0]
+
+
+def validate_component_relief(p):
+    """Run the manufacturing support checks without constructing CAD solids.
+
+    User-correctable geometry errors are data, not worker/protocol failures.
+    The normalized copy also isolates get_polys' derived-field writes.
+    """
+    try:
+        _requested_eject_hole_diameter(p.get("eject_hole_diameter", 0))
+        normalized = dict(_jig_component_params(p))
+        slot_poly, platter_poly, _, _ = get_polys(normalized)
+        eject = _eject_hole_geometry(slot_poly, normalized.get("eject_slot_width", 22.0),
+                                     normalized.get("eject_hole_diameter", 0))
+        _validate_insert_connectivity(normalized, eject)
+        if (normalized.get("component_relief_enabled", False)
+                and normalized.get("component_relief_regions", [])):
+            _component_relief_geometry(normalized, eject,
+                                       _insert_pry_notches(normalized, slot_poly, platter_poly))
+        return {"valid": True}
+    except ValueError as error:
+        return {"valid": False, "error": str(error)}
+
+
+def _component_relief_region_polygon(region):
+    """Exact 2D footprint in the caller's canonical coordinate system."""
+    if region["shape"] == "polygon":
+        return ShapelyPolygon(region["points"])
+    x, y = region["x"], region["y"]
+    hx, hy = region["width"] / 2, region["height"] / 2
+    return (ShapelyPoint(x, y).buffer(hx, resolution=24)
+            if region["shape"] == "circle" else
+            shapely_box(x - hx, y - hy, x + hx, y + hy))
+
+
+def _merge_selected_relief_boxes(entries, original):
+    """Enclose each compatible selection in one rectangle, including its gaps.
+
+    Region dimensions already include any automatic proposal allowance. Bounds
+    come from the actual geometry (not stale polygon x/y/width/height metadata),
+    so neither PCB-slot clearance nor the legacy merge gap is applied again.
+    Singletons keep their original saved fields exactly.
+    """
+    groups = {}
+    for entry in entries:
+        region = entry["region"]
+        key = (region.get("through", False), region["depth"])
+        groups.setdefault(key, []).append(entry)
+    merged = []
+    for group in groups.values():
+        if len(group) == 1:
+            entry = group[0]
+            merged.append({"order": entry["order"], "region": original[entry["order"]]})
+            continue
+        bounds = [entry["geometry"].bounds for entry in group]
+        minx, miny = min(box[0] for box in bounds), min(box[1] for box in bounds)
+        maxx, maxy = max(box[2] for box in bounds), max(box[3] for box in bounds)
+        first = group[0]
+        region = dict(id=first["region"]["id"], shape="rect", x=(minx + maxx) / 2,
+                      y=(miny + maxy) / 2, width=maxx - minx, height=maxy - miny,
+                      depth=first["region"]["depth"])
+        if first["region"].get("through", False):
+            region["through"] = True
+        merged.append({"order": first["order"], "region": region})
+    return merged
+
+
+def _merge_relief_group(entries, gap, protected_islands):
+    """Close short gaps without shrinking any source pocket or filling islands.
+
+    A local group is indivisible: if its exact exterior cannot be represented
+    by the existing simple-polygon contract, keep every source region instead.
+    """
+    footprint = shapely_union([entry["geometry"] for entry in entries])
+    polygons = ([footprint] if footprint.geom_type == "Polygon" else
+                list(getattr(footprint, "geoms", [])))
+    if any(getattr(polygon, "interiors", ()) for polygon in polygons):
+        return None  # an existing support island must never become a pocket
+    merged = footprint
+    if gap > 0 and footprint.geom_type != "Polygon":
+        radius = gap / 2
+        # Mitred closing preserves straight component edges and avoids adding
+        # hundreds of decorative arc vertices to automatically found boxes.
+        closed = footprint.buffer(radius, resolution=4, join_style=2).buffer(
+            -radius, resolution=4, join_style=2)
+        merged = footprint.union(closed)
+    if (merged.geom_type != "Polygon" or not merged.is_valid
+            or merged.interiors or merged.area <= 1e-6):
+        return None
+    if (not protected_islands.is_empty
+            and merged.intersection(protected_islands).area > 1e-8):
+        return None
+    # Remove exactly collinear vertices only. Lossy simplification can reduce
+    # the original clearance or cut away the PCB support we promised to keep.
+    merged = merged.simplify(0, preserve_topology=True)
+    points = [[float(x), float(y)] for x, y in merged.exterior.coords[:-1]]
+    if (not 3 <= len(points) <= MAX_COMPONENT_RELIEF_POLYGON_POINTS
+            or any(abs(value) > 600 for point in points for value in point)
+            or any(math.dist(start, end) <= 1e-6 for start, end in
+                   zip(points, points[1:] + points[:1]))
+            or footprint.difference(merged).area > 1e-8):
+        return None
+    minx, miny, maxx, maxy = merged.bounds
+    region = dict(id=entries[0]["region"]["id"], shape="polygon",
+                  x=(minx + maxx) / 2, y=(miny + maxy) / 2,
+                  width=maxx - minx, height=maxy - miny,
+                  points=points, depth=entries[0]["region"]["depth"])
+    if entries[0]["region"].get("through", False):
+        region["through"] = True
+    return {"region": region, "geometry": merged, "unchanged": False,
+            "order": min(entry["order"] for entry in entries),
+            "lineage": frozenset().union(*(entry["lineage"] for entry in entries))}
+
+
+def _merge_relief_subgroups(entries, gap, protected_islands, failed_pairs):
+    """Keep a closing ring as several simple polygons instead of skipping it.
+
+    Start with the cheapest complete union. When a group has a support island
+    or a complex exterior, merge representable pairs in stable nearest order;
+    the last pair that would close/fill an island remains separate.
+    """
+    def attempt(sources):
+        try:
+            return _merge_relief_group(sources, gap, protected_islands)
+        except ShapelyError:
+            return None
+
+    merged = attempt(entries)
+    if merged is not None:
+        return [merged]
+    pending = list(entries)
+    while len(pending) > 1:
+        pairs = []
+        for left, first in enumerate(pending):
+            for right in range(left + 1, len(pending)):
+                second = pending[right]
+                key = (first["lineage"], second["lineage"])
+                if key in failed_pairs:
+                    continue
+                distance = first["geometry"].distance(second["geometry"])
+                if distance <= gap + 1e-9:
+                    pairs.append((distance, first["order"], second["order"], left, right, key))
+        for _, _, _, left, right, key in sorted(pairs):
+            merged = attempt([pending[left], pending[right]])
+            if merged is None:
+                failed_pairs.add(key)
+                continue
+            pending = sorted([entry for index, entry in enumerate(pending)
+                              if index not in (left, right)] + [merged],
+                             key=lambda entry: entry["order"])
+            break
+        else:
+            break
+    return pending
+
+
+def merge_component_relief(p, gap=1.0, selected_ids=None):
+    """Merge pockets of matching cutting modes using 2D work.
+
+    Returned regions always remain in imported top-view coordinates, including
+    bottom-face plans. Merged regions save an explicit depth so changing the
+    default for new pockets cannot change these cuts. Both through and blind
+    regions are grouped by effective depth so toggling through off restores the
+    original blind-pocket setting. An explicit selection limits merging to
+    those IDs; unselected regions and incompatible singletons keep their saved
+    fields while still participating in whole-plan support validation. An
+    explicit selection becomes one enclosing rectangle per compatible group,
+    regardless of distance, with the entire intervening area also removed.
+    Calls without selected IDs keep the legacy neighbouring-pocket gap limit.
+    """
+    original = copy.deepcopy(p.get("component_relief_regions", []))
+    try:
+        if (isinstance(gap, bool) or not isinstance(gap, (int, float))
+                or not math.isfinite(gap) or not 0 <= gap <= 5):
+            raise ValueError("合并间距必须在 0~5 mm 之间")
+        # Validate the requested side before making a canonical, unmirrored
+        # copy. Enabling only this temporary copy also normalizes saved plans
+        # whose feature switch happens to be off.
+        _jig_component_params(p)
+        if p.get("jig_print_side", "top") not in ("top", "bottom"):
+            raise ValueError("刷锡面必须为 top 或 bottom")
+        canonical = _jig_component_params(dict(
+            p, component_relief_enabled=True, jig_print_side="top"))
+        canonical_regions = canonical["component_relief_regions"]
+        if selected_ids is not None:
+            if (not isinstance(selected_ids, list)
+                    or any(not isinstance(identity, str) for identity in selected_ids)
+                    or len(set(selected_ids)) != len(selected_ids)):
+                raise ValueError("请选择不重复的有效避空区域")
+            known_ids = {region["id"] for region in canonical_regions}
+            if any(identity not in known_ids for identity in selected_ids):
+                raise ValueError("所选避空区域已不存在，请重新选择")
+            selected = set(selected_ids)
+        else:
+            selected = {region["id"] for region in canonical_regions}
+            original = canonical_regions
+        all_entries = [{"region": region, "geometry": _component_relief_region_polygon(region),
+                    "unchanged": True, "order": index, "lineage": frozenset([index])}
+                   for index, region in enumerate(canonical_regions)]
+        entries = [entry for entry in all_entries if entry["region"]["id"] in selected]
+        untouched = [{**entry, "region": original[entry["order"]]}
+                     for entry in all_entries if entry["region"]["id"] not in selected]
+        skipped = 0
+        if selected_ids is not None:
+            # The selected rectangle intentionally includes any previously
+            # blank inner area. Validate the complete result below; never fall
+            # back to bridges or smaller subgroups if that full box is unsafe.
+            entries = _merge_selected_relief_boxes(entries, original)
+        else:
+            initial_union = shapely_union([entry["geometry"] for entry in all_entries])
+            polygons = ([initial_union] if initial_union.geom_type == "Polygon" else
+                        list(getattr(initial_union, "geoms", [])))
+            # Legacy exact-outline merging must preserve local support islands.
+            protected_islands = shapely_union([
+                ShapelyPolygon(ring) for polygon in polygons
+                for ring in getattr(polygon, "interiors", ())])
+            failed_pairs = set()
+        # Closing a group can bring it close to a third pocket. Stabilize here
+        # so another click never expands/merges the result a second time. Each
+        # successful pass reduces the count; singleton regions never swell.
+        while selected_ids is None:
+            remaining = set(range(len(entries)))
+            next_entries = []
+            changed = False
+            skipped = 0
+            while remaining:
+                start = min(remaining)
+                remaining.remove(start)
+                group = [start]
+                for index in group:
+                    cut_key = lambda entry: (
+                        entry["region"].get("through", False), entry["region"]["depth"])
+                    neighbours = [other for other in sorted(remaining)
+                                  if cut_key(entries[index]) == cut_key(entries[other])
+                                  and entries[index]["geometry"].distance(entries[other]["geometry"]) <= gap + 1e-9]
+                    remaining.difference_update(neighbours)
+                    group.extend(neighbours)
+                sources = [entries[index] for index in group]
+                if len(sources) == 1:
+                    next_entries.extend(sources)
+                    continue
+                merged = _merge_relief_subgroups(sources, gap, protected_islands, failed_pairs)
+                next_entries.extend(merged)
+                if len(merged) < len(sources):
+                    changed = True
+                if len(merged) > 1:
+                    skipped += sum(entry["unchanged"] for entry in merged)
+            entries = sorted(next_entries, key=lambda entry: entry["order"])
+            if not changed:
+                break
+        regions = [entry["region"] for entry in sorted(entries + untouched,
+                                                       key=lambda entry: entry["order"])]
+        validation = validate_component_relief(dict(
+            p, component_relief_enabled=True, component_relief_regions=regions))
+        if not validation["valid"]:
+            return {"valid": False, "regions": original, "merged": 0, "skipped": 0,
+                    "error": validation["error"]}
+        return {"valid": True, "regions": regions,
+                "merged": len(original) - len(regions), "skipped": skipped}
+    except (ValueError, ShapelyError) as error:
+        return {"valid": False, "regions": original, "merged": 0,
+                "skipped": 0, "error": str(error)}
+
+
+def build_insert(p):
+    """PCB 托盘:底板 + 凸台(PCB 齐平槽)+ 梯形取放缺口 + 底部圆形顶出孔 + 4 角 boss + 内孔挖穿"""
+    p = _jig_component_params(p)
+    jig = p["jig_size"]
+    total_h = p["insert_height"]
+    # 凸台高度 ≡ 底座板厚(不接受独立的 platter_height):
+    # 反向装配时凸台套进 B 面底座窗口;高度与底座板厚相等,使 PCB B 面
+    # 与底座顶面齐平,钢网才能零间隙平贴在板子和底座顶面上
+    platter_h = min(p.get("base_height", 4.0), total_h - 1.0)
+    plate_h = total_h - platter_h
+    pcb_t = p["pcb_thickness"]
+    r_out = p.get("outer_corner_radius", 5.0)
+    eject_w = p.get("eject_slot_width", 22.0)
+    corner_d = p.get("corner_screw_d", 5.0)
+
+    slot_poly, platter_poly, window_poly, is_shaped = get_polys(p)
+    eject_hole = _eject_hole_geometry(slot_poly, eject_w, p.get("eject_hole_diameter", 0))
+    pry_notches = _insert_pry_notches(p, slot_poly, platter_poly)
+    _validate_insert_connectivity(p, eject_hole)
+    relief, relief_layers = _component_relief_layout(p, eject_hole, pry_notches)
+
+    # 1. 底板(z: 0..plate_h)
+    plate = rounded_square_solid(jig, plate_h, r_out)
+
+    # 2. 凸台(z: plate_h..total_h):先在原位倒顶角再落位
+    #    (落位后过滤 z=platter_h 会命中底缘,倒错方向)
+    platter = poly_solid(platter_poly.exterior.coords, platter_h)
+    platter = chamfer_platter_top(platter, platter_h, INSERT_PLATTER_TOP_CHAMFER)
+    platter = platter.moved(bd.Location((0, 0, plate_h)))
+    part = plate + platter
+
+    # 3. PCB 槽:凸台顶面往下 pcb_t(PCB 与凸台顶齐平)
+    slot = poly_solid(slot_poly.exterior.coords, pcb_t + 0.05)
+    slot = slot.moved(bd.Location((0, 0, total_h - pcb_t)))
+    part = part - slot
+
+    # Keep the PCB datum at total_h - pcb_t and only remove material below it.
+    # Blind pockets retain at least 1.2 mm; explicit through regions open the
+    # full tray thickness and have already been removed from blind XY tools.
+    if relief is not None:
+        tools = []
+        for depth, footprint in relief_layers:
+            floor_z = -0.1 if depth is None else total_h - pcb_t - depth
+            cut_height = total_h + 0.2 if depth is None else depth + 0.05
+            tools.extend(_ocp_prisms([footprint], floor_z, cut_height))
+        # These pockets meet an existing slot and can cross its side boundaries;
+        # unlike the coplanar stencil apertures they are not a GlueShift case.
+        builder = BRep_Builder()
+        comp = TopoDS_Compound()
+        builder.MakeCompound(comp)
+        for tool in tools:
+            builder.Add(comp, tool)
+        part = part - bd.Compound(comp)
+
+    # 4. 板内孔挖穿(从凸台顶到托盘底)
+    for hp in _insert_board_holes(p):
+        solid = poly_solid(hp.exterior.coords, total_h + 0.2)
+        if solid is not None:
+            part = part - solid.moved(bd.Location((0, 0, -0.1)))
+
+    # 5. 底部圆形顶出孔:托盘底面 → PCB 槽底的竖直圆孔(从下方把 PCB 顶出)。
+    #    新参数 eject_hole_diameter > 0 时使用手动孔径，并按短边留出 2mm 余量;
+    #    省略或 0 时保持原来的自动直径(各种边界条件):
+    #      d = 槽最小边 × 0.35,封顶 30mm(大板无需更大)
+    #      d < 12mm(指尖下限)时:槽最小边 ≥ 26mm 仍开 12mm 最小圆,否则取消
+    #      (板实在太小 → 槽底承托不足,不开孔,取板走取放缺口)
+    #    footprint 与槽形状求交:圆越界部分自动裁掉,凸台/端墙完全不动
+    if eject_hole is not None:
+        ch_polys = (
+            list(eject_hole.geoms) if eject_hole.geom_type == "MultiPolygon"
+            else [eject_hole]
+        )
+        for fp in ch_polys:
+            solid = poly_solid(fp.exterior.coords, total_h - pcb_t + 0.1)
+            if solid is not None:
+                part = part - solid
+
+    # 5.5 The same rounded takeout-notch footprints were used by preflight.
+    floor_n, notch_polys = pry_notches
+    for notch_poly in notch_polys:
+        solid = poly_solid(notch_poly.exterior.coords, total_h - floor_n)
+        if solid is not None:
+            part = part - solid.moved(bd.Location((0, 0, floor_n)))
 
     # 6. 4 角定位柱(与托盘一体,空心管结构,免螺丝):
     #    外 Ø9 / 内 Ø5(壁厚 2mm),贯穿托盘全高并向上伸出 cover_h,
@@ -669,6 +1304,7 @@ def build_insert(p):
 def build_cover(p):
     """A 面顶盖:45° 全高倒角印刷窗口(压钢网边缘,钢网夹在盖板与凸台顶面之间)
     + 4 角定位柱过孔 + 周圈夹紧螺丝过孔"""
+    p = _jig_component_params(p)
     jig = p["jig_size"]
     cover_h = p["top_cover_height"]
     r_out = p.get("outer_corner_radius", 5.0)
@@ -725,6 +1361,7 @@ def build_base(p):
     (GB/T 5277 + GB/T 6170);用户在高级区手动覆盖 peri_screw_d /
     nut_across_flats / nut_height 时以覆盖值为准。
     """
+    p = _jig_component_params(p)
     jig = p["jig_size"]
     base_h = p["base_height"]
     r_out = p.get("outer_corner_radius", 5.0)
@@ -973,10 +1610,14 @@ def _stagger_pad_geoms(pad_geoms, gap_thr, offset):
     """密脚错排(参考 Dream_maker):质心间距 < gap_thr 的焊盘连成链,
     链长 ≥3 判为密脚排(0.5mm 间距 QFP/QFN 等),链内二着色隔位沿局部
     法向 ±offset 交错偏移 —— 相邻开孔互相错开,阻焊桥变宽,减少连锡。"""
-    n = len(pad_geoms)
+    # LPC entries restore material at their original coordinates. They are not
+    # component pins and cannot create a dense-pin chain or be staggered.
+    dark_indices = [index for index, (_, polarity) in enumerate(pad_geoms) if polarity == "D"]
+    n = len(dark_indices)
     if n < 3 or offset <= 0 or gap_thr <= 0:
         return pad_geoms
-    cents = [(g.centroid.x, g.centroid.y) for g, _ in pad_geoms]
+    cents = [(pad_geoms[index][0].centroid.x, pad_geoms[index][0].centroid.y)
+             for index in dark_indices]
     g2 = gap_thr * gap_thr
 
     # 邻接(质心距 < 阈值)→ union-find 连通链
@@ -988,12 +1629,25 @@ def _stagger_pad_geoms(pad_geoms, gap_thr, offset):
             i = parent[i]
         return i
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            dx = cents[i][0] - cents[j][0]
-            dy = cents[i][1] - cents[j][1]
-            if dx * dx + dy * dy < g2:
-                parent[find(i)] = find(j)
+    # A pin can only reach its own cell or the eight adjacent cells. Build
+    # adjacency once instead of comparing every pad pair, then comparing every
+    # pair again inside each connected chain on large boards.
+    adjacency = [[] for _ in range(n)]
+    cells = {}
+    for i, (x, y) in enumerate(cents):
+        cell_x, cell_y = math.floor(x / gap_thr), math.floor(y / gap_thr)
+        for nx in range(cell_x - 1, cell_x + 2):
+            for ny in range(cell_y - 1, cell_y + 2):
+                for j in cells.get((nx, ny), ()):
+                    dx, dy = x - cents[j][0], y - cents[j][1]
+                    if dx * dx + dy * dy < g2:
+                        parent[find(i)] = find(j)
+                        adjacency[i].append(j)
+                        adjacency[j].append(i)
+        cells.setdefault((cell_x, cell_y), []).append(i)
+    # Retain the previous traversal/tie order, independent of grid cell order.
+    for neighbors in adjacency:
+        neighbors.sort()
 
     chains = {}
     for i in range(n):
@@ -1009,16 +1663,7 @@ def _stagger_pad_geoms(pad_geoms, gap_thr, offset):
     for idxs in chains.values():
         if len(idxs) < 3:
             continue
-        # 链内邻接表
-        adj = {i: [] for i in idxs}
-        for a in range(len(idxs)):
-            for b in range(a + 1, len(idxs)):
-                i, j = idxs[a], idxs[b]
-                dx = cents[i][0] - cents[j][0]
-                dy = cents[i][1] - cents[j][1]
-                if dx * dx + dy * dy < g2:
-                    adj[i].append(j)
-                    adj[j].append(i)
+        adj = {i: adjacency[i] for i in idxs}
         # 二着色(路径/偶环严格隔位;奇环个别相邻对同色,影响可忽略)
         color = {}
         for start in idxs:
@@ -1050,7 +1695,9 @@ def _stagger_pad_geoms(pad_geoms, gap_thr, offset):
                 continue
             nx, ny = canon_normal(-ty / tl, tx / tl)
             s = offset if color.get(i) else -offset
-            out[i] = (shapely_translate(out[i][0], nx * s, ny * s), out[i][1])
+            source_index = dark_indices[i]
+            out[source_index] = (shapely_translate(out[source_index][0], nx * s, ny * s),
+                                 out[source_index][1])
     return out
 
 
@@ -1228,6 +1875,26 @@ def _stencil_board_polys(p, side):
     return base_poly, pocket_poly
 
 
+def _compose_exposures(entries):
+    """Apply Gerber D/C exposures in order, batching consecutive equal polarity.
+
+    Clear only removes material already drawn; a later dark object can refill
+    it. The same rule applies to primitives inside one macro aperture.
+    """
+    material = None
+    for polarity, group in groupby(entries, key=lambda entry: entry[1]):
+        geoms = [geom for geom, _ in group]
+        # Leading clear primitives/objects have nothing to erase.
+        if polarity == "C" and (material is None or material.is_empty):
+            continue
+        geom = geoms[0] if len(geoms) == 1 else shapely_union(geoms)
+        if polarity == "C":
+            material = material.difference(geom)
+        else:
+            material = geom if material is None or material.is_empty else material.union(geom)
+    return shapely_union([]) if material is None else material
+
+
 def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
     """Shared aperture pipeline for manufacturing and the 2D inspection view."""
     pad_shrink = float(p.get("pad_shrink", 0.0)) / 100.0
@@ -1262,7 +1929,7 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
         parts, pad_pol = _pad_to_parts(pad)
         if not parts:
             continue
-        dark, clear = [], []
+        exposures = []
         for part_d in parts:
             pts = part_d.get("points", [])
             holes = [h for h in part_d.get("holes", []) if len(h) >= 3]
@@ -1279,15 +1946,10 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
                 g = g.buffer(0)
             if g.is_empty or g.area < 1e-6:
                 continue
-            if str(part_d.get("polarity", "D")).upper() == "C":
-                clear.append(g)
-            else:
-                dark.append(g)
-        if not dark:
+            exposures.append((g, str(part_d.get("polarity", "D")).upper()))
+        if not exposures:
             continue
-        geom = shapely_union(dark) if len(dark) > 1 else dark[0]
-        if clear:
-            geom = geom.difference(shapely_union(clear))
+        geom = _compose_exposures(exposures)
         if geom.is_empty or geom.area < 1e-6:
             continue
         source_geom = geom
@@ -1313,7 +1975,10 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
         #   2) 有凹陷(面积 < 凸包面积 92%):C 形/开槽焊盘 → 补全矩形
         #      (部分 EDA 工具在锡膏层生成带缺口的 region,钢网应开全孔)
         # 圆/方焊盘不变形。
-        if do_square:
+        # Only a simple dark opening may gain square corners. Replacing a
+        # holed/multipart macro with its bounding rectangle destroys its clear
+        # islands or joins separate openings; clear image masks must stay exact.
+        if do_square and pad_pol == "D" and geom.geom_type == "Polygon" and not geom.interiors:
             mrr = geom.minimum_rotated_rectangle
             mrr_pts = list(mrr.exterior.coords)
             # MRR 两条相邻边长 → 长宽
@@ -1325,7 +1990,7 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
             if min(bw, bh) > 1e-6:
                 elongated = bw / bh > 1.15
                 # 有凹陷的单连通焊盘(C 形/开槽):面积 < 凸包 92% 且无内孔。
-                # MultiPolygon(如热焊盘被 clear 切成多块)不处理,保持原貌。
+                # MultiPolygon/带内孔几何已在上方排除,保持原貌。
                 concave = False
                 if geom.geom_type == "Polygon":
                     has_holes = len(list(geom.interiors)) > 0
@@ -1390,19 +2055,20 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
         pad_geoms = [((_grid_pad_geom(g, grid_size, grid_bar) if pol == "D"
                        else g), pol) for g, pol in pad_geoms]
 
-    # 开孔几何拆分:D 极性 = 开孔(裁剪到卡槽内,超出板框的开孔
-    # 本就无意义);焊盘级 C 极性(%LPC)= 恢复材料。
-    dark_geoms, clear_geoms = [], [g.intersection(pocket_poly) for g in manual_closures]
-    for geom, pad_pol in pad_geoms:
-        if geom.is_empty or geom.area < 1e-6:
-            continue
-        if pad_pol == "C":
-            clear_geoms.append(geom)
-            continue
+    # Mixed image polarity must be composited before manufacturing. Keeping all
+    # clear masks until the end would erase later dark refills. Ordinary all-D
+    # files retain the original list and existing batched manufacturing union.
+    if any(polarity == "C" for _, polarity in pad_geoms):
+        pad_geoms = [(_compose_exposures(pad_geoms), "D")]
+    dark_geoms = []
+    for geom, _ in pad_geoms:
         g = geom.intersection(pocket_poly)
         if g.is_empty or g.area < 1e-6:
             continue
         dark_geoms.append(g)
+    # User closures are a final editing mask, independent of source exposure
+    # order, and must still seal overlapping later dark/open objects.
+    clear_geoms = [g.intersection(pocket_poly) for g in manual_closures]
 
     return dark_geoms, clear_geoms, original, filtered
 
@@ -1433,8 +2099,7 @@ def inspect_stencil(p, side="top"):
     if side == "top":
         frame = shapely_scale_aff(frame, xfact=1.0, yfact=-1.0)
     original_dark = [g for g, pol, _ in original if pol == "D"]
-    original_clear = [g for g, pol, _ in original if pol == "C"]
-    raw = shapely_union(original_dark).difference(shapely_union(original_clear))
+    raw = _compose_exposures((g, pol) for g, pol, _ in original)
     final = shapely_union(dark).difference(shapely_union(clear)).intersection(frame)
     openings = _inspection_polygons(final)
     pads_list = p.get("stencil_pads_bottom", []) if side == "bottom" else p.get("stencil_pads_top", p.get("stencil_pads", []))
@@ -1499,8 +2164,10 @@ def build_stencil(p, side="top"):
         )
 
     def _build_full():
-        _eps = 0.05  # 切割余量,避免共面
-        pocket_bottom = max(0.0, stencil_t - _eps)  # 钢网真实顶面(卡槽底)
+        # The compound layers share one exact boundary; there is no boolean
+        # pocket cutter that needs overlap. An allowance here thins the actual
+        # stencil and removes its floor entirely at the supported 0.05 mm size.
+        pocket_bottom = stencil_t
 
         # 2. 2D 构图(shapely,全部平面运算,毫秒~秒级):
         #    取放缺口只切钢网层以上的槽壁(差在 ring 上,底层不挖穿)
@@ -1591,10 +2258,10 @@ def build_stencil(p, side="top"):
 
         dark_geoms, clear_geoms, _, _ = _prepare_stencil_pads(p, side, pocket_poly)
 
-        # 4. 分层 2D:钢网层 = 外框(含缺口) - 开孔 + LPC 恢复材料。
+        # 4. 分层 2D:钢网层 = 外框(含缺口) - 按序显影开孔 + 手动封孔。
         #    喇叭孔 = 两层(下半区放大/上半区原尺寸);直孔 = 单层。
-        #    %LPC 恢复材料在平面上并回(岛落在实心钢网层上,与旧版
-        #    3D 融合几何等价,且不会凸出底面)。
+        #    图像 LPC 已在开孔显影中处理;这里只并回最终手动封孔,
+        #    且限定在外框内,不会向钢网边界之外添加材料。
         dark_union = shapely_union(dark_geoms) if dark_geoms else None
         clear_union = shapely_union(clear_geoms) if clear_geoms else None
 
@@ -1605,7 +2272,7 @@ def build_stencil(p, side="top"):
                 if g.is_empty:
                     return g
             if clear_union is not None and not clear_union.is_empty:
-                g = g.union(clear_union)
+                g = g.union(clear_union.intersection(frame_2d))
             return g
 
         # 5. 3D 组装:分层挤出 + 环圈顶缘倒角(小实体)+ Compound 组合。
@@ -1621,7 +2288,7 @@ def build_stencil(p, side="top"):
                 pieces.append(cs)
                 fast_solids.append(cs)
         if pocket_bottom > 0.001:
-            # 直孔:单层 2D(外框 - 开孔 + LPC 恢复)一次挤出。
+            # 直孔:单层 2D(外框 - 显影开孔 + 手动封孔)一次挤出。
             # (喇叭孔见上方禁用说明)
             up_2d = _layer_2d(dark_union)
             if not up_2d.is_empty:
@@ -1836,7 +2503,8 @@ def generate_to_file(params, part_name, output_path, fmt="stl", on_model=None):
         BRepMesh_IncrementalMesh(shape, 0.1, False, 0.7, True)
         writer = StlAPI_Writer()
         writer.ASCIIMode = False
-        writer.Write(shape, str(output))
+        if not writer.Write(shape, str(output)):
+            raise RuntimeError(f"STL 导出失败: {output}")
     else:
         # STEP:走 build123d(需 bd 对象,显式旋转)
         part = part.rotate(bd.Axis.X, -90)
@@ -1934,7 +2602,12 @@ def serve():
                     generate_to_file(req["params"], req["part"], out, fmt,
                                      lambda model: metrics.remember_model(key, model))
                 except Exception:
-                    out.unlink(missing_ok=True)
+                    try:
+                        out.unlink(missing_ok=True)
+                    except OSError:
+                        # A directory or locked target cannot be removed; keep
+                        # the original modeling/export error in the response.
+                        pass
                     raise
                 respond({"id": rid, "ok": True, "path": str(out)})
             elif cmd == "stats":
@@ -1953,6 +2626,13 @@ def serve():
                     raise ValueError("Inspection requires a stencil side")
                 result = inspect_stencil(req["params"], "bottom" if part == "stencil_bottom" else "top")
                 respond({"id": rid, "ok": True, "inspection": result})
+            elif cmd == "validate_component_relief":
+                result = validate_component_relief(req["params"])
+                respond({"id": rid, "ok": True, "validation": result})
+            elif cmd == "merge_component_relief":
+                result = merge_component_relief(req["params"], req.get("gap", 1.0),
+                                                req.get("selected_ids"))
+                respond({"id": rid, "ok": True, "merge": result})
             elif cmd == "shutdown":
                 respond({"id": rid, "ok": True})
                 break

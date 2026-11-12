@@ -6,8 +6,8 @@ import { platterHalfXY, windowHalfXY, type AppConfig } from '../stores/config';
  */
 export function clampPlan(c: AppConfig) {
   const platter = platterHalfXY(c), window = windowHalfXY(c);
-  // Matches plater_radius()/get_polys() in the engine, including its legacy 0 fallback.
-  const radius = Math.max(0, Math.min(c.platterCornerRadius || 4.5, Math.min(platter.hx, platter.hy) - .5));
+  // Explicit zero means square corners, matching plater_radius()/get_polys().
+  const radius = Math.max(0, Math.min(c.platterCornerRadius ?? 4.5, Math.min(platter.hx, platter.hy) - .5));
   const windowRadius = Math.min(radius, c.windowGap + .5);
   const halfX = Math.max(c.stencilSizeX / 2, window.hx, c.pcbSizeX / 2);
   const halfY = Math.max(c.stencilSizeY / 2, window.hy, c.pcbSizeY / 2);

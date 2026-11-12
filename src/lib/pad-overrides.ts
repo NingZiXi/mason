@@ -39,9 +39,31 @@ export function setPadOverrides(pads: PadPolygon[], indices: readonly number[], 
   if (!variants || !active) return;
   const cell = .1;
   const bucket = (x: number, y: number) => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`;
+  const anchors = new WeakMap<PadPolygon, readonly [number, number]>();
+  const anchor = (pad: PadPolygon, center: PanelVariant['center']) => {
+    let point = anchors.get(pad);
+    if (!point) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const part of pad.parts) {
+        if (part.polarity !== 'D') continue;
+        for (const [x, y] of part.points) {
+          minX = Math.min(minX, x); minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+        }
+      }
+      // Offset macros often share a flash origin despite occupying distinct
+      // locations. Index their actual dark bounds; holes/clear parts stay in
+      // the exact comparison and cannot distort this spatial acceleration.
+      point = Number.isFinite(minX + minY + maxX + maxY)
+        ? [(minX + maxX) / 2, (minY + maxY) / 2] : [pad.cx, pad.cy];
+      anchors.set(pad, point);
+    }
+    return [point[0] + center.x, point[1] + center.y] as const;
+  };
   const locations = new Map<string, PadPolygon[]>();
   for (const pad of selected) {
-    const key = bucket(pad.cx + active.center.x, pad.cy + active.center.y);
+    const [x, y] = anchor(pad, active.center);
+    const key = bucket(x, y);
     const entries = locations.get(key) ?? [];
     entries.push(pad); locations.set(key, entries);
   }
@@ -50,7 +72,7 @@ export function setPadOverrides(pads: PadPolygon[], indices: readonly number[], 
   for (const variant of new Set([variants.panel, variants.single, ...(variants.boards ?? [])])) {
     for (const candidate of variant[field] ?? []) {
       if (selectedObjects.has(candidate)) continue;
-      const x = candidate.cx + variant.center.x, y = candidate.cy + variant.center.y;
+      const [x, y] = anchor(candidate, variant.center);
       let matched = false;
       for (const dx of [-cell, 0, cell]) {
         for (const dy of [-cell, 0, cell]) {

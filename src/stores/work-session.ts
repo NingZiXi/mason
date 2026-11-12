@@ -2,6 +2,7 @@ import { computed, nextTick, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
 import { useConfigStore } from './config';
 import { apertureSnapshot } from '../lib/pad-overrides';
+import { normalizePryNotchSides } from '../lib/config-presets';
 
 export type ExportSnapshot = readonly unknown[];
 
@@ -10,9 +11,13 @@ export type ExportSnapshot = readonly unknown[];
 export const useWorkSessionStore = defineStore('work-session', () => {
   const config = useConfigStore();
   const decisions = computed(() => JSON.stringify(apertureSnapshot(config.config.stencilPadsTop, config.config.stencilPadsBottom)));
+  // Region plans can contain thousands of vertices. Track their content once
+  // per edit instead of traversing both faces for every unrelated slider tick.
+  const reliefPlans = computed(() => JSON.stringify(config.config.componentReliefRegions));
   const current = computed<ExportSnapshot>(() => Object.entries(config.config).map(([key, value]) => {
-    if (key === 'pryNotchSides') return config.config.pryNotchSides.join(',');
+    if (key === 'pryNotchSides') return normalizePryNotchSides(config.config.pryNotchSides).join(',');
     if (key === 'panelGrid') return JSON.stringify(value);
+    if (key === 'componentReliefRegions') return reliefPlans.value;
     // Choosing a mode on the empty welcome screen is not an edit.
     if (key === 'appMode' && !config.config.gerberFilename && !config.config.pcbOutlinePoints.length
       && !config.config.stencilPadsTop.length && !config.config.stencilPadsBottom.length) return null;

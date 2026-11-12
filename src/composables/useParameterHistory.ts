@@ -5,11 +5,24 @@ import { apertureSnapshot, type ApertureSnapshot } from "../lib/pad-overrides";
 
 // Keep only small parameter values. Never copy Gerber geometry into history.
 const HISTORY_KEYS = [...PRESET_KEYS, "pcbSizeX", "pcbSizeY", "pcbThickness",
-  "stencilSizeX", "stencilSizeY", "stencilLip", "jigSize", "platterHeight", "platterMargin"] as const;
+  "stencilSizeX", "stencilSizeY", "stencilLip", "jigSize", "platterHeight", "platterMargin",
+  "componentReliefEnabled", "jigPrintSide", "componentReliefRegions"] as const;
 export type ParameterSnapshot = Pick<AppConfig, typeof HISTORY_KEYS[number]> & { apertures: ApertureSnapshot };
+// Share immutable serialized editing plans across scalar history steps. A
+// restore still receives its own decoded copy, never an object held by history.
+type HistorySnapshot = Omit<ParameterSnapshot, 'componentReliefRegions' | 'apertures'> & {
+  componentReliefRegions: string;
+  apertures: string;
+};
+const SMALL_KEYS = HISTORY_KEYS.filter(key => key !== 'componentReliefRegions');
+const SNAPSHOT_KEYS = [...HISTORY_KEYS, 'apertures' as const];
 const DERIVED_KEYS = new Set<string>(["jigSize", "platterHeight", "platterMargin", "periScrewD", "nutAcrossFlats", "nutHeight"]);
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const equalValue = (a: unknown, b: unknown) => Object.is(a, b)
+  || a !== null && b !== null && typeof a === 'object' && typeof b === 'object'
+    && JSON.stringify(a) === JSON.stringify(b);
+const equal = (a: HistorySnapshot | undefined, b: HistorySnapshot) => a !== undefined
+  && SNAPSHOT_KEYS.every(key => equalValue(a[key], b[key]));
 const LIMIT = 50;
 
 export function useParameterHistory(options: {
@@ -17,13 +30,27 @@ export function useParameterHistory(options: {
   context: () => unknown[];
   restore: (snapshot: ParameterSnapshot) => Promise<void>;
 }) {
-  function snapshot(): ParameterSnapshot {
+  // Most parameter edits do not change opening decisions. Cache that sparse
+  // state independently so slider drags never rescan every imported pad.
+  const apertures = computed(() => {
     const config = options.config();
-    return clone({ ...Object.fromEntries(HISTORY_KEYS.map((key) => [key, config[key]])),
-      apertures: apertureSnapshot(config.stencilPadsTop, config.stencilPadsBottom) }) as ParameterSnapshot;
+    return JSON.stringify(apertureSnapshot(config.stencilPadsTop, config.stencilPadsBottom));
+  });
+  // In-place region/vertex edits remain reactive, while unrelated parameter
+  // changes reuse this string without reading or cloning either face's points.
+  const reliefPlans = computed(() => JSON.stringify(options.config().componentReliefRegions));
+  function snapshot(): HistorySnapshot {
+    const config = options.config();
+    return { ...clone(Object.fromEntries(SMALL_KEYS.map((key) => [key, config[key]]))),
+      componentReliefRegions: reliefPlans.value, apertures: apertures.value } as HistorySnapshot;
   }
-  const past = shallowRef<ParameterSnapshot[]>([]);
-  const future = shallowRef<ParameterSnapshot[]>([]);
+  function restoreSnapshot(state: HistorySnapshot): ParameterSnapshot {
+    const { componentReliefRegions, apertures, ...small } = state;
+    return { ...clone(small), componentReliefRegions: JSON.parse(componentReliefRegions),
+      apertures: JSON.parse(apertures) };
+  }
+  const past = shallowRef<HistorySnapshot[]>([]);
+  const future = shallowRef<HistorySnapshot[]>([]);
   const busy = shallowRef(false);
   let present = snapshot();
   let context = options.context();
@@ -49,7 +76,7 @@ export function useParameterHistory(options: {
       return;
     }
     if (busy.value || equal(present, state.value)) return;
-    const changed = [...HISTORY_KEYS, "apertures" as const].filter((key) => !equal(present[key], state.value[key]));
+    const changed = SNAPSHOT_KEYS.filter((key) => !equalValue(present[key], state.value[key]));
     const primary = changed.filter((key) => !DERIVED_KEYS.has(key));
     const group = (primary.length ? primary : changed).join(",");
     const now = Date.now();
@@ -80,7 +107,7 @@ export function useParameterHistory(options: {
     const previous = present;
     const previousContext = context;
     try {
-      await options.restore(clone(target));
+      await options.restore(restoreSnapshot(target));
       // A new import takes precedence over an in-flight history action.
       if (previousContext !== context) return;
       from.value = from.value.slice(0, -1);

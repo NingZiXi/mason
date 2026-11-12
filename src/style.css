@@ -166,12 +166,13 @@ input[type='radio']:focus-visible {
 .app-sidebar .section-help { margin-bottom: 12px; font-size: var(--heading-2xs-font-size); line-height: var(--body-md-line-height); font-weight: var(--font-weight-strong); color: var(--text-secondary); }
 .app-sidebar :is(.config-form, .stencil-form, .screw-diagram) .field-label { line-height: 18px; margin-bottom: 6px; }
 .app-sidebar .inline-help .field-label { margin-bottom: 0; }
-.app-sidebar .field-row { align-items: flex-start; }
-.app-sidebar .field-row > .field { min-width: 0; }
-.app-sidebar .el-input-number { max-width: 100%; }
+.app-sidebar .field-row { align-items: stretch; }
+.app-sidebar .field-row > .field { display: flex; flex-direction: column; min-width: 0; }
+.app-sidebar .field-row > .field > :is(.el-input-number, .el-input, .el-select) { margin-top: auto; }
+.app-sidebar .el-input-number { max-width: 100%; border-radius: var(--radius-control); corner-shape: var(--corner-shape); }
 .app-sidebar .parameter-section > .section-label, .app-sidebar .parameter-section > .section-help { font-size: 12px; font-weight: 600; letter-spacing: 0; }
 .app-sidebar .parameter-section > .section-label::after { display: none; }
-.app-sidebar .el-slider__button { box-shadow: 0 2px 5px rgba(28,46,36,.12); transition: transform 160ms ease, box-shadow 160ms ease; }
+.app-sidebar .el-slider__button { box-shadow: 0 2px 5px rgba(28,46,36,.12); transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .app-sidebar .el-slider__button:hover, .app-sidebar .el-slider__button.dragging { box-shadow: 0 0 0 4px var(--control-selection-surface), 0 2px 5px rgba(28,46,36,.12); }
 .app-sidebar .el-slider:focus-within .el-slider__button { box-shadow: 0 0 0 4px var(--control-selection-surface), 0 2px 5px rgba(28,46,36,.12); }
 .app-sidebar .el-input-number__increase, .app-sidebar .el-input-number__decrease {
@@ -180,8 +181,17 @@ input[type='radio']:focus-visible {
   border-color: var(--surface-line);
   transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
 }
+.app-sidebar .el-input-number:not(.is-controls-right) .el-input-number__decrease { border-radius: calc(var(--radius-control) - 1px) 0 0 calc(var(--radius-control) - 1px); }
+.app-sidebar .el-input-number:not(.is-controls-right) .el-input-number__increase { border-radius: 0 calc(var(--radius-control) - 1px) calc(var(--radius-control) - 1px) 0; }
+.app-sidebar :is(.el-input-number__increase, .el-input-number__decrease) .el-icon { scale: 1; transition: scale var(--motion-release) var(--ease-settle); }
 .app-sidebar :is(.el-input-number__increase, .el-input-number__decrease):hover:not(.is-disabled) { background: var(--control-selection-surface); color: var(--interaction-ink); }
 .app-sidebar :is(.el-input-number__increase, .el-input-number__decrease):active:not(.is-disabled) { background: color-mix(in srgb, var(--interaction-ink) 15%, transparent); transition-duration: var(--motion-press); }
+.app-sidebar :is(.el-input-number__increase, .el-input-number__decrease):active:not(.is-disabled) .el-icon { scale: .82; transition-duration: var(--motion-press); }
+/* Keep value positions immediate during dragging; animate only their finish. */
+.app-sidebar :is(.el-slider__runway, .el-slider__bar) { transition-property: background-color; transition-duration: var(--motion-fast); transition-timing-function: var(--ease-out); }
+.app-sidebar .el-switch__core { transition: background-color 200ms var(--ease-out), border-color 200ms var(--ease-out), box-shadow 200ms var(--ease-out); }
+.app-sidebar .el-switch:not(.is-disabled):hover .el-switch__core { box-shadow: 0 0 0 3px var(--control-selection-surface); }
+.app-sidebar .el-checkbox__inner { transition: border-color var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out); }
 .app-sidebar .advanced-toggle {
   border-style: solid;
   border-color: var(--surface-line);

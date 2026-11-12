@@ -25,6 +25,26 @@ describe("extractPads 标准光圈", () => {
       "%TO.P,J1,1*%", "%TD*%", "X60000Y0D03*", "M02*",
     ].join("\n"));
     expect(result.pads.map((p) => p.padRole)).toEqual(["component", "component", undefined, undefined]);
+    expect(result.pads.map((p) => p.componentRef)).toEqual(["U1", "U1", undefined, undefined]);
+  });
+
+  it("retains component identity independently of role and clears only its X2 attribute scope", () => {
+    const result = extractPads(HEADER + [
+      "%ADD10R,0.8X0.4*%", "D10*", "%TO.C, R1 *%", "X0Y0D03*",
+      "%TO.P,U2,A1,GPIO*%", "X10000Y0D03*", "%TD.N*%", "X20000Y0D03*",
+      "%TD.P*%", "X30000Y0D03*", "%TD.C*%", "X40000Y0D03*",
+      "%TO.C,J3*%", "%TO.P,U4,2*%", "%TD*%", "X50000Y0D03*", "M02*",
+    ].join("\n"));
+    expect(result.pads.map(p => p.componentRef)).toEqual(["R1", "U2", "U2", "R1", undefined, undefined]);
+    expect(result.pads.map(p => p.padRole)).toEqual([undefined, "component", "component", undefined, undefined, undefined]);
+  });
+
+  it("retains component attributes on drawn and region objects", () => {
+    const result = extractPads(HEADER + [
+      "%ADD10C,0.2*%", "D10*", "%TO.P,U1,1*%", "X0Y0D02*", "X10000Y0D01*",
+      "G36*", "X20000Y0D02*", "X30000Y0D01*", "X30000Y10000D01*", "G37*", "M02*",
+    ].join("\n"));
+    expect(result.pads.map(p => [p.type, p.componentRef])).toEqual([["line", "U1"], ["region", "U1"]]);
   });
 
   it("preserves X2 role metadata across step-repeat copies", () => {
@@ -34,6 +54,22 @@ describe("extractPads 标准光圈", () => {
     ].join("\n"));
     expect(result.pads).toHaveLength(2);
     expect(result.pads.map((p) => p.padRole)).toEqual(["component", "component"]);
+  });
+
+  it("keeps pins grouped per SR instance while separating every board and repeat block", () => {
+    const result = extractPads(HEADER + [
+      "%ADD10R,0.8X0.4*%", "D10*", "%SRX2Y2I5J4*%",
+      "%TO.P,U1,1*%", "X0Y0D03*", "%TO.P,U1,2*%", "X10000Y0D03*", "%SR*%",
+      "%SRX2Y1I5J0*%", "%TO.P,U1,1*%", "X0Y100000D03*", "%SR*%", "X0Y200000D03*", "M02*",
+    ].join("\n"));
+    expect(result.pads.map(p => p.componentRef)).toEqual([
+      "U1@SR1:0,0", "U1@SR1:0,0", "U1@SR1:1,0", "U1@SR1:1,0",
+      "U1@SR1:0,1", "U1@SR1:0,1", "U1@SR1:1,1", "U1@SR1:1,1",
+      "U1@SR2:0,0", "U1@SR2:1,0", "U1",
+    ]);
+    expect(result.pads.every(p => p.padRole === "component")).toBe(true);
+    expect(result.pads[6].cx).toBeCloseTo(5);
+    expect(result.pads[6].cy).toBeCloseTo(4);
   });
   it("keeps 0402 and smaller paste apertures with their original size and type", () => {
     const result = extractPads(HEADER + [
@@ -62,9 +98,11 @@ describe("extractPads 标准光圈", () => {
     expect(r.skippedFlashes).toBe(0);
   });
 
-  it("R 第3参数 = 旋转角", () => {
+  // Gerber §4.4.3:标准 R 的第三参数是孔径;旋转应由 LR 指定。
+  it("R 光圈通过 LR 旋转", () => {
     const g = HEADER + [
-      "%ADD10R,2.0X1.0X45*%",
+      "%ADD10R,2.0X1.0*%",
+      "%LR45*%",
       "D10*",
       "X0Y0D03*",
       "M02*",
@@ -333,7 +371,8 @@ describe("extractPads G36/G37 区域", () => {
     expect(Math.max(...xs)).toBeCloseTo(20, 3);
   });
 
-  it("区域多轮廓:首轮廓为外轮廓,其余为内孔", () => {
+  // 旧测试把后续 D02 轮廓当内孔,违反 Gerber §4.10 的逐轮廓填充并集语义。
+  it("区域多轮廓:嵌套轮廓仍单独填充,不会变成内孔", () => {
     const g = HEADER + [
       "G36*",
       "X0Y0D02*",
@@ -348,10 +387,9 @@ describe("extractPads G36/G37 区域", () => {
       "M02*",
     ].join("\n");
     const r = extractPads(g);
-    expect(r.pads).toHaveLength(1);
-    const part = r.pads[0].parts[0];
-    expect(part.holes).toBeDefined();
-    expect(part.holes!.length).toBe(1);
+    expect(r.pads).toHaveLength(2);
+    expect(r.regionCount).toBe(1);
+    expect(r.pads.every(pad => pad.parts[0].holes === undefined)).toBe(true);
   });
 
   it("区域内 G75 圆弧离散", () => {
@@ -419,7 +457,8 @@ describe("extractPads 图像控制", () => {
     expect(r.pads[0].polarity).toBe("C");
   });
 
-  it("%LM 镜像:焊盘顶点 Y 翻转", () => {
+  // 旧断言 cy=-10 把 LM 误当全局坐标变换。Gerber §4.9 仅变换光圈。
+  it("%LM 镜像不改变 flash 位置", () => {
     const g = HEADER + [
       "%ADD10R,1.0X1.0*%",
       "%LMX*%",
@@ -429,8 +468,11 @@ describe("extractPads 图像控制", () => {
     ].join("\n");
     const r = extractPads(g);
     expect(r.pads).toHaveLength(1);
-    // flash 位置 y=10 镜像后 y=-10
-    expect(r.pads[0].cy).toBeCloseTo(-10, 6);
+    expect(r.pads[0].cx).toBeCloseTo(10, 6);
+    expect(r.pads[0].cy).toBeCloseTo(10, 6);
+    const points = ring(r.pads[0]);
+    expect(Math.min(...points.map(p => p[0]))).toBeCloseTo(9.5);
+    expect(Math.min(...points.map(p => p[1]))).toBeCloseTo(9.5);
   });
 
   it("%AB 光圈块内容被跳过并计数", () => {

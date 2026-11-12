@@ -34,6 +34,15 @@ const imports = [
   { label: 'paste layer', create: useGerberStencil, extension: 'gtp', content: paste },
 ];
 
+it('accepts a standalone mechanical outline that is already supported inside ZIP files', async () => {
+  const state = useGerberOutline();
+  const result = await state.processFile({ name: 'board.GME', text: async () => outline } as File);
+  expect(state.error.value).toBeNull();
+  expect(result?.filename).toBe('board.GME');
+  expect(result?.width).toBeCloseTo(10);
+  expect(result?.height).toBeCloseTo(10);
+});
+
 describe.each(imports)('$label import transactions', ({ create, extension, content }) => {
   it('only publishes and returns the latest import when an older read completes later', async () => {
     const state = create();

@@ -18,6 +18,28 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("persistent configuration presets", () => {
+  it("compares notch selections as enabled edges without changing their click order", async () => {
+    const config = useConfigStore();
+    const store = usePresetsStore(); await store.initialize();
+    config.config.pryNotchSides = ['down', 'left'];
+    store.saveAs('Two edges');
+    config.config.pryNotchSides = ['left'];
+    expect(store.dirty).toBe(true);
+    config.config.pryNotchSides.push('down');
+    expect(store.dirty).toBe(false);
+    expect(config.config.pryNotchSides).toEqual(['left', 'down']);
+    expect(pickPresetSettings(config.config).pryNotchSides).toEqual(['down', 'left']);
+  });
+
+  it("loads older presets with unordered notch edges without showing unsaved changes", async () => {
+    disk.set(PRESETS_STORAGE_KEY, JSON.stringify({ version: 1, selectedId: 'legacy',
+      presets: [{ id: 'legacy', name: 'Legacy', settings: { pryNotchSides: ['right', 'down', 'left'] } }] }));
+    const store = usePresetsStore(); await store.initialize();
+    expect(store.selectedId).toBe('legacy');
+    expect(store.dirty).toBe(false);
+    expect(store.selected?.settings.pryNotchSides).toEqual(['down', 'left', 'right']);
+  });
+
   it("keeps the unexported-work reminder after saving edits as a preset", async () => {
     const presets = usePresetsStore();
     await presets.initialize();

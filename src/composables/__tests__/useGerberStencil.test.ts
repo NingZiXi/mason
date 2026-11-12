@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import JSZip from "jszip";
 import { useGerberStencil } from "../useGerberStencil";
+import { i18n } from '../../i18n';
 
 const paste = (x: number, y: number) => `%FSLAX24Y24*%
 %MOMM*%
@@ -23,6 +24,92 @@ async function importZip(files: Record<string, string>) {
 }
 
 describe("stencil fallback board bounds", () => {
+  const macroPaste = (body: string) => [
+    '%FSLAX34Y34*%', '%MOMM*%', `%AMX*${body}*%`, '%ADD10X*%', 'D10*', 'X0Y0D03*', 'M02*',
+  ].join('\n');
+
+  it('ignores remote clear macro primitives when estimating a standalone board boundary', async () => {
+    const state = useGerberStencil();
+    const content = macroPaste('21,1,2,2,0,0,0*21,0,2,2,1000,0,0');
+    const result = await state.processFile({ name: 'board.gtp', text: async () => content } as File);
+    expect(state.error.value).toBeNull();
+    expect(result?.width).toBeCloseTo(2.2);
+    expect(result?.height).toBeCloseTo(2.2);
+    expect(result?.bboxCenter).toEqual({ x: 0, y: 0 });
+    // Clear geometry stays attached to the aperture for the manufacturing engine.
+    expect(result?.topPads[0].parts.map(part => part.polarity)).toEqual(['D', 'C']);
+    expect(result?.topPads[0].cx).toBe(0);
+  });
+
+  it('ignores image clear objects when estimating a standalone board boundary', async () => {
+    const state = useGerberStencil();
+    const content = paste(0, 0).replace('M02*', '%LPC*%\nX10000000Y0D03*\nM02*');
+    const result = await state.processFile({ name: 'board.gtp', text: async () => content } as File);
+    expect(state.error.value).toBeNull();
+    expect(result?.width).toBeCloseTo(2.2);
+    expect(result?.height).toBeCloseTo(2.2);
+    expect(result?.bboxCenter).toEqual({ x: 0, y: 0 });
+  });
+
+  it.each([
+    ['only image clear objects', () => paste(0, 0).replace('D10*', '%LPC*%\nD10*')],
+    ['only clear macro primitives', () => macroPaste('21,0,2,2,0,0,0')],
+    ['empty dark macro primitives', () => macroPaste('21,1,0,2,0,0,0')],
+  ] as const)('rejects a fallback import containing %s', async (_name, content) => {
+    const state = useGerberStencil();
+    const result = await state.processFile({ name: 'board.gtp', text: async () => content() } as File);
+    expect(result).toBeNull();
+    expect(state.result.value).toBeNull();
+    expect(state.error.value).toBe(i18n.global.t('gerber.noPads'));
+    expect(state.loading.value).toBe(false);
+  });
+
+  it('keeps an explicit board outline authoritative when macro clear geometry is remote', async () => {
+    const result = await importZip({
+      'board.gtp': macroPaste('21,1,2,2,0,0,0*21,0,2,2,1000,0,0'),
+      'board.gko': '%FSLAX34Y34*%\n%MOMM*%\nG01*\nX-20000Y-20000D02*\nX20000Y-20000D01*\nX20000Y20000D01*\nX-20000Y20000D01*\nX-20000Y-20000D01*\nM02*',
+    });
+    expect(result.outlineSource).toBe('gerber');
+    expect(result.width).toBeCloseTo(4);
+    expect(result.height).toBeCloseTo(4);
+    expect(result.topPads).toHaveLength(1);
+  });
+
+  it.each([
+    ['board.GPT', 'top'], ['board.GPB', 'bottom'],
+    ['board-B_Paste.gbr', 'bottom'], ['B_Paste.gbr', 'bottom'],
+    ['board-bottom-paste.gbr', 'bottom'], ['board-F_Paste.gbr', 'top'],
+    ['F_Paste.gbr', 'top'], ['paste.gbr', 'top'],
+  ] as const)('uses the same physical face for a standalone file and ZIP: %s', async (name, side) => {
+    const content = paste(20, 10);
+    const state = useGerberStencil();
+    const standalone = await state.processFile({ name, text: async () => content } as File);
+    expect(state.error.value).toBeNull();
+    expect(standalone).not.toBeNull();
+    const archived = await importZip({ [name]: content });
+    expect(standalone!.topPads).toEqual(archived.topPads);
+    expect(standalone!.bottomPads).toEqual(archived.bottomPads);
+    expect(side === 'top' ? standalone!.topPads : standalone!.bottomPads).toHaveLength(1);
+    expect(side === 'top' ? standalone!.bottomPads : standalone!.topPads).toHaveLength(0);
+  });
+
+  it('keeps a bottom paste file on the bottom when exported under a top-named directory', async () => {
+    const result = await importZip({ 'top-export/board-bottom-paste.gbr': paste(3, 2) });
+    expect(result.topPads).toHaveLength(0);
+    expect(result.bottomPads).toHaveLength(1);
+  });
+
+  it('does not interpret an outline as paste when its ZIP folder is named paste', async () => {
+    const result = await importZip({
+      'paste-export/board.GKO': '%FSLAX24Y24*%\n%MOMM*%\n%ADD10C,0.1*%\nD10*\nX0Y0D02*\nX100000Y0D01*\nX100000Y100000D01*\nX0Y100000D01*\nX0Y0D01*\nM02*',
+      'paste-export/board.GPT': paste(3, 2),
+    });
+    expect(result.topPasteFile).toBe('paste-export/board.GPT');
+    expect(result.topPads).toHaveLength(1);
+    expect(result.outlineSource).toBe('gerber');
+    expect(result.width).toBeCloseTo(10);
+  });
+
   it("keeps supplementary test-pad evidence through ZIP import and centering", async () => {
     const metadata = JSON.stringify({ lengthUnit: "mm",
       components: { fields: ["COMPONENT_NAME", "LAYER", "X_COORDINATE", "Y_COORDINATE"], rows: [["5V", "T", 3, 2]] },

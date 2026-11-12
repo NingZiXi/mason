@@ -9,6 +9,8 @@
  * 5. .GME(JLCPCB V-Cut / 机械信息,通常不是板框,放最后)
  */
 
+import { isArchiveContentFile } from './archive-files';
+
 const EXTENSION_HINTS: Array<{ ext: string; priority: number; reason: string }> = [
   { ext: ".gko", priority: 100, reason: "JLCPCB / 嘉立创EDA 板框文件" },
   { ext: ".gm1", priority: 90, reason: "KiCad / Altium 板框文件" },
@@ -35,12 +37,14 @@ export function detectOutlineFiles(filenames: string[]): OutlineCandidate[] {
   const candidates: OutlineCandidate[] = [];
 
   for (const fn of filenames) {
-    const lower = fn.toLowerCase();
+    if (!isArchiveContentFile(fn)) continue;
+    const basename = fn.split(/[/\\]/).pop()!;
+    const lower = basename.toLowerCase();
     let best: OutlineCandidate | null = null;
 
     // 文件名模式优先级最高
     for (const hint of FILENAME_HINTS) {
-      if (hint.pattern.test(fn)) {
+      if (hint.pattern.test(basename)) {
         if (!best || hint.priority > best.priority) {
           best = { filename: fn, priority: hint.priority, reason: hint.reason };
         }

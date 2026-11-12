@@ -1,11 +1,19 @@
 import type { AppConfig } from "../stores/config";
 import type { PadPolygon } from "./gerber/pads";
+import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide, reliefRegionDepth } from './component-relief';
 
 // Image polarity applies to the whole pad; part polarity and holes apply inside it.
 const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride }) => ({
   type, polarity, parts, ...(padRole ? { padRole } : {}), ...(padRoleSource ? { padRoleSource } : {}),
   ...(apertureOverride ? { apertureOverride } : {}),
 }));
+
+// A through cut ignores its remembered blind-pocket depth. Normalize missing
+// and explicit false flags so equivalent saved plans share the same mesh.
+const reliefGeometry = (region: import('./component-relief').ComponentReliefRegion, defaultDepth: number) => ({
+  ...region, through: region.through === true,
+  depth: region.through ? undefined : reliefRegionDepth(region, defaultDepth),
+});
 
 // 计算当前参数的 hash(用于判断是否需要重新生成)
 export function modelParamsHash(c: AppConfig) {
@@ -16,8 +24,12 @@ export function modelParamsHash(c: AppConfig) {
     mode: c.appMode,
     pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY],
     screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight, c.nutPocketClearance],
-    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.postClearance, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap],
+    dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth,
+      c.appMode === 'jig' && c.ejectSlotWidth > 0 ? c.ejectHoleDiameter : 0,
+      c.cornerScrewD, c.postClearance, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap],
     notch: [c.pryNotchSides, c.pryNotchScale],
+    relief: c.appMode === 'jig' && c.componentReliefEnabled
+      ? [c.jigPrintSide, activeReliefRegions(c).map(region => reliefGeometry(region, c.componentReliefDepth))] : null,
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
       c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
       c.stencilFilterTestPoints, c.stencilTestPointMaxDia, c.stencilTestPointIsolation,
@@ -43,12 +55,17 @@ export function buildScadParams(c: AppConfig) {
     base_height: c.baseHeight,
     top_cover_height: c.topCoverHeight,
     jig_size: c.jigSize,
-    insert_height: c.insertHeight,
+    insert_height: effectiveInsertHeight(c),
+    component_relief_enabled: c.appMode === 'jig' && c.componentReliefEnabled,
+    component_relief_depth: c.componentReliefDepth,
+    component_relief_regions: activeReliefRegions(c),
+    jig_print_side: effectiveJigPrintSide(c),
     platter_height: c.platterHeight,
     stencil_lip: c.stencilLip,
     window_gap: c.windowGap,
     platter_corner_radius: c.platterCornerRadius,
     eject_slot_width: c.ejectSlotWidth,
+    eject_hole_diameter: c.ejectHoleDiameter,
     pry_notch_sides: c.pryNotchSides,
     pry_notch_scale: c.pryNotchScale,
     corner_screw_d: c.cornerScrewD,
@@ -89,13 +106,19 @@ export function scadPartHash(params: ReturnType<typeof buildScadParams>, part: s
     "outer_corner_radius", "pry_notch_sides", "pry_notch_scale", "pocket_clearance", "pad_shrink"]);
   const unusedJigInputs = new Set(part === "insert"
     ? ["screw_spacing", "screw_spec", "peri_screw_d", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance", "platter_height"]
-    : ["insert_height", "platter_height", "pcb_thickness", "pcb_outline_holes", "eject_slot_width", "pry_notch_sides", "pry_notch_scale",
+    : ["insert_height", "platter_height", "pcb_thickness", "pcb_outline_holes", "eject_slot_width", "eject_hole_diameter", "pry_notch_sides", "pry_notch_scale",
       ...(part === "cover" ? ["base_height", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance"] : ["top_cover_height"])]);
-  return JSON.stringify(Object.fromEntries(Object.entries(params).filter(([key]) => {
+  const geometryParams = part === 'insert' ? { ...params,
+    eject_hole_diameter: params.eject_slot_width > 0 ? params.eject_hole_diameter : 0,
+    component_relief_regions: params.component_relief_regions.map(region => reliefGeometry(region, params.component_relief_depth)) } : params;
+  return JSON.stringify(Object.fromEntries(Object.entries(geometryParams).filter(([key]) => {
+    // The default is not model geometry; legacy fallback is resolved above.
+    if (key === 'component_relief_depth') return false;
     if (stencil) {
       if (key === (part === "stencil_top" ? "stencil_pads_bottom" : "stencil_pads_top")) return false;
       return key.startsWith("stencil_") || stencilShared.has(key);
     }
+    if (part !== 'insert' && ['component_relief_depth', 'component_relief_regions'].includes(key)) return false;
     return (!key.startsWith("stencil_") || ["stencil_size_x", "stencil_size_y", "stencil_lip", "stencil_corner_radius", "stencil_frame_width", "stencil_frame_shape"].includes(key))
       && key !== "pad_shrink" && !unusedJigInputs.has(key);
   })));

@@ -7,6 +7,44 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JigPrintSide {
+    #[default]
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentReliefShape {
+    Rect,
+    Circle,
+    Polygon,
+}
+
+/// A component pocket in canonical imported top-view PCB coordinates (mm).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComponentReliefRegion {
+    pub id: String,
+    pub shape: ComponentReliefShape,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Absolute top-view vertices for polygon pockets; omitted for legacy shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<[f64; 2]>,
+    /// A per-pocket depth; older plans fall back to component_relief_depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<f64>,
+    /// Open the entire tray; depth remains stored for returning to blind mode.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub through: bool,
+}
+
+fn is_false(value: &bool) -> bool { !value }
+
 /// 与前端 TS 类型保持一致的参数结构(v2 结构:参考商用钢网夹)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScadParams {
@@ -22,6 +60,15 @@ pub struct ScadParams {
     /// 空数组 = 无内孔
     #[serde(default)]
     pub pcb_outline_holes: Vec<Vec<[f64; 2]>>,
+    /// Optional second-face tray. The engine preserves the PCB support datum.
+    #[serde(default)]
+    pub component_relief_enabled: bool,
+    #[serde(default = "default_component_relief_depth")]
+    pub component_relief_depth: f64,
+    #[serde(default)]
+    pub jig_print_side: JigPrintSide,
+    #[serde(default)]
+    pub component_relief_regions: Vec<ComponentReliefRegion>,
     /// 钢网外缘长/宽(mm,可为矩形)—— 独立模式。
     /// 0 = 非独立模式(钢网外框由板框+边框宽推导)
     #[serde(default)]
@@ -58,9 +105,12 @@ pub struct ScadParams {
     /// 矩形板凸台圆角半径
     #[serde(default = "default_platter_corner_radius")]
     pub platter_corner_radius: f64,
-    /// 顶出槽宽(0 = 关闭):端墙撬口宽;底部圆形顶出孔直径随板尺寸自适应
+    /// Legacy bottom eject-hole switch: 0 = off, any positive value = on.
     #[serde(default = "default_eject_slot_width")]
     pub eject_slot_width: f64,
+    /// Bottom eject-hole diameter in mm; 0 preserves legacy automatic sizing.
+    #[serde(default)]
+    pub eject_hole_diameter: f64,
     /// 取放缺口位置:up / down / left / right 任意组合(空 = 关闭)
     #[serde(default = "default_pry_notch_sides")]
     pub pry_notch_sides: Vec<String>,
@@ -152,6 +202,7 @@ pub struct ScadParams {
 }
 
 fn default_insert_height() -> f64 { 8.0 }
+fn default_component_relief_depth() -> f64 { 3.0 }
 fn default_screw_spec() -> String { "M3".to_string() }
 fn default_platter_height() -> f64 { 4.0 }
 fn default_platter_margin() -> f64 { 5.0 }
@@ -542,6 +593,37 @@ pub async fn inspect_stencil(
     scad::inspect_stencil(&app, configured.as_deref(), &params, part, request_id).await
 }
 
+/// Apply the engine's exact support checks before accepting automatic pockets.
+#[tauri::command]
+pub async fn validate_component_relief(
+    app: AppHandle,
+    params: ScadParams,
+    request_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let configured = app.store(STORE_FILE).ok()
+        .and_then(|s| s.get(KEY_PYTHON_PATH))
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
+    scad::validate_component_relief(&app, configured.as_deref(), &params, request_id).await
+}
+
+/// Merge same-depth pockets and validate retained support before applying them.
+#[tauri::command]
+pub async fn merge_component_relief(
+    app: AppHandle,
+    params: ScadParams,
+    gap: f64,
+    selected_ids: Option<Vec<String>>,
+    request_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let configured = app.store(STORE_FILE).ok()
+        .and_then(|s| s.get(KEY_PYTHON_PATH))
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
+    scad::merge_component_relief(&app, configured.as_deref(), &params, gap,
+        selected_ids.as_deref(), request_id).await
+}
+
 /// 把单个部件渲染到指定路径(供前端导出 STL 文件)
 #[tauri::command]
 pub async fn export_stl(
@@ -625,5 +707,93 @@ mod parameter_tests {
         assert!(!explicit.stencil_filter_test_points);
         assert_eq!(explicit.nut_pocket_clearance, 0.35);
         assert_eq!(explicit.post_clearance, 0.15);
+    }
+
+    #[test]
+    fn eject_hole_diameter_defaults_to_legacy_auto_and_roundtrips_manual_mm() {
+        let mut raw = json!({
+            "pcb_size_x": 20, "pcb_size_y": 20, "pcb_thickness": 1.6,
+            "pcb_pocket_clearance": 0.2, "screw_spacing": 40,
+            "base_height": 4, "top_cover_height": 4, "jig_size": 100
+        });
+        let defaults: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(defaults.eject_hole_diameter, 0.0);
+        assert_eq!(defaults.eject_slot_width, 22.0);
+        raw["eject_hole_diameter"] = json!(16.5);
+        raw["eject_slot_width"] = json!(0);
+        let manual: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        let serialized = serde_json::to_value(manual).unwrap();
+        assert_eq!(serialized["eject_hole_diameter"], json!(16.5));
+        assert_eq!(serialized["eject_slot_width"], json!(0.0));
+        for invalid in [json!(null), json!(true), json!("12")] {
+            raw["eject_hole_diameter"] = invalid;
+            assert!(serde_json::from_value::<ScadParams>(raw.clone()).is_err());
+        }
+    }
+
+    #[test]
+    fn component_relief_defaults_off_and_roundtrips_regions() {
+        let mut raw = json!({
+            "pcb_size_x": 20, "pcb_size_y": 20, "pcb_thickness": 1.6,
+            "pcb_pocket_clearance": 0.2, "screw_spacing": 40,
+            "base_height": 4, "top_cover_height": 4, "jig_size": 100
+        });
+        let defaults: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        assert!(!defaults.component_relief_enabled);
+        assert_eq!(defaults.jig_print_side, JigPrintSide::Top);
+        assert_eq!(defaults.component_relief_depth, 3.0);
+        assert!(defaults.component_relief_regions.is_empty());
+        raw["component_relief_enabled"] = json!(true);
+        raw["component_relief_depth"] = json!(5.5);
+        raw["jig_print_side"] = json!("bottom");
+        raw["component_relief_regions"] = json!([
+            {"id":"chip-1","shape":"rect","x":1.0,"y":-2.0,"width":8.0,"height":6.0},
+            {"id":"chip-2","shape":"circle","x":-3.0,"y":4.0,"width":5.0,"height":5.0,"depth":2.5},
+            {"id":"chip-3","shape":"polygon","x":2.0,"y":2.0,"width":4.0,"height":4.0,
+             "points":[[0.0,0.0],[4.0,0.0],[4.0,2.0],[2.0,2.0],[2.0,4.0],[0.0,4.0]],"depth":8.0},
+            {"id":"chip-4","shape":"rect","x":5.0,"y":6.0,"width":2.0,"height":3.0,
+             "depth":12.0,"through":true}
+        ]);
+        let params: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        assert!(params.component_relief_enabled);
+        assert_eq!(params.jig_print_side, JigPrintSide::Bottom);
+        assert!(params.component_relief_regions[0].points.is_empty());
+        assert_eq!(params.component_relief_regions[0].depth, None);
+        assert_eq!(params.component_relief_regions[1].depth, Some(2.5));
+        assert_eq!(params.component_relief_regions[2].depth, Some(8.0));
+        assert!(!params.component_relief_regions[0].through);
+        assert!(params.component_relief_regions[3].through);
+        assert_eq!(params.component_relief_regions[3].depth, Some(12.0));
+        assert!(matches!(params.component_relief_regions[2].shape, ComponentReliefShape::Polygon));
+        assert_eq!(params.component_relief_regions[2].points.len(), 6);
+        let serialized = serde_json::to_value(params).unwrap();
+        assert_eq!(serialized["component_relief_regions"], raw["component_relief_regions"]);
+        assert_eq!(serialized["component_relief_depth"], json!(5.5));
+        raw["jig_print_side"] = json!("invalid");
+        assert!(serde_json::from_value::<ScadParams>(raw).is_err());
+    }
+
+    #[test]
+    fn component_relief_polygon_points_require_coordinate_pairs() {
+        let malformed = json!({
+            "id":"polygon", "shape":"polygon", "x":0.0, "y":0.0,
+            "width":4.0, "height":4.0, "points":[[0.0,0.0],[4.0,0.0,1.0],[0.0,4.0]]
+        });
+        assert!(serde_json::from_value::<ComponentReliefRegion>(malformed).is_err());
+    }
+
+    #[test]
+    fn component_relief_through_requires_bool_and_omits_false() {
+        let mut raw = json!({"id":"chip", "shape":"rect", "x":0.0, "y":0.0,
+                             "width":4.0, "height":3.0, "depth":6.0, "through":false});
+        let region: ComponentReliefRegion = serde_json::from_value(raw.clone()).unwrap();
+        assert!(!region.through);
+        let serialized = serde_json::to_value(region).unwrap();
+        assert!(serialized.get("through").is_none());
+        assert_eq!(serialized["depth"], json!(6.0));
+        for invalid in [json!(null), json!(0), json!(1), json!("true")] {
+            raw["through"] = invalid;
+            assert!(serde_json::from_value::<ComponentReliefRegion>(raw.clone()).is_err());
+        }
     }
 }

@@ -40,6 +40,10 @@ struct ServerRequest<'a> {
     params: Option<&'a ScadParams>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gap: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_ids: Option<&'a [String]>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -58,6 +62,10 @@ struct ServerResponse {
     area: Option<f64>,
     #[serde(default)]
     inspection: Option<serde_json::Value>,
+    #[serde(default)]
+    validation: Option<serde_json::Value>,
+    #[serde(default)]
+    merge: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +196,8 @@ impl Server {
         format: Option<&str>,
         params: Option<&ScadParams>,
         output: Option<&str>,
+        gap: Option<f64>,
+        selected_ids: Option<&[String]>,
     ) -> Result<ServerResponse, AppError> {
         self.next_id += 1;
         let id = self.next_id;
@@ -201,6 +211,8 @@ impl Server {
             format,
             params,
             output,
+            gap,
+            selected_ids,
         };
         let mut line = serde_json::to_string(&req)
             .map_err(|e| AppError::Other(format!("序列化请求失败: {}", e)))?;
@@ -362,7 +374,7 @@ async fn ensure_server(
     if guard.is_none() {
         let mut server = spawn_server(python, script_path, log_path).await?;
         // 启动 ping:快速暴露依赖缺失(import 失败 → 进程退出 → 响应通道关闭)
-        if let Err(e) = server.request("ping", None, None, None, None).await {
+        if let Err(e) = server.request("ping", None, None, None, None, None, None).await {
             let _ = server.child.kill().await;
             return Err(e);
         }
@@ -403,6 +415,8 @@ async fn request_model(
     cmd: &str,
     format: Option<&str>,
     output: Option<&str>,
+    gap: Option<f64>,
+    selected_ids: Option<&[String]>,
     request_id: Option<String>,
     priority: u8,
     export: bool,
@@ -429,7 +443,7 @@ async fn request_model(
     let mut guard = cell.lock().await;
     run_server_request(
         &mut guard, &python, &script_path, &log_path, cmd,
-        Some(part.to_str()), format, Some(params), output, ticket.as_ref(),
+        Some(part.to_str()), format, Some(params), output, gap, selected_ids, ticket.as_ref(),
     ).await
 }
 
@@ -443,6 +457,8 @@ async fn run_server_request(
     format: Option<&str>,
     params: Option<&ScadParams>,
     output: Option<&str>,
+    gap: Option<f64>,
+    selected_ids: Option<&[String]>,
     ticket: Option<&generation::Ticket<'_>>,
 ) -> Result<ServerResponse, AppError> {
     let work = async {
@@ -457,7 +473,7 @@ async fn run_server_request(
         if let Some(ticket) = ticket {
             ticket.check()?;
         }
-        guard.as_mut().unwrap().request(cmd, part, format, params, output).await
+        guard.as_mut().unwrap().request(cmd, part, format, params, output, gap, selected_ids).await
     };
     let result = if let Some(ticket) = ticket {
         tokio::select! {
@@ -498,7 +514,7 @@ pub async fn part_metrics(
     part: Part,
     request_id: Option<String>,
 ) -> Result<(f64, f64), AppError> {
-    match request_model(app, configured_python, params, part, "stats", None, None, request_id, 2, false).await {
+    match request_model(app, configured_python, params, part, "stats", None, None, None, None, request_id, 2, false).await {
         Ok(resp) if resp.ok => Ok((resp.volume.unwrap_or(0.0), resp.area.unwrap_or(0.0))),
         Ok(resp) => Err(AppError::RenderFailed(format!(
             "Python 计算体积失败: {}",
@@ -516,11 +532,43 @@ pub async fn inspect_stencil(
     part: Part,
     request_id: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
-    let resp = request_model(app, configured_python, params, part, "inspect_stencil", None, None, request_id, 0, false).await?;
+    let resp = request_model(app, configured_python, params, part, "inspect_stencil", None, None, None, None, request_id, 0, false).await?;
     if !resp.ok {
         return Err(AppError::RenderFailed(format!("开孔核对失败: {}", resp.error.unwrap_or_default())));
     }
     resp.inspection.ok_or_else(|| AppError::Other("响应缺少开孔核对数据".into()))
+}
+
+/// Validate exact PCB support geometry on the warm worker, without CAD modeling.
+pub async fn validate_component_relief(
+    app: &AppHandle,
+    configured_python: Option<&str>,
+    params: &ScadParams,
+    request_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let resp = request_model(app, configured_python, params, Part::PcbInsert,
+        "validate_component_relief", None, None, None, None, request_id, 0, false).await?;
+    if !resp.ok {
+        return Err(AppError::RenderFailed(format!("元件避空校验失败: {}", resp.error.unwrap_or_default())));
+    }
+    resp.validation.ok_or_else(|| AppError::Other("响应缺少元件避空校验数据".into()))
+}
+
+/// Merge nearby equal-depth pockets in canonical coordinates, without CAD work.
+pub async fn merge_component_relief(
+    app: &AppHandle,
+    configured_python: Option<&str>,
+    params: &ScadParams,
+    gap: f64,
+    selected_ids: Option<&[String]>,
+    request_id: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    let resp = request_model(app, configured_python, params, Part::PcbInsert,
+        "merge_component_relief", None, None, Some(gap), selected_ids, request_id, 0, false).await?;
+    if !resp.ok {
+        return Err(AppError::RenderFailed(format!("元件避空合并失败: {}", resp.error.unwrap_or_default())));
+    }
+    resp.merge.ok_or_else(|| AppError::Other("响应缺少元件避空合并数据".into()))
 }
 
 /// 渲染单个部件为 STL 字节(供前端预览)
@@ -534,7 +582,7 @@ pub async fn render_to_stl(
 ) -> Result<Vec<u8>, AppError> {
     let artifact = TempArtifact::new("stl");
     let output = artifact.0.to_string_lossy();
-    let resp = request_model(app, configured_python, params, part, "generate", Some("stl"), Some(&output), request_id, if background { 1 } else { 0 }, false).await?;
+    let resp = request_model(app, configured_python, params, part, "generate", Some("stl"), Some(&output), None, None, request_id, if background { 1 } else { 0 }, false).await?;
     if !resp.ok {
         return Err(AppError::RenderFailed(format!(
             "Python 生成失败: {}",
@@ -567,7 +615,7 @@ pub async fn render_to_file(
 
     let artifact = TempArtifact::new(ext);
     let output = artifact.0.to_string_lossy();
-    let resp = request_model(app, configured_python, params, part, "generate", Some(ext), Some(&output), None, 0, true).await?;
+    let resp = request_model(app, configured_python, params, part, "generate", Some(ext), Some(&output), None, None, None, 0, true).await?;
     if !resp.ok {
         return Err(AppError::RenderFailed(format!(
             "Python 生成失败: {}",
@@ -603,6 +651,22 @@ impl Drop for TempArtifact {
 mod worker_tests {
     use super::*;
 
+    #[test]
+    fn merge_selection_serializes_all_empty_and_legacy_requests_distinctly() {
+        let ids = vec!["left".to_string(), "right".to_string()];
+        for selection in [None, Some(&[][..]), Some(ids.as_slice())] {
+            let request = ServerRequest {
+                id: 1, cmd: "merge_component_relief", part: None, format: None,
+                params: None, output: None, gap: Some(1.0), selected_ids: selection,
+            };
+            let value = serde_json::to_value(request).unwrap();
+            match selection {
+                None => assert!(value.get("selected_ids").is_none()),
+                Some(ids) => assert_eq!(value["selected_ids"], serde_json::json!(ids)),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn cancelling_a_running_preview_reaps_it_and_preserves_export_worker() {
         let Some(python) = bundled_python(None).or_else(python_detect::find_python_in_path) else { return; };
@@ -621,8 +685,8 @@ for line in sys.stdin:
         let export_log = TempArtifact::new("export.log");
         let mut preview_server = Some(spawn_server(&python, &script.0, &preview_log.0).await.unwrap());
         let mut export_server = Some(spawn_server(&python, &script.0, &export_log.0).await.unwrap());
-        preview_server.as_mut().unwrap().request("ping", None, None, None, None).await.unwrap();
-        export_server.as_mut().unwrap().request("ping", None, None, None, None).await.unwrap();
+        preview_server.as_mut().unwrap().request("ping", None, None, None, None, None, None).await.unwrap();
+        export_server.as_mut().unwrap().request("ping", None, None, None, None, None, None).await.unwrap();
         let export_pid = export_server.as_ref().unwrap().child.id();
         let scheduler = generation::Scheduler::default();
         let ticket = scheduler.register(Some("preview".into()), 0);
@@ -639,9 +703,9 @@ for line in sys.stdin:
         };
         let (preview, export, _) = tokio::join!(
             run_server_request(&mut preview_server, &python, &script.0, &preview_log.0,
-                "generate", Some("preview"), Some("stl"), None, Some(&output), Some(&ticket)),
+                "generate", Some("preview"), Some("stl"), None, Some(&output), None, None, Some(&ticket)),
             run_server_request(&mut export_server, &python, &script.0, &export_log.0,
-                "generate", Some("export"), Some("stl"), None, Some(&export_output), None),
+                "generate", Some("export"), Some("stl"), None, Some(&export_output), None, None, None),
             cancel,
         );
         assert!(matches!(preview, Err(AppError::Cancelled)));
@@ -654,7 +718,7 @@ for line in sys.stdin:
         let next = scheduler.register(None, 0);
         next.acquire().await.unwrap();
         assert!(run_server_request(&mut preview_server, &python, &script.0, &preview_log.0,
-            "ping", None, None, None, None, Some(&next)).await.unwrap().ok);
+            "ping", None, None, None, None, None, None, Some(&next)).await.unwrap().ok);
         for server in [&mut preview_server, &mut export_server] {
             if let Some(mut server) = server.take() { server.child.kill().await.unwrap(); }
         }

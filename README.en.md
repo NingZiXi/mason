@@ -45,8 +45,9 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 ### Stencil Jig Mode
 - Four-part assembly: PCB tray at the bottom, followed by the B-side base, metal stencil, and A-side cover; four integral tray posts align the clamped assembly as it drops onto the tray
 - Screws are placed only around the A/B frame perimeter. The four corners are alignment posts, not screws; perimeter screw spacing and M2.5/M3/M3.5/M4/M5 specs are configurable
-- Jig size auto-calculated from stencil size (20mm steps); base and cover reusable for same-size PCBs
+- Jig size auto-calculated from stencil size (5mm steps); base and cover reusable for same-size PCBs
 - Full irregular PCB outline reproduction with adjustable pocket clearance
+- Double-sided paste printing: choose the print side, estimate relief areas from underside pads with an adjustable allowance, or draw rectangles, circles, and polygons. Generated areas are appended, preserve manual work, and can be undone. Check actual component outlines and set depth or through cuts individually or in batches. Merge selected areas with matching cut modes and depths into one enclosing rectangle, including the space between them; the tray retains bare-board support and thickens as needed.
 
 ### PCB Stencil Mode
 - All-in-one stencil: PCB outer frame + top PCB pocket (depth = PCB thickness) + thin stencil layer at pocket bottom

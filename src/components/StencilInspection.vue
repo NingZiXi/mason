@@ -35,7 +35,7 @@ const request = computed(() => {
   const part = `stencil_${props.side}`;
   return { key: scadPartHash(params, part), part, params };
 });
-const { data: latest, loading, error, retry } = useStencilInspection(enabled, request,
+const { data: latest, resolvedKey, loading, error, retry } = useStencilInspection(enabled, request,
   (snapshot, signal) => tasks.run<StencilInspection>('inspect_stencil', { params: snapshot.params, part: snapshot.part }, 'preview', signal));
 // Keep the same board visible during a recalculation; actions use only a fresh
 // engine result. A board/side change clears this snapshot synchronously.
@@ -89,8 +89,13 @@ const interaction = createInspectionInteraction({
 });
 let geometryKey = '';
 let displayedRequestKey = '';
-watch(latest, value => {
-  if (!value) return;
+// Identical SR boards and reimported files can replace all geometry references
+// without changing the engine key. Reaccept that cached result after the sync
+// context reset below, while rejecting results for a different request.
+watch([latest, resolvedKey, () => props.side,
+  () => props.side === 'top' ? store.config.stencilPadsTop : store.config.stencilPadsBottom,
+  () => store.config.pcbOutlinePoints], ([value]) => {
+  if (!value || resolvedKey.value !== request.value?.key) return;
   const key = `${value.side}:${JSON.stringify(value.outline)}`;
   const updated = !!data.value && key === geometryKey && displayedRequestKey !== request.value?.key;
   data.value = value;

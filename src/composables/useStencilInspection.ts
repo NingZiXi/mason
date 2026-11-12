@@ -11,6 +11,7 @@ export function useStencilInspection<P>(
   fetch: (request: InspectionRequest<P>, signal: AbortSignal) => Promise<StencilInspection>,
 ) {
   const data = shallowRef<StencilInspection | null>(null);
+  const resolvedKey = ref('');
   const loading = ref(false);
   const error = ref('');
   const cache = new Map<string, StencilInspection>();
@@ -32,6 +33,7 @@ export function useStencilInspection<P>(
       cache.delete(snapshot.key); cache.set(snapshot.key, result);
       while (cache.size > 4) cache.delete(cache.keys().next().value!);
       data.value = result;
+      resolvedKey.value = snapshot.key;
     } catch (e) {
       if (token === revision && !signal.aborted && !isGenerationCancelled(e)) error.value = String(e);
     } finally {
@@ -41,7 +43,7 @@ export function useStencilInspection<P>(
 
   function invalidate() {
     revision++; controller?.abort(); controller = null;
-    clearTimeout(timer); data.value = null; error.value = ''; loading.value = false;
+    clearTimeout(timer); data.value = null; resolvedKey.value = ''; error.value = ''; loading.value = false;
   }
   watch([active, () => request.value?.key], () => {
     invalidate();
@@ -51,5 +53,5 @@ export function useStencilInspection<P>(
     }
   }, { immediate: true });
   onScopeDispose(() => { invalidate(); cache.clear(); });
-  return { data, loading, error, retry: load };
+  return { data, resolvedKey, loading, error, retry: load };
 }

@@ -61,6 +61,12 @@ describe('clamp contact plan', () => {
     expect(JSON.stringify(config)).toBe(before);
   });
 
+  it('keeps explicit zero-radius platter and window corners square', () => {
+    const plan = clampPlan({ ...DEFAULT, platterCornerRadius: 0 });
+    expect(plan.platter.rx).toBe(0);
+    expect(plan.window.rx).toBe(0);
+  });
+
   it('preserves the actual PCB outline and internal holes as even-odd subpaths', () => {
     const outline: [number, number][] = [[-3, -2], [3, -2], [2, 3], [-3, 3]];
     const hole: [number, number][] = [[-1, 0], [0, 1], [1, 0]];

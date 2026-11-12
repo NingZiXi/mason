@@ -7,11 +7,12 @@ import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import { useUiStore } from "../stores/ui";
 import { observePreviewResize } from "../lib/preview-resize";
+import { createPreviewParameterCache, watchPreviewGeometryChanges } from '../lib/preview-params';
 import { useWorkSessionStore } from "../stores/work-session";
-import { buildScadParams as createScadParams, modelParamsHash, scadPartHash } from "../lib/model-params";
 import { GenerationTasks, isGenerationCancelled } from "../lib/generation-tasks";
 import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cache";
-import { buildJigAssembly, disposeJigAssembly, recolorJigAssembly, setJigExplosion, setJigVisibility } from "../lib/jig-assembly";
+import { buildJigAssembly, disposeJigAssembly, recolorJigAssembly, setJigExplosion, setJigVisibility, setJigReliefInspection } from "../lib/jig-assembly";
+import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide } from '../lib/component-relief';
 import { getModelPalette } from "../lib/model-palette";
 import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
 import { useCompletionFeedback } from "../composables/useCompletionFeedback";
@@ -136,10 +137,19 @@ function settleCameraControls() {
 }
 
 const currentMesh = shallowRef<THREE.Mesh | null>(null);
+let currentMeshPart: PartName | null = null;
+let framedBoardOutline: typeof store.config.pcbOutlinePoints | null = null;
 const currentAssembly = shallowRef<THREE.Group | null>(null);
 const explosionPercent = ref(0);
 const showAssemblyPcb = ref(true);
 const showAssemblyStencil = ref(true);
+const inspectRelief = ref(false);
+const hasRelief = computed(() => activeReliefRegions(store.config).length > 0);
+watch(hasRelief, visible => { if (!visible) inspectRelief.value = false; });
+watch(inspectRelief, enabled => {
+  if (currentAssembly.value) setJigReliefInspection(currentAssembly.value, enabled);
+  invalidate();
+});
 watch([showAssemblyPcb, showAssemblyStencil], () => {
   if (currentAssembly.value) setJigVisibility(currentAssembly.value, showAssemblyPcb.value, showAssemblyStencil.value);
   invalidate();
@@ -159,9 +169,7 @@ let disposed = false;
 let cacheGeneration = 0;
 let pcbEnvironment: THREE.WebGLRenderTarget | null = null;
 
-const paramsHash = () => modelParamsHash(store.config);
-const buildScadParams = () => createScadParams(store.config);
-const partHash = (part: string, params = buildScadParams()) => scadPartHash(params, part);
+const { hash: paramsHash, params: buildScadParams, partHash } = createPreviewParameterCache(() => store.config);
 // A mesh remains valid while the next generation is building, even if its
 // cache entry has already been replaced. Release only after scene replacement.
 const retiredGeometry = new Set<THREE.BufferGeometry>();
@@ -298,6 +306,7 @@ function disposeMesh() {
       currentMesh.value.material.dispose();
     }
     currentMesh.value = null;
+    currentMeshPart = null;
     retiredGeometry.forEach(geometry => geometry.dispose());
     retiredGeometry.clear();
     invalidate();
@@ -309,6 +318,10 @@ let renderSeq = 0;
 
 async function renderCurrent(force = false): Promise<boolean> {
   if (disposed || inspectionOpen.value) return false;
+  // A tab switch or return to 3D renders immediately. Consume an older
+  // parameter debounce so it cannot cancel and restart this same request.
+  if (renderTimer !== null) window.clearTimeout(renderTimer);
+  renderTimer = null;
   cancelPreviewTasks(["preview"]);
   if (!scene.value || !store.pythonDetected) {
     if (!store.pythonDetected) {
@@ -334,7 +347,13 @@ async function renderCurrent(force = false): Promise<boolean> {
   const cached = partName === "assembly" ? undefined : stlCache.value[partName];
   const hash = paramsHash();
   if (!force && cached && cached.paramsHash === partHash(partName)) {
-    applyStlToMesh(getOrParseGeometry(partName, cached.bytes, cached.paramsHash));
+    const geometry = getOrParseGeometry(partName, cached.bytes, cached.paramsHash);
+    // Parameters for another part can change while this mesh stays valid.
+    // Keep its material, topology and measurements until its own geometry changes.
+    if (currentMeshPart !== partName || currentMesh.value?.geometry !== geometry || currentAssembly.value
+      || framedBoardOutline !== store.config.pcbOutlinePoints) {
+      applyStlToMesh(geometry);
+    }
     // 接管 loading:本次渲染已同步完成,而在途的旧请求(seq 已过期)
     // 的 finally 不会清 loading —— 不接管会永久转圈
     loading.value = false;
@@ -420,6 +439,30 @@ function ensurePart(part: PartName, generation: number, params: ReturnType<typeo
   return request;
 }
 
+function framePreviewObject(object: THREE.Object3D, resetView = false) {
+  const cam = camera.value;
+  const ctrl = controls.value;
+  if (!cam || !ctrl) return;
+  const box = new THREE.Box3().setFromObject(object);
+  const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
+  if (!Number.isFinite(radius) || radius <= 0) return;
+  cancelCameraMotion();
+  settleCameraControls();
+  const direction = resetView ? new THREE.Vector3(120, 80, 150) : cam.position.clone().sub(ctrl.target);
+  if (direction.lengthSq() < Number.EPSILON) direction.set(120, 80, 150);
+  const center = box.getCenter(new THREE.Vector3());
+  const halfFov = Math.atan(Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 1));
+  const distance = radius / Math.sin(halfFov) * 1.12;
+  ctrl.target.copy(center);
+  cam.position.copy(center).addScaledVector(direction.normalize(), distance);
+  // Narrow windows can need a distant camera even for a supported board size.
+  cam.far = Math.max(5000, distance + radius * 2);
+  cam.updateProjectionMatrix();
+  if (resetView) selectedView.value = 'iso';
+  ctrl.update();
+  framedBoardOutline = store.config.pcbOutlinePoints;
+}
+
 function applyAssembly() {
   if (!pcbEnvironment && renderer.value) {
     const room = new RoomEnvironment();
@@ -432,30 +475,23 @@ function applyAssembly() {
     insert: getOrParseGeometry("insert", stlCache.value.insert.bytes, stlCache.value.insert.paramsHash),
     base: getOrParseGeometry("base", stlCache.value.base.bytes, stlCache.value.base.paramsHash),
     cover: getOrParseGeometry("cover", stlCache.value.cover.bytes, stlCache.value.cover.paramsHash),
-  }, { ...store.config, screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture, palette: modelPalette.value });
-  const entering = !currentAssembly.value;
+  }, { ...store.config, insertHeight: effectiveInsertHeight(store.config),
+    jigPrintSide: store.config.componentReliefEnabled ? effectiveJigPrintSide(store.config) : undefined,
+    screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture, palette: modelPalette.value });
+  const entering = !currentAssembly.value || framedBoardOutline !== store.config.pcbOutlinePoints;
   setMeasureMode(false);
   disposeMesh();
   scene.value?.add(group);
   currentAssembly.value = group;
   setJigVisibility(group, showAssemblyPcb.value, showAssemblyStencil.value);
+  setJigReliefInspection(group, inspectRelief.value);
   displayedExplosion = explosionPercent.value / 100;
   explosionFrameTime = null;
   if (entering && camera.value && controls.value) {
-    cancelCameraMotion();
-    settleCameraControls();
-    selectedView.value = "iso";
     // Frame the full travel once, so dragging never moves the camera or clips
     // the raised screws. Keep the user's orbit/zoom on parameter refreshes.
     setJigExplosion(group, 1);
-    const box = new THREE.Box3().setFromObject(group);
-    const center = box.getCenter(new THREE.Vector3());
-    const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
-    const cam = camera.value;
-    const halfFov = Math.atan(Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 1));
-    controls.value.target.copy(center);
-    cam.position.copy(center).addScaledVector(new THREE.Vector3(120, 80, 150).normalize(), radius / Math.sin(halfFov) * 1.12);
-    controls.value.update();
+    framePreviewObject(group, true);
   }
   setJigExplosion(group, displayedExplosion);
   invalidate();
@@ -463,7 +499,8 @@ function applyAssembly() {
 
 // 把 geometry 应用到 mesh(独立函数,缓存命中时直接用)
 function applyStlToMesh(geometry: THREE.BufferGeometry) {
-
+  const entering = !currentMesh.value || currentMeshPart !== activePart.value
+    || framedBoardOutline !== store.config.pcbOutlinePoints;
   // Single parts, assembly materials, and their legends share one palette.
   const palette = modelPalette.value;
   const color = activePart.value === 'assembly' ? palette.assembly : palette.parts[activePart.value];
@@ -486,6 +523,8 @@ function applyStlToMesh(geometry: THREE.BufferGeometry) {
   disposeMesh();
   if (scene.value) scene.value.add(mesh);
   currentMesh.value = mesh;
+  currentMeshPart = activePart.value === 'assembly' ? null : activePart.value;
+  if (entering) framePreviewObject(mesh);
   resetTopology(); // 新几何 → 拓扑缓存与测量状态作废
   invalidate();
 }
@@ -967,6 +1006,8 @@ function disposeMeasureMats() {
 }
 
 function clearMeasure() {
+  cancelHoverFrame();
+  pointerDownAt = null;
   disposeMeasureGroup();
   disposeMeasureMats();
   selA.value = null;
@@ -1343,6 +1384,7 @@ function pickFeature(ev: PointerEvent): MeasureFeature | null {
   const hit = hits[0];
   const face = hit.face;
   if (!face) return null;
+  const screens = getFeatureScreens(T, cam, rect.width, rect.height);
 
   const toScreen = (v: THREE.Vector3) => {
     const p = v.clone().project(cam);
@@ -1351,37 +1393,51 @@ function pickFeature(ev: PointerEvent): MeasureFeature | null {
 
   // 1) 顶点:命中三角形的 3 个顶点(合并索引)
   const triIdx = [face.a, face.b, face.c].map((i) => T.triVert[i]);
-  let bestVert: { vi: number; d: number } | null = null;
+  const vertices: Array<{ vi: number; d: number }> = [];
   for (const vi of triIdx) {
     const sp = toScreen(T.verts[vi]);
     const d = Math.hypot(sp.x - localX, sp.y - localY);
-    if (d <= 12 && (!bestVert || d < bestVert.d)) bestVert = { vi, d };
+    if (d <= 12) vertices.push({ vi, d });
   }
-  if (bestVert) {
-    return { kind: "point", id: `v${bestVert.vi}`, pos: T.verts[bestVert.vi].clone() };
+  for (const vertex of vertices.sort((a, b) => a.d - b.d)) {
+    if (isMeasurePointVisible(T.verts[vertex.vi], mesh, cam, screens.visibility)) {
+      return { kind: "point", id: `v${vertex.vi}`, pos: T.verts[vertex.vi].clone() };
+    }
   }
 
   // 2) 边与圆:遍历特征库,屏幕空间最近者胜。
   //    投影结果按"相机+视口签名"缓存:鼠标扫过而相机静止时(最常见的悬停场景)
   //    跳过全部特征点的重复 project() 调用,只做距离比较
-  const screens = getFeatureScreens(T, cam, rect.width, rect.height);
-  let best: { f: MeasureFeature; d: number } | null = null;
-  const consider = (f: MeasureFeature, dist: number) => {
-    if (dist <= 10 && (!best || dist < best.d)) best = { f, d: dist };
+  const candidates = new Map<string, { f: MeasureFeature; d: number; point: THREE.Vector3 }>();
+  const consider = (f: MeasureFeature, dist: number, point: () => THREE.Vector3) => {
+    if (dist > 10) return;
+    const previous = candidates.get(f.id);
+    if (!previous || dist < previous.d) candidates.set(f.id, { f, d: dist, point: point() });
   };
   T.circleFeatures.forEach((f, fi) => {
-    for (const sp of screens.circles[fi]) {
-      consider(f, Math.hypot(sp.x - localX, sp.y - localY));
-    }
+    screens.circles[fi].forEach((sp, i) => {
+      consider(f, Math.hypot(sp.x - localX, sp.y - localY), () => f.circlePts![i]);
+    });
   });
   T.edgeFeatures.forEach((f, fi) => {
     const pts = f.edgePts!;
     const sps = screens.edges[fi];
     for (let i = 0; i + 1 < pts.length; i++) {
-      consider(f, screenSegClosest(sps[i].x, sps[i].y, sps[i + 1].x, sps[i + 1].y, localX, localY).dist);
+      const closest = screenSegClosest(sps[i].x, sps[i].y, sps[i + 1].x, sps[i + 1].y, localX, localY);
+      consider(f, closest.dist, () => {
+        // A screen-space fraction is not a world-space fraction in perspective.
+        const a = sps[i].depth, b = sps[i + 1].depth;
+        const denominator = (1 - closest.t) * b + closest.t * a;
+        const fraction = denominator > 0 ? closest.t * a / denominator : closest.t;
+        return pts[i].clone().lerp(pts[i + 1], fraction);
+      });
     }
   });
-  if (best) return (best as { f: MeasureFeature; d: number }).f;
+  // Back-side pockets can project closer than the visible face's edges. Check
+  // only nearby candidates, and continue when an earlier candidate is hidden.
+  for (const candidate of [...candidates.values()].sort((a, b) => a.d - b.d)) {
+    if (isMeasurePointVisible(candidate.point, mesh, cam, screens.visibility)) return candidate.f;
+  }
 
   // 3) 平面:命中三角形所在的共面簇
   const tri = Math.floor(face.a / 3);
@@ -1391,8 +1447,9 @@ function pickFeature(ev: PointerEvent): MeasureFeature | null {
 // 特征点屏幕坐标缓存:相机/视口不变时复用(鼠标悬停高频调用,
 // 相机每帧变化时退化为逐次重算,与无缓存等价)
 interface FeatureScreens {
-  edges: Array<Array<{ x: number; y: number }>>;
-  circles: Array<Array<{ x: number; y: number }>>;
+  edges: Array<Array<{ x: number; y: number; depth: number }>>;
+  circles: Array<Array<{ x: number; y: number; depth: number }>>;
+  visibility: Map<string, boolean>;
 }
 let screenCache: { sig: string; data: FeatureScreens } | null = null;
 
@@ -1406,18 +1463,56 @@ function getFeatureScreens(
   w: number,
   h: number,
 ): FeatureScreens {
-  const sig = `${cam.position.x},${cam.position.y},${cam.position.z}|${cam.quaternion.x},${cam.quaternion.y},${cam.quaternion.z},${cam.quaternion.w}|${cam.zoom}|${w}x${h}`;
+  const sig = `${cam.position.x},${cam.position.y},${cam.position.z}|${cam.quaternion.x},${cam.quaternion.y},${cam.quaternion.z},${cam.quaternion.w}|${cam.projectionMatrix.elements.join(',')}|${w}x${h}`;
   if (screenCache && screenCache.sig === sig) return screenCache.data;
   const project = (v: THREE.Vector3) => {
     const p = v.clone().project(cam);
-    return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h };
+    const depth = -v.clone().applyMatrix4(cam.matrixWorldInverse).z;
+    return { x: (p.x * 0.5 + 0.5) * w, y: (-p.y * 0.5 + 0.5) * h, depth };
   };
   const data: FeatureScreens = {
     edges: T.edgeFeatures.map((f) => f.edgePts!.map(project)),
     circles: T.circleFeatures.map((f) => f.circlePts!.map(project)),
+    visibility: new Map(),
   };
   screenCache = { sig, data };
   return data;
+}
+
+function isMeasurePointVisible(
+  point: THREE.Vector3,
+  mesh: THREE.Mesh,
+  cam: THREE.PerspectiveCamera,
+  cache: Map<string, boolean>,
+): boolean {
+  // Topology already merges vertices at 1 micrometre; the finer key also lets
+  // shared edges reuse the check without growing the cache during long drags.
+  const key = `${Math.round(point.x * 1e6)},${Math.round(point.y * 1e6)},${Math.round(point.z * 1e6)}`;
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const projected = point.clone().project(cam);
+  let visible = projected.z >= -1 && projected.z <= 1;
+  if (visible) {
+    ndcPoint.set(projected.x, projected.y);
+    raycaster.setFromCamera(ndcPoint, cam);
+    const distance = raycaster.ray.origin.distanceTo(point);
+    const depth = -point.clone().applyMatrix4(cam.matrixWorldInverse).z;
+    const cosine = depth / distance;
+    const near = raycaster.near, far = raycaster.far;
+    try {
+      // Raycaster distances are radial; camera clipping planes use view depth.
+      // Ignore clipped surfaces and stop before the feature's own boundary.
+      raycaster.near = cam.near / cosine;
+      raycaster.far = Math.min(cam.far / cosine, distance - 0.002);
+      visible = raycaster.far < raycaster.near || raycaster.intersectObject(mesh, false).length === 0;
+    } finally {
+      raycaster.near = near;
+      raycaster.far = far;
+    }
+  }
+  if (cache.size >= 256) cache.delete(cache.keys().next().value!);
+  cache.set(key, visible);
+  return visible;
 }
 
 // hover 状态
@@ -1429,18 +1524,28 @@ function updateHover(ev: PointerEvent) {
   rebuildMeasureVisuals();
 }
 
-// mousemove 用 rAF 合并:每帧最多一次 raycast
+// mousemove 用 rAF 合并:每帧最多一次特征拾取
 let hoverPending: PointerEvent | null = null;
 let hoverRafId: number | null = null;
 
+function cancelHoverFrame() {
+  if (hoverRafId !== null) cancelAnimationFrame(hoverRafId);
+  hoverRafId = null;
+  hoverPending = null;
+}
+
+function clearMeasureHover() {
+  cancelHoverFrame();
+  if (!hoverFeature) return;
+  hoverFeature = null;
+  rebuildMeasureVisuals();
+}
+
 function onCanvasPointerMove(e: PointerEvent) {
-  if (!measureMode.value) return;
-  // 拖拽旋转中不拾取(清掉 hover,避免高亮残留)
-  if (pointerDownAt && Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5) {
-    if (hoverFeature) {
-      hoverFeature = null;
-      rebuildMeasureVisuals();
-    }
+  if (!measureMode.value || disposed || inspectionOpen.value) return;
+  // Pressed pointers belong to orbit/pan, never to deferred hover picking.
+  if (e.buttons !== 0 || pointerDownAt) {
+    clearMeasureHover();
     return;
   }
   hoverPending = e;
@@ -1449,7 +1554,7 @@ function onCanvasPointerMove(e: PointerEvent) {
       hoverRafId = null;
       const ev = hoverPending;
       hoverPending = null;
-      if (ev) updateHover(ev);
+      if (ev && measureMode.value && !disposed && !inspectionOpen.value && !pointerDownAt) updateHover(ev);
     });
   }
 }
@@ -1458,7 +1563,13 @@ function onCanvasPointerMove(e: PointerEvent) {
 let pointerDownAt: { x: number; y: number } | null = null;
 
 function onCanvasPointerDown(e: PointerEvent) {
+  clearMeasureHover();
   pointerDownAt = { x: e.clientX, y: e.clientY };
+}
+
+function onCanvasPointerLeave() {
+  pointerDownAt = null;
+  clearMeasureHover();
 }
 
 function onCanvasPointerUp(e: PointerEvent) {
@@ -1499,28 +1610,9 @@ watch(activePart, () => {
   renderCurrent();
 });
 
-// 参数变化 → 防抖重渲染 + 防抖后台预热
-// 只跟踪 hash 相关的标量字段与数组引用(pads/outline 都是导入时整体替换,引用变化即内容变化),
-// 避免 deep watch 每次改动都遍历数千焊盘造成拖动掉帧
-const hashSource = computed(() => {
-  const c = store.config;
-  return [
-    appMode.value,
-    c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance,
-    c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY,
-    c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight, c.nutPocketClearance,
-    c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight,
-    c.platterCornerRadius, c.ejectSlotWidth, c.cornerScrewD, c.postClearance,
-    c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap,
-    c.pryNotchSides, c.pryNotchScale,
-    c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius,
-    c.stencilFrameShape, c.pocketClearance,
-    c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
-    c.stencilFilterTestPoints, c.stencilTestPointMaxDia, c.stencilTestPointIsolation,
-    c.stencilGrid, c.stencilGridSize, c.stencilGridBar,
-    c.stencilPadsTop, c.stencilPadsBottom,
-  ];
-});
+// Advance only when effective geometry changes. Unused defaults and remembered
+// settings must not cancel generation or replace a mesh with the same geometry.
+const geometryRevision = ref(0);
 
 // 参数稳定 1.2s 后后台预热其它部件,之后切 tab 直接命中缓存
 let preloadTimer: number | null = null;
@@ -1534,7 +1626,8 @@ function schedulePreload(delay = 1200) {
   }, delay);
 }
 
-watch(hashSource, () => {
+watchPreviewGeometryChanges(() => store.config, () => {
+  ++geometryRevision.value;
   resetRefresh();
   resetExport();
   ++renderSeq; // Invalidate immediately, including during the render debounce.
@@ -1620,7 +1713,7 @@ const allParts = computed<PartName[]>(() =>
 );
 
 async function preloadAllParts() {
-  // 未导入数据不预热(不浪费 Python 调用,导入后 hashSource 变化会自动触发)
+  // 未导入数据不预热；导入后的有效几何变化会自动触发。
   if (disposed || inspectionOpen.value || !store.pythonDetected || !hasData.value) return;
   const hash = paramsHash();
   const generation = cacheGeneration;
@@ -1713,7 +1806,7 @@ function scheduleMetrics() {
   }, 300);
 }
 
-watch([hashSource, () => store.pythonDetected], () => {
+watch([geometryRevision, () => store.pythonDetected], () => {
   printMetrics.invalidate();
   scheduleMetrics();
 });
@@ -1732,12 +1825,12 @@ watch(inspectionOpen, visible => {
   loading.value = false;
   if (visible) {
     cancelCameraMotion();
+    onCanvasPointerLeave();
     if (renderTimer !== null) window.clearTimeout(renderTimer);
     if (preloadTimer !== null) window.clearTimeout(preloadTimer);
     if (metricsTimer !== null) window.clearTimeout(metricsTimer);
     renderTimer = preloadTimer = metricsTimer = null;
-    cancelPreviewTasks(["preload"], true);
-    cancelPreviewTasks(["preview", "metrics"]);
+    cancelPreviewTasks(["preview", "preload", "metrics"], true);
     printMetrics.invalidate();
   } else {
     onResize();
@@ -1943,6 +2036,14 @@ const exportPartLabelKeys: Record<PartName, string> = {
 // 导出 STL / STEP:先核对外形与钢网尺寸,再选目录并完整生成文件。
 async function exportAll(fmt: "stl" | "step") {
   if (exporting.value || disposed || store.gerberImporting || !hasData.value) return;
+  const reliefReady = () => {
+    if (appMode.value === 'jig' && store.config.componentReliefEnabled && !hasRelief.value) {
+      ElMessage.warning(t('relief.regionsRequired'));
+      return false;
+    }
+    return true;
+  };
+  if (!reliefReady()) return;
   if (!store.pythonDetected) {
     ElMessage.error(t("preview.noPythonExport"));
     return;
@@ -1966,6 +2067,7 @@ async function exportAll(fmt: "stl" | "step") {
     if (!await ensureStencilSizeReviewed()) return;
 
     if (disposed) return;
+    if (!reliefReady()) return;
     const readiness = exportReadiness(store, hasData.value);
     if (readiness !== 'ready') {
       if (readiness === 'outline') ElMessage.warning(t('preview.reviewOutlineChanged'));
@@ -2172,6 +2274,8 @@ watch(partTabs, (tabs) => {
         @pointerdown="onCanvasPointerDown"
         @pointerup="onCanvasPointerUp"
         @pointermove="onCanvasPointerMove"
+        @pointerleave="onCanvasPointerLeave"
+        @pointercancel="onCanvasPointerLeave"
       />
       <!-- 测量标签:直线/水平/垂直三色数值,定位由各线 3D 中点投影得到 -->
       <div v-if="measureTags.length" class="measure-layer">
@@ -2241,6 +2345,12 @@ watch(partTabs, (tabs) => {
               <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">
                 <path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" /><circle cx="10" cy="10" r="2" /><path v-if="!showAssemblyStencil" d="m3 3 14 14" />
               </svg>
+            </button>
+            <button v-if="hasRelief" role="switch" :aria-checked="inspectRelief" class="assembly-layer-toggle"
+              :class="{ 'is-on': inspectRelief }" :title="t('relief.inspectHint')" @click="inspectRelief = !inspectRelief">
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="m10 2 7 4-7 4-7-4 7-4ZM3 10l7 4 7-4M3 14l7 4 7-4" /></svg>
+              <span>{{ t('relief.inspect3d') }}</span>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path v-if="inspectRelief" d="m3 8 3 3 7-7" /></svg>
             </button>
           </div>
         </div>

@@ -10,7 +10,7 @@
 
 import type { GerberBoardOutline, GerberOutline } from "./parser";
 import type { PadPolygon } from "./pads";
-import { pointInPolygon } from "./geometry";
+import { panelPadFilter } from "./panel-pad-overlap";
 
 export type PanelMode = "panel" | "single" | "board";
 
@@ -110,13 +110,9 @@ export function makePanelVariant(
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
 
-  // Check the actual polygon as well as the bounds: interlocking boards may
-  // share a bounding box without sharing any PCB material.
-  const inside = (p: PadPolygon) =>
-    p.cx >= minX - 1e-6 && p.cx <= maxX + 1e-6 &&
-    p.cy >= minY - 1e-6 && p.cy <= maxY + 1e-6 &&
-    pointInPolygon(p.cx, p.cy, outline.points) &&
-    !outline.holes.some((hole) => pointInPolygon(p.cx, p.cy, hole));
+  // Region centres and offset macro origins can lie outside their actual shape.
+  // Assign by positive-area material overlap, never by that diagnostic centre.
+  const inside = panelPadFilter(outline.points, outline.holes);
 
   return {
     ...identity,

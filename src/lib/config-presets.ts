@@ -9,9 +9,10 @@ export const PRESET_KEYS = [
   "stencilTestPointMaxDia", "stencilTestPointIsolation", "stencilGrid",
   "stencilGridSize", "stencilGridBar", "screwSpacing", "screwSpec",
   "baseHeight", "topCoverHeight", "pcbPocketClearance", "insertHeight",
-  "platterCornerRadius", "windowGap", "ejectSlotWidth", "pryNotchSides",
+  "platterCornerRadius", "windowGap", "ejectSlotWidth", "ejectHoleDiameter", "pryNotchSides",
   "pryNotchScale", "cornerScrewD", "postClearance", "periScrewD",
   "outerCornerRadius", "useHexNut", "nutAcrossFlats", "nutHeight", "nutPocketClearance",
+  "componentReliefDepth",
 ] as const satisfies readonly (keyof AppConfig)[];
 
 export type PresetSettings = Pick<AppConfig, typeof PRESET_KEYS[number]>;
@@ -19,8 +20,15 @@ export interface UserPreset { id: string; name: string; settings: PresetSettings
 export const DEFAULT_PRESET_ID = "default";
 export const PRESETS_STORAGE_KEY = "psj_config_presets_v1";
 
+/** Notches are a set of enabled edges; click order does not change the model. */
+export function normalizePryNotchSides(sides: AppConfig['pryNotchSides']): AppConfig['pryNotchSides'] {
+  return (['up', 'down', 'left', 'right'] as const).filter(side => sides.includes(side));
+}
+
 export function pickPresetSettings(config: AppConfig): PresetSettings {
-  return JSON.parse(JSON.stringify(Object.fromEntries(PRESET_KEYS.map((key) => [key, config[key]]))));
+  const settings: PresetSettings = JSON.parse(JSON.stringify(Object.fromEntries(PRESET_KEYS.map((key) => [key, config[key]]))));
+  settings.pryNotchSides = normalizePryNotchSides(settings.pryNotchSides);
+  return settings;
 }
 
 const ranges: Partial<Record<keyof PresetSettings, [number, number]>> = {
@@ -31,9 +39,10 @@ const ranges: Partial<Record<keyof PresetSettings, [number, number]>> = {
   stencilGridSize: [1, 10], stencilGridBar: [0.3, 2], screwSpacing: [0, 500],
   baseHeight: [0.1, 100], topCoverHeight: [0.1, 100], pcbPocketClearance: [0, 2],
   insertHeight: [4, 20], platterCornerRadius: [0, 10], windowGap: [0, 5],
-  ejectSlotWidth: [0, 40], pryNotchScale: [0.5, 1.5], cornerScrewD: [3, 15],
+  ejectSlotWidth: [0, 40], ejectHoleDiameter: [0, 40], pryNotchScale: [0.5, 1.5], cornerScrewD: [3, 15],
   postClearance: [0, 1], periScrewD: [1.5, 6], outerCornerRadius: [0, 10],
   nutAcrossFlats: [0.1, 100], nutHeight: [0.1, 100], nutPocketClearance: [0, 1],
+  componentReliefDepth: [0.5, 20],
 };
 
 /** Validate before mutating state; fill fields added in later app versions. */
@@ -48,7 +57,8 @@ export function readPresetSettings(raw: unknown, defaults: AppConfig): PresetSet
     let valid = false;
     if (typeof fallback === "number") {
       const [min, max] = ranges[key]!;
-      valid = typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+      valid = typeof value === "number" && Number.isFinite(value) && value >= min && value <= max
+        && (key !== "ejectHoleDiameter" || value === 0 || value >= 4);
     } else if (typeof fallback === "boolean") valid = typeof value === "boolean";
     else if (key === "screwSpec") valid = ["M2.5", "M3", "M3.5", "M4", "M5"].includes(String(value));
     else if (key === "stencilFrameShape") valid = ["outline", "rect"].includes(String(value));
@@ -56,6 +66,7 @@ export function readPresetSettings(raw: unknown, defaults: AppConfig): PresetSet
     if (!valid) throw new Error("presets.invalidData");
     Object.assign(result, { [key]: value });
   }
+  result.pryNotchSides = normalizePryNotchSides(result.pryNotchSides);
   return JSON.parse(JSON.stringify(result));
 }
 

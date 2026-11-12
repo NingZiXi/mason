@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useConfigStore, windowHalf, windowHalfXY, SCREW_SPECS } from "../stores/config";
+import { useConfigStore, positioningPostLayoutFor, windowHalfXY, SCREW_SPECS } from "../stores/config";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
 import AssemblyHardware from "./AssemblyHardware.vue";
@@ -33,14 +33,12 @@ const screws = computed(() =>
   store.screwPositions.map(([x, y]) => ({ ...toSvg(x, y), r: 4 }))
 );
 
-const alignmentPosts = computed(() => {
-  const win = windowHalf(c.value);
-  const s = Math.max(c.value.jigSize / 2 - 7, win + 3.5);
-  return [[s, s], [s, -s], [-s, s], [-s, -s]].map(([x, y]) => ({
+const alignmentPosts = computed(() =>
+  positioningPostLayoutFor(c.value).positions.map(([x, y]) => ({
     ...toSvg(x, y),
     r: 6.5,
-  }));
-});
+  }))
+);
 
 // Convert the engine parameter to the actual positioning-post OD.
 const cornerPostDiameter = computed({

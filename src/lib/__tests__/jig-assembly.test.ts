@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import * as THREE from "three";
-import { buildJigAssembly, disposeJigAssembly, setJigExplosion, setJigVisibility, ASSEMBLY_STENCIL_THICKNESS, type AssemblyOptions } from "../jig-assembly";
+import * as padTextures from '../gerber-pad-texture';
+import type { PadPolygon } from '../gerber/pads';
+import { buildJigAssembly, disposeJigAssembly, setJigExplosion, setJigVisibility, setJigReliefInspection, ASSEMBLY_STENCIL_THICKNESS, type AssemblyOptions } from "../jig-assembly";
 
 const options: AssemblyOptions = {
   insertHeight: 8, baseHeight: 4, topCoverHeight: 4, screwSpec: "M3",
@@ -14,6 +16,47 @@ function fixture() {
 const bounds = (group: THREE.Group, name: string) => new THREE.Box3().setFromObject(group.getObjectByName(name)!);
 
 describe("jig assembly", () => {
+  it('uses the selected printing face without substituting the opposite face, and mirrors bottom apertures', () => {
+    const bottomPads: PadPolygon[] = [{ type: 'rect', cx: 3, cy: 7, polarity: 'D',
+      parts: [{ polarity: 'D', points: [[2, 6], [4, 6], [4, 8], [2, 8]] }] }];
+    const texture = vi.spyOn(padTextures, 'createStencilTexture').mockReturnValue(null);
+    try {
+      const top = buildJigAssembly(fixture(), { ...options, jigPrintSide: 'top',
+        stencilSizeX: 100, stencilSizeY: 100, stencilPadsTop: [], stencilPadsBottom: bottomPads });
+      expect(texture).toHaveBeenLastCalledWith(100, 100, []);
+      disposeJigAssembly(top);
+      const bottom = buildJigAssembly(fixture(), { ...options, jigPrintSide: 'bottom',
+        stencilSizeX: 100, stencilSizeY: 100, stencilPadsBottom: bottomPads });
+      const maskPads = texture.mock.calls[texture.mock.calls.length - 1][2];
+      expect(maskPads[0].cy).toBe(-7);
+      expect(maskPads[0].parts[0].points[0]).toEqual([2, -6]);
+      expect(bottomPads[0].cy).toBe(7);
+      disposeJigAssembly(bottom);
+    } finally { texture.mockRestore(); }
+  });
+  it('flips an asymmetric PCB for bottom printing and preserves the common printing plane', () => {
+    const group = buildJigAssembly(fixture(), { ...options, insertHeight: 12.8, jigPrintSide: 'bottom', pcbThickness: 1.6,
+      pcbOutlinePoints: [[0, 0], [20, 0], [0, 12]] });
+    const pcb = group.getObjectByName('pcb') as THREE.Mesh;
+    expect(bounds(group, 'pcb').max.y).toBeCloseTo(12.8, 5);
+    expect(bounds(group, 'pcb').min.y).toBeCloseTo(11.2, 5);
+    expect(bounds(group, 'pcb').min.z).toBeCloseTo(0, 5);
+    expect(bounds(group, 'pcb').max.z).toBeCloseTo(12, 5);
+    expect(bounds(group, 'base').max.y).toBeCloseTo(12.8, 5);
+    const ray = new THREE.Raycaster(new THREE.Vector3(2, 30, 2), new THREE.Vector3(0, -1, 0));
+    expect(ray.intersectObject(pcb).length).toBeGreaterThan(0);
+    setJigReliefInspection(group, true);
+    const baseMaterial = (group.getObjectByName('base') as THREE.Mesh).material as THREE.Material;
+    expect(baseMaterial.opacity).toBeCloseTo(.18);
+    expect(baseMaterial.depthWrite).toBe(false);
+    expect(((group.getObjectByName('insert') as THREE.Mesh).material as THREE.Material).opacity).toBe(1);
+    setJigVisibility(group, false, false);
+    setJigReliefInspection(group, false);
+    expect(pcb.visible).toBe(false);
+    expect(baseMaterial.opacity).toBe(1);
+    expect(baseMaterial.depthWrite).toBe(true);
+    disposeJigAssembly(group);
+  });
   it("explodes vertically without moving the tray or misaligning hardware and restores exactly", () => {
     const group = buildJigAssembly(fixture(), options);
     const originals = group.children.map(object => object.position.clone());

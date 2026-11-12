@@ -13,6 +13,8 @@ import { getPanelBoards, resolvePanelSelection } from "../lib/gerber/panel";
 import { readPresetSettings } from "../lib/config-presets";
 import { useParameterHistory } from "../composables/useParameterHistory";
 import { setPadOverrides, type ApertureOverride, type PadSide } from "../lib/pad-overrides";
+import { emptyReliefPlans, effectiveInsertHeight, materializeReliefDepths, type ComponentReliefPlans, type ComponentReliefRegion, type JigPrintSide } from '../lib/component-relief';
+import { positioningPostLayout } from '../lib/positioning-post-layout';
 
 export type AppMode = "jig" | "stencil";
 
@@ -24,6 +26,13 @@ export interface AppConfig {
   pcbSizeX: number;
   pcbSizeY: number;
   pcbThickness: number;
+
+  /** Board-specific second-side support. Plans are keyed by the face being printed. */
+  componentReliefEnabled: boolean;
+  jigPrintSide: JigPrintSide;
+  /** Default for newly drawn or automatically generated pockets (mm). */
+  componentReliefDepth: number;
+  componentReliefRegions: ComponentReliefPlans;
 
   // 钢网参数(夹具模式用:展示用;窗口由凸台推导)
   /** 钢网外缘长(X 向,mm)—— 与 stencilSizeY 一起决定矩形钢网外形 */
@@ -98,8 +107,10 @@ export interface AppConfig {
    *   上限 = min(stencilSizeX/2 - slotHalfX, stencilSizeY/2 - slotHalfY),
    *   保证凸台不小于 PCB 槽(否则 PCB 悬空) */
   stencilLip: number;
-  /** 底部圆形顶出孔开关(0 = 关闭;孔径随板尺寸自适应) */
+  /** Legacy numeric on/off setting for the bottom eject hole (0 = off). */
   ejectSlotWidth: number;
+  /** Requested bottom-hole diameter in mm; 0 preserves adaptive sizing. */
+  ejectHoleDiameter: number;
   /** 取放缺口位置:up / down / left / right 任意组合(空数组 = 关闭) */
   pryNotchSides: Array<'up' | 'down' | 'left' | 'right'>;
   /** 取放缺口大小比例(0.5~1.5,1.0=默认) */
@@ -122,7 +133,7 @@ export interface AppConfig {
   /** 六角螺母槽单侧打印装配间隙(mm);槽对边 = 螺母对边 + 2×间隙 */
   nutPocketClearance: number;
 
-  // 夹具整体尺寸 (正方形,按 20mm 步进,自动从窗口推导)
+  // 夹具整体尺寸 (正方形,按 5mm 步进,自动从窗口推导)
   jigSize: number;
 
   // Gerber 来源信息 (展示用)
@@ -148,6 +159,10 @@ export const DEFAULT: AppConfig = {
   pcbSizeX: 50,
   pcbSizeY: 50,
   pcbThickness: 1.6,
+  componentReliefEnabled: false,
+  jigPrintSide: 'top',
+  componentReliefDepth: 3,
+  componentReliefRegions: emptyReliefPlans(),
   stencilSizeX: 100,
   stencilSizeY: 100,
   stencilThickness: 0.3,
@@ -183,6 +198,7 @@ export const DEFAULT: AppConfig = {
    * 视觉上凸台有明显"托架台阶",凸台外缘 vs 钢网外缘对比一目了然。*/
   stencilLip: 15,
   ejectSlotWidth: 22,
+  ejectHoleDiameter: 0,
   pryNotchSides: ['down'],
   pryNotchScale: 1.0,
   cornerScrewD: 5,
@@ -317,6 +333,14 @@ export function windowHalf(c: AppConfig): number {
   return Math.max(hx, hy);
 }
 
+/** Same positioning-post coordinates and fit limits for sizing, warnings and SVG. */
+export function positioningPostLayoutFor(c: AppConfig) {
+  return positioningPostLayout({ jigSize: c.jigSize, windowHalf: windowHalf(c),
+    platterHalf: platterHalfFor(c), postDiameter: (c.cornerScrewD ?? 5) + 4,
+    postClearance: c.postClearance ?? DEFAULT.postClearance,
+    outerCornerRadius: c.outerCornerRadius ?? 5, platterCornerRadius: c.platterCornerRadius ?? 4.5 });
+}
+
 /**
  * 派生 platterMargin(建模派生字段):等于有效台阶宽
  *   = 两轴凸台半宽 - 对应槽半宽 的较小值
@@ -330,11 +354,11 @@ export function effectivePlatterMargin(c: AppConfig): number {
 }
 
 /**
- * 按 20mm 步进计算最小容纳尺寸
+ * 按 5mm 步进计算最小容纳尺寸
  * 输入:窗口 + 周圈孔带 + 边框(与 compute_perimeter_screw_positions 的 limit 一致)
  */
 /**
- * 自动推荐夹具边长 —— 由两个独立约束取大,20mm 步进取整:
+ * 自动推荐夹具边长 —— 由两个独立约束取大,5mm 步进取整:
  *
  *   约束 A · 窗口容纳:
  *     jig/2 ≥ win + 14
@@ -383,22 +407,10 @@ function computeJigSize(c: AppConfig): number {
   const win = windowHalf(c);
   const winFloor = 2 * win + 28;
   const stencilFloor = stencilClampFloor(c);
-  // 约束 C:4 角定位柱不撞凸台/窗口
-  const rPost = (c.cornerScrewD ?? 5) / 2 + 2;
-  const rHole = rPost + (c.postClearance ?? DEFAULT.postClearance);
-  const rOut = c.outerCornerRadius ?? 5;
-  const rCorner = c.platterCornerRadius ?? 4.5;
-  // 凸台半宽直接用 platterHalfFor:逐轴 = max(stencilHalf - lip, slotHalf),取两轴较大值
-  const platterHalf = platterHalfFor(c);
-  // s_post ≥ platter_half + r_post/√2 - r_corner·(1 - 1/√2)
-  // (凸台对角线方向最紧约束,推导见 docstring)
-  const sPlatter = platterHalf + rPost / Math.sqrt(2) - rCorner * (1 - 1 / Math.sqrt(2));
-  const sOuter = rOut + rPost + 1;
-  const postFloor = 2 * (sPlatter + sOuter);
-  // s_post ≥ win + r_hole(窗口轴向壁约束,base/cover 上的孔不能与窗口壁相交)
-  const winHoleFloor = 2 * (win + rHole + sOuter);
+  // 约束 C:同实际定位柱布局,同时保护窗口孔壁、凸台圆角与外缘。
+  const postFloor = positioningPostLayoutFor(c).minimumJigSize;
   // 5mm 步进取整:贴近结构下限,避免 20mm 步进白多出一圈边料
-  return Math.max(60, Math.ceil(Math.max(winFloor, stencilFloor, postFloor, winHoleFloor) / 5) * 5);
+  return Math.max(60, Math.ceil(Math.max(winFloor, stencilFloor, postFloor) / 5) * 5);
 }
 
 export const useConfigStore = defineStore("config", () => {
@@ -486,6 +498,7 @@ export const useConfigStore = defineStore("config", () => {
     () => [
       config.value.pcbSizeX,
       config.value.pcbSizeY,
+      config.value.pcbPocketClearance,
       config.value.stencilSizeX,
       config.value.stencilSizeY,
       config.value.stencilLip,
@@ -611,10 +624,10 @@ export const useConfigStore = defineStore("config", () => {
       });
     }
     // 插板总厚必须大于凸台高
-    if (c.insertHeight <= c.platterHeight) {
+    if (effectiveInsertHeight(c) <= c.platterHeight) {
       list.push({
         key: "config.warnings.insertLTplatter",
-        params: { i: c.insertHeight, p: c.platterHeight },
+        params: { i: effectiveInsertHeight(c), p: c.platterHeight },
       });
     }
     // 顶盖沉孔深 2mm,盖太薄会穿透
@@ -631,8 +644,8 @@ export const useConfigStore = defineStore("config", () => {
         params: { m: c.platterMargin },
       });
     }
-    // 角定位柱被窗口挤出角部(内收保护触发,距角变远)
-    if (win + 3.5 > c.jigSize / 2 - 7) {
+    // 实际孔半径与外缘/凸台约束无共同可用位置时才提醒。
+    if (!positioningPostLayoutFor(c).fits) {
       list.push({ key: "config.warnings.cornerScrewOutside" });
     }
     // —— 打印可行性(FDM 物理极限,stencil 模式专属) ——
@@ -668,6 +681,9 @@ export const useConfigStore = defineStore("config", () => {
   async function applyUserSettings(raw: unknown) {
     const settings = readPresetSettings(raw, DEFAULT);
     history.breakGroup();
+    if (settings.componentReliefDepth !== config.value.componentReliefDepth) {
+      config.value.componentReliefRegions = materializeReliefDepths(config.value.componentReliefRegions, config.value.componentReliefDepth);
+    }
     restoringParameters = true;
     try {
       Object.assign(config.value, settings);
@@ -683,12 +699,21 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   /** 把某个口径的几何写入 config(尺寸 / 板框 / 焊盘 + 钢网尺寸联动) */
-  function applyVariant(mode: PanelMode) {
+  function applyVariant(mode: PanelMode, boardIndex = config.value.panelBoardIndex, force = false) {
     const cached = gerberVariants.value;
     if (!cached) return;
     const c = config.value;
-    const selection = resolvePanelSelection(cached, mode, c.panelBoardIndex);
+    const selection = resolvePanelSelection(cached, mode, boardIndex);
     const v = selection.variant;
+
+    // Clicking the active board must preserve its edited dimensions, decisions
+    // and history. A new import always reapplies even if it reuses this geometry.
+    if (!force && c.panelMode === selection.mode && c.panelBoardIndex === selection.index
+      && c.pcbOutlinePoints === v.outlinePoints && c.pcbOutlineHoles === v.outlineHoles) return;
+
+    // Relief coordinates belong to one board and must never leak to a different
+    // import, panel scope or selected child board. Mode switches keep this plan.
+    if (c.pcbOutlinePoints !== v.outlinePoints) resetComponentRelief();
 
     c.pcbSizeX = Math.round(v.width * 100) / 100;
     c.pcbSizeY = Math.round(v.height * 100) / 100;
@@ -708,6 +733,11 @@ export const useConfigStore = defineStore("config", () => {
       c.stencilSizeY = Math.ceil((c.pcbSizeY + 20) / 10) * 10;
     }
     c.stencilLip = Math.round(0.6 * stencilLipMax(c) * 10) / 10;
+
+    // A completed import or scope switch must settle its own dimensions even
+    // while an in-flight history replay pauses the regular linkage watchers.
+    c.platterMargin = effectivePlatterMargin(c);
+    c.jigSize = computeJigSize(c);
 
     c.panelMode = selection.mode;
     c.panelBoardIndex = selection.index;
@@ -742,8 +772,7 @@ export const useConfigStore = defineStore("config", () => {
     gerberOutlineFallbackReason.value = payload.outlineFallbackReason ?? null;
     c.panelAvailable = payload.isPanel;
     c.panelGrid = payload.panelGrid ?? null;
-    c.panelBoardIndex = payload.boardIndex ?? null;
-    applyVariant(payload.mode);
+    applyVariant(payload.mode, payload.boardIndex ?? null, true);
   }
 
   /** 切换拼版口径(设置面板 / 导入弹窗共用) */
@@ -755,8 +784,7 @@ export const useConfigStore = defineStore("config", () => {
   /** 选择混合拼版中的具体子板。 */
   function setPanelBoard(index: number) {
     if (!Number.isInteger(index) || !config.value.panelAvailable || !gerberVariants.value) return;
-    config.value.panelBoardIndex = Math.max(0, Math.min(index, panelBoards.value.length - 1));
-    applyVariant("board");
+    applyVariant("board", Math.max(0, Math.min(index, panelBoards.value.length - 1)));
   }
 
   function changePadOverrides(side: PadSide, indices: readonly number[], value?: ApertureOverride) {
@@ -793,6 +821,25 @@ export const useConfigStore = defineStore("config", () => {
     config.value.panelGrid = null;
     config.value.panelMode = "panel";
     config.value.panelBoardIndex = null;
+    resetComponentRelief();
+  }
+
+  function resetComponentRelief() {
+    config.value.componentReliefEnabled = false;
+    config.value.jigPrintSide = 'top';
+    config.value.componentReliefRegions = emptyReliefPlans();
+  }
+
+  function setComponentReliefRegions(regions: ComponentReliefRegion[]) {
+    const c = config.value;
+    c.componentReliefRegions = { ...c.componentReliefRegions, [c.jigPrintSide]: regions };
+  }
+
+  function setComponentReliefDefaultDepth(depth: number | undefined) {
+    if (depth === undefined || !Number.isFinite(depth) || depth < 0.5 || depth > 20 || depth === config.value.componentReliefDepth) return;
+    const c = config.value;
+    c.componentReliefRegions = materializeReliefDepths(c.componentReliefRegions, c.componentReliefDepth);
+    c.componentReliefDepth = depth;
   }
 
   function setMode(mode: AppMode) {
@@ -822,16 +869,22 @@ export const useConfigStore = defineStore("config", () => {
    *  把用户手填的钢网尺寸覆盖成自动推荐值 */
   function reset() {
     history.breakGroup();
+    // A manufacturing-default reset must not discard board-specific editing.
+    // Resolve legacy depths before changing the default used for new regions.
+    setComponentReliefDefaultDepth(DEFAULT.componentReliefDepth);
     Object.assign(config.value, {
       screwSpacing: DEFAULT.screwSpacing,
       screwSpec: DEFAULT.screwSpec,
       baseHeight: DEFAULT.baseHeight,
       topCoverHeight: DEFAULT.topCoverHeight,
       pcbPocketClearance: DEFAULT.pcbPocketClearance,
+      windowGap: DEFAULT.windowGap,
+      postClearance: DEFAULT.postClearance,
       insertHeight: DEFAULT.insertHeight,
       platterMargin: DEFAULT.platterMargin,
       platterCornerRadius: DEFAULT.platterCornerRadius,
       ejectSlotWidth: DEFAULT.ejectSlotWidth,
+      ejectHoleDiameter: DEFAULT.ejectHoleDiameter,
       cornerScrewD: DEFAULT.cornerScrewD,
       periScrewD: DEFAULT.periScrewD,
       outerCornerRadius: DEFAULT.outerCornerRadius,
@@ -932,6 +985,8 @@ export const useConfigStore = defineStore("config", () => {
     setApertureOverride,
     setApertureOverrides,
     resetApertureOverrides,
+    setComponentReliefRegions,
+    setComponentReliefDefaultDepth,
     panelBoards,
     panelOverview,
     selectedPanelBoard,

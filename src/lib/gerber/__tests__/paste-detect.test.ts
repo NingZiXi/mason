@@ -15,6 +15,14 @@ describe("detectPasteSide", () => {
   it("KiCad 单字母前后缀 F/B_Paste", () => {
     expect(detectPasteSide("myboard-F_Paste.gbr")).toBe("top");
     expect(detectPasteSide("myboard-B_Paste.gbr")).toBe("bottom");
+    expect(detectPasteSide("F_Paste.gbr")).toBe("top");
+    expect(detectPasteSide("B_Paste.gbr")).toBe("bottom");
+  });
+
+  it("does not infer a layer side from its enclosing ZIP directory", () => {
+    expect(detectPasteSide("top-export/board-bottom-paste.gbr")).toBe("bottom");
+    expect(detectPasteSide("bottom-export/paste.gbr")).toBe("unknown");
+    expect(detectPasteSide("top-export\\B_Paste.gbr")).toBe("bottom");
   });
 
   it("文件名含 top/front → top,bottom/back → bottom", () => {
@@ -40,6 +48,14 @@ describe("detectPasteFiles", () => {
     ]);
     expect(cands).toHaveLength(2);
     expect(cands.map((c) => c.side).sort()).toEqual(["bottom", "top"]);
+  });
+
+  it('matches layer filenames instead of classifying every file in a paste-named folder as paste', () => {
+    const cands = detectPasteFiles([
+      'paste-export/board.GKO', 'paste-export/board.GTL', 'paste-export/board.GPT',
+      'paste-export/board.GPB', 'paste-export/readme.txt',
+    ]);
+    expect(cands.map(c => c.filename)).toEqual(['paste-export/board.GPT', 'paste-export/board.GPB']);
   });
 });
 

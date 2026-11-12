@@ -3,6 +3,7 @@ import type { PadPolygon } from './pads';
 type Side = 'top' | 'bottom';
 interface Table { fields: string[]; rows: unknown[][] }
 interface TestPad { x: number; y: number; width: number; height: number }
+interface ComponentPad extends TestPad { ref: string }
 
 function table(value: unknown): Table | null {
   if (!value || typeof value !== 'object') return null;
@@ -53,8 +54,26 @@ export function applyFlyingProbeRoles(
     }
   }
   const candidates = new Map<string, TestPad[]>();
+  const componentCandidates = new Map<string, ComponentPad[]>();
   const cell = .1;
   const key = (x: number, y: number, face: Side) => `${face}:${Math.floor(x / cell)}:${Math.floor(y / cell)}`;
+  // Component identity is independent of test-point classification. In particular,
+  // multi-pin SMD parts qualify here without widening the test-pad rules below.
+  for (const [ref, component] of refs) {
+    if (duplicateRefs.has(ref)) continue;
+    for (const pin of component.pins) {
+      const face = side(p(pin, 'LAYER'));
+      if (!face || face !== side(c(component.row, 'LAYER')) || p(pin, 'PIN_TYPE') !== 'SMD'
+        || number(p(pin, 'HOLE_SIZE')) !== 0 || number(p(pin, 'HOLE_LEN')) !== 0) continue;
+      const x = number(p(pin, 'PIN_X')) * scale, y = number(p(pin, 'PIN_Y')) * scale;
+      const width = number(p(pin, 'PAD_SIZEX')) * scale, height = number(p(pin, 'PAD_SIZEY')) * scale;
+      if (![x, y, width, height].every(Number.isFinite) || Math.min(width, height) <= 0) continue;
+      const bucket = key(x, y, face);
+      const entries = componentCandidates.get(bucket) ?? [];
+      entries.push({ ref, x, y, width, height });
+      componentCandidates.set(bucket, entries);
+    }
+  }
   for (const [ref, component] of refs) {
     if (duplicateRefs.has(ref) || component.pins.length !== 1) continue;
     const pin = component.pins[0], row = component.row;
@@ -79,6 +98,30 @@ export function applyFlyingProbeRoles(
   }
   for (const [pads, face] of [[top, 'top'], [bottom, 'bottom']] as const) {
     for (const pad of pads) {
+      if (!pad.componentRef && pad.polarity === 'D' && pad.parts.length === 1
+        && !['line', 'arc', 'region'].includes(pad.type)) {
+        const part = pad.parts[0];
+        if (part.polarity === 'D' && !part.holes?.length && part.points.length >= 3) {
+          let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+          for (const [x, y] of part.points) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+          const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, width = x1 - x0, height = y1 - y0;
+          if ([cx, cy, width, height].every(Number.isFinite) && Math.min(width, height) > 0) {
+            const matchedRefs = new Set<string>();
+            for (const dx of [-cell, 0, cell]) {
+              for (const dy of [-cell, 0, cell]) {
+                for (const candidate of componentCandidates.get(key(cx + dx, cy + dy, face)) ?? []) {
+                  if (Math.hypot(candidate.x - cx, candidate.y - cy) <= .02
+                    && (Math.abs(candidate.width - width) <= .03 && Math.abs(candidate.height - height) <= .03
+                      || Math.abs(candidate.height - width) <= .03 && Math.abs(candidate.width - height) <= .03)) {
+                    matchedRefs.add(candidate.ref);
+                  }
+                }
+              }
+            }
+            if (matchedRefs.size === 1) pad.componentRef = matchedRefs.values().next().value;
+          }
+        }
+      }
       if (pad.padRole || pad.type !== 'circle' || pad.polarity !== 'D' || pad.parts.length !== 1) continue;
       const part = pad.parts[0];
       if (part.polarity !== 'D' || part.holes?.length || part.points.length < 12) continue;

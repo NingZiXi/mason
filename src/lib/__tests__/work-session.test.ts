@@ -122,6 +122,19 @@ describe('session-only unexported work reminder', () => {
     expect(session.hasUnexportedChanges).toBe(true);
   });
 
+  it('recognizes the same exported notch edges after toggling an edge off and on', async () => {
+    const { session, config } = await setup();
+    config.config.pryNotchSides = ['down', 'left'];
+    await nextTick(); session.markExported(session.captureExport());
+    config.config.pryNotchSides = ['left'];
+    expect(session.hasUnexportedChanges).toBe(true);
+    config.config.pryNotchSides.push('down');
+    expect(session.hasUnexportedChanges).toBe(false);
+    const prompt = vi.fn();
+    expect(await session.confirmExit(prompt)).toBe(true);
+    expect(prompt).not.toHaveBeenCalled();
+  });
+
   it('coalesces repeated close requests into one dialog', async () => {
     const { session, config } = await setup(); config.config.postClearance = .3;
     let finish!: (value: boolean) => void;
@@ -154,5 +167,46 @@ describe('session-only unexported work reminder', () => {
     config.config.postClearance = .3;
     expect(session.hasUnexportedChanges).toBe(true);
     expect(vertex).not.toHaveBeenCalled();
+  });
+
+  it('reuses cached relief plans for scalar edits while detecting in-place vertex changes', async () => {
+    const { session, config } = await setup();
+    let coordinate = -5;
+    const vertex = vi.fn(() => coordinate);
+    const point: [number, number] = [-5, -5];
+    Object.defineProperty(point, '0', { get: vertex, set: value => { coordinate = value; }, enumerable: true });
+    config.config.componentReliefRegions.top = [{ id: 'pocket', shape: 'polygon', x: 0, y: 0, width: 10, height: 10,
+      depth: 3, points: [point, [5, -5], [5, 5], [-5, 5]] }];
+    await nextTick(); session.markExported(session.captureExport()); vertex.mockClear();
+
+    // Read before history's post-flush snapshot: this specifically measures
+    // the exit reminder rather than the independent history recorder.
+    config.config.postClearance = .3;
+    expect(session.hasUnexportedChanges).toBe(true);
+    session.captureExport();
+    config.config.postClearance = .35;
+    session.captureExport();
+    expect(vertex).not.toHaveBeenCalled();
+
+    session.markExported(session.captureExport());
+    config.config.componentReliefRegions.top[0].points![0][0] = -4;
+    expect(session.hasUnexportedChanges).toBe(true);
+    expect(vertex).toHaveBeenCalled();
+    session.markExported(session.captureExport());
+    expect(session.hasUnexportedChanges).toBe(false);
+  });
+
+  it('restores the exported relief-plan state after undo and marks redo as edited', async () => {
+    const { session, config } = await setup();
+    config.config.componentReliefRegions = { top: [{ id: 'top', shape: 'rect', x: 0, y: 0, width: 5, height: 5, depth: 3 }],
+      bottom: [{ id: 'bottom', shape: 'rect', x: 0, y: 0, width: 4, height: 4, depth: 2 }] };
+    await nextTick(); session.markExported(session.captureExport()); config.clearParameterHistory();
+    config.config.componentReliefRegions.bottom[0].depth = 4;
+    await nextTick();
+    expect(session.hasUnexportedChanges).toBe(true);
+    await config.undo();
+    expect(session.hasUnexportedChanges).toBe(false);
+    await config.redo();
+    expect(session.hasUnexportedChanges).toBe(true);
   });
 });

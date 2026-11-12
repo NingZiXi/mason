@@ -3,6 +3,7 @@ import type { PadPolygon } from "./gerber/pads";
 import { createStencilTexture } from "./gerber-pad-texture";
 import { buildPcbPreview, recolorPcbPreview } from "./pcb-preview";
 import { getModelPalette, type ModelPalette } from "./model-palette";
+import { orientBoardPads, type JigPrintSide } from './component-relief';
 
 type Ring = readonly (readonly [number, number])[];
 // Visual sheet thickness only; this is not the independent printed-stencil setting.
@@ -26,6 +27,24 @@ export interface AssemblyOptions {
   stencilPadsTop?: readonly PadPolygon[];
   stencilPadsBottom?: readonly PadPolygon[];
   palette?: ModelPalette;
+  jigPrintSide?: JigPrintSide;
+}
+
+/** Reveal the tray without discarding layer visibility or the explosion pose. */
+export function setJigReliefInspection(group: THREE.Group, enabled: boolean) {
+  for (const part of group.children) {
+    if (part.name === 'insert') continue;
+    part.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach(material => {
+        if (material.transparent !== enabled) material.needsUpdate = true;
+        material.transparent = enabled;
+        material.opacity = enabled ? 0.18 : 1;
+        material.depthWrite = !enabled;
+      });
+    });
+  }
 }
 
 /** Retint the existing assembly without invalidating its geometry or pose. */
@@ -109,12 +128,19 @@ export function buildJigAssembly(
       palette,
     });
     pcb.name = "pcb";
-    pcb.position.y = options.insertHeight - thickness;
+    if (options.jigPrintSide === 'bottom') {
+      pcb.rotation.x = Math.PI;
+      pcb.position.y = options.insertHeight;
+    } else pcb.position.y = options.insertHeight - thickness;
     group.add(pcb);
   }
   if (sheetThickness) {
     const width = options.stencilSizeX!, height = options.stencilSizeY!;
-    const pads = options.stencilPadsTop?.length ? options.stencilPadsTop : options.stencilPadsBottom ?? [];
+    const selectedPads = options.jigPrintSide === 'bottom'
+      ? options.stencilPadsBottom ?? []
+      : options.jigPrintSide === 'top' ? options.stencilPadsTop ?? []
+        : options.stencilPadsTop?.length ? options.stencilPadsTop : options.stencilPadsBottom ?? [];
+    const pads = orientBoardPads(selectedPads, options.jigPrintSide ?? 'top');
     const geometry = new THREE.PlaneGeometry(width, height);
     geometry.rotateX(-Math.PI / 2);
     const stencil = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({

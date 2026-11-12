@@ -10,6 +10,14 @@ import time
 from pathlib import Path
 
 TESTS_DIR = Path(__file__).resolve().parent
+# Embedded Python's isolated path omits the script directory, so restore the
+# normal script import/argv behavior explicitly without changing its runtime.
+TEST_BOOTSTRAP = (
+    "import runpy, sys; "
+    "sys.path.insert(0, sys.argv[1]); "
+    "sys.argv = sys.argv[2:]; "
+    "runpy.run_path(sys.argv[0], run_name='__main__')"
+)
 
 ALL_TESTS = [
     "test_screw_layout.py",   # 快:纯算法,无几何生成
@@ -21,7 +29,9 @@ ALL_TESTS = [
     "test_notch_stencil.py",
     "test_notch_side.py",     # top/bottom 钢网缺口落在 PCB 同一物理边缘
     "test_v2.py",
+    "test_corner_radius.py",  # 零圆角直角边界与三部件生成
     "test_holes.py",
+    "test_component_relief.py",  # 第二面元件避空、支撑面、镜像和托盘高度
     "test_irregular.py",
     "test_hex_nut.py",        # B 面底座 M3 六角螺母沉孔
 ]
@@ -34,7 +44,10 @@ def main():
         path = TESTS_DIR / name
         print(f"\n########## {name} ##########", flush=True)
         t0 = time.time()
-        r = subprocess.run([sys.executable, str(path)], cwd=str(TESTS_DIR))
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8", "-c", TEST_BOOTSTRAP, str(TESTS_DIR), str(path)],
+            cwd=str(TESTS_DIR),
+        )
         dt = time.time() - t0
         results.append((name, r.returncode == 0, dt))
 

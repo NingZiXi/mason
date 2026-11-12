@@ -59,6 +59,7 @@ export function useGerberOutline() {
       } else if (
         lower.endsWith(".gko") ||
         lower.endsWith(".gm1") ||
+        lower.endsWith(".gme") ||
         lower.endsWith(".gbr")
       ) {
         parsed = await processSingleGerber(file);

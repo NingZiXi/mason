@@ -26,6 +26,8 @@ pub fn run() {
             commands::cancel_generation,
             commands::part_metrics,
             commands::inspect_stencil,
+            commands::validate_component_relief,
+            commands::merge_component_relief,
             commands::export_stl,
             commands::read_dropped_file,
             commands::write_file_bytes,

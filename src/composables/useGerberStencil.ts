@@ -18,8 +18,9 @@ import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
 import { extractPads, type PadPolygon } from "../lib/gerber/pads";
 import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
 import { detectOutlineFiles } from "../lib/gerber/outline-detect";
-import { detectPasteFiles, pickPasteBySide } from "../lib/gerber/paste-detect";
+import { detectPasteFiles, detectPasteSide, pickPasteBySide } from "../lib/gerber/paste-detect";
 import { applyFlyingProbeRoles } from "../lib/gerber/flying-probe";
+import { isArchiveContentFile } from '../lib/gerber/archive-files';
 
 export interface GerberStencilResult {
   /** 板框外框多边形(已居中) */
@@ -78,6 +79,8 @@ export function useGerberStencil() {
       } else if (
         lower.endsWith(".gtp") ||
         lower.endsWith(".gbp") ||
+        lower.endsWith(".gpt") ||
+        lower.endsWith(".gpb") ||
         lower.endsWith(".gbr")
       ) {
         parsed = await processSingleGerber(file);
@@ -120,7 +123,7 @@ export function useGerberStencil() {
     const outlineText = outlineFile
       ? await zip.files[outlineFile].async("string")
       : null;
-    const probeFile = filenames.find(name => /(^|[/\\])FlyingProbeTesting\.json$/i.test(name));
+    const probeFile = filenames.find(name => isArchiveContentFile(name) && /(^|[/\\])FlyingProbeTesting\.json$/i.test(name));
     let probeData: unknown;
     if (probeFile) {
       try { probeData = JSON.parse(await zip.files[probeFile].async("string")); }
@@ -140,9 +143,8 @@ export function useGerberStencil() {
 
   async function processSingleGerber(file: File): Promise<GerberStencilResult> {
     const text = await file.text();
-    // 单文件模式:无板框 → 卡槽用锡膏层 bbox;扩展名判面,无法判断归 Top
-    const lower = file.name.toLowerCase();
-    const isBottom = lower.endsWith(".gbp") || lower.endsWith(".gpb");
+    // Use the same side rules as ZIP imports, including named KiCad layers.
+    const isBottom = detectPasteSide(file.name) === 'bottom';
     return finalize(
       isBottom ? null : text,
       isBottom ? text : null,
@@ -240,7 +242,11 @@ export function useGerberStencil() {
   function bboxToOutline(pads: PadPolygon[]): GerberOutline {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const p of pads) {
+      // Clear objects restore material; remote clear masks cannot enlarge the
+      // PCB estimated from its openings. Keep them in the source pads instead.
+      if (p.polarity !== 'D') continue;
       for (const part of p.parts) {
+        if (part.polarity !== 'D' || part.points.length < 3) continue;
         for (const [x, y] of part.points) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
@@ -248,6 +254,9 @@ export function useGerberStencil() {
           if (y > maxY) maxY = y;
         }
       }
+    }
+    if (![minX, minY, maxX, maxY].every(Number.isFinite) || maxX <= minX || maxY <= minY) {
+      throw new GerberImportError('gerber.noPads');
     }
     // 留 0.1mm 余量
     minX -= 0.1; minY -= 0.1; maxX += 0.1; maxY += 0.1;

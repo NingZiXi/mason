@@ -276,15 +276,28 @@ function fmt(n: number): string {
 }
 
 const acceptAttr = computed(() =>
-  props.mode === "stencil" ? ".zip,.gtp,.gbp,.gbr" : ".zip,.gko,.gm1,.gbr"
+  props.mode === "stencil" ? ".zip,.gtp,.gbp,.gpt,.gpb,.gbr" : ".zip,.gko,.gm1,.gme,.gbr"
 );
 
 /** SVG path:外框 + 内孔子路径,配合 fill-rule=evenodd 显示挖孔 */
 const outlinePath = computed(() => {
   if (!display.value) return "";
   const toSub = (pts: Array<[number, number]>) =>
-    pts.map((p) => `${p[0]},${p[1]}`).join(" ");
+    pts.length >= 3 ? `M${pts.map(([x, y]) => `${x},${y}`).join("L")}Z` : "";
   return [toSub(display.value.outlinePoints), ...display.value.holes.map(toSub)].join(" ");
+});
+// Frame the imported geometry itself. Editing the nominal PCB dimensions must
+// not crop this reference preview or assume the outline is centred at (0, 0).
+const outlineViewBox = computed(() => {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of display.value?.outlinePoints ?? []) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+  }
+  if (!Number.isFinite(minX)) return '-1 -1 2 2';
+  const padding = Math.max(maxX - minX, maxY - minY, 1) * .08 + .5;
+  return `${minX - padding} ${-maxY - padding} ${maxX - minX + padding * 2} ${maxY - minY + padding * 2}`;
 });
 </script>
 
@@ -303,8 +316,13 @@ const outlinePath = computed(() => {
       v-if="!display"
       class="dropzone"
       :class="{ active: loading || dragOver }"
+      role="button"
+      tabindex="0"
+      :aria-label="t('gerber.drop')"
       :aria-busy="loading"
       @click="pickFile"
+      @keydown.enter.prevent="pickFile"
+      @keydown.space.prevent="pickFile"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop"
@@ -355,31 +373,19 @@ const outlinePath = computed(() => {
       <svg
         v-if="display.outlinePoints.length > 0"
         class="outline-preview"
-        :viewBox="`${-display.width / 2 - 2} ${-display.height / 2 - 2} ${display.width + 4} ${display.height + 4}`"
+        :viewBox="outlineViewBox"
         preserveAspectRatio="xMidYMid meet"
       >
         <g transform="scale(1, -1)">
-          <polygon
-            :points="outlinePath"
+          <path
+            :d="outlinePath"
             fill-rule="evenodd"
             fill="var(--outline-preview-fill)"
             stroke="var(--outline-preview-stroke)"
-            stroke-width="0.3"
+            stroke-width="1.1"
+            vector-effect="non-scaling-stroke"
           />
         </g>
-        <line
-          :x1="-display.width/2" :y1="0"
-          :x2="display.width/2" :y2="0"
-          stroke="rgba(115,115,115,0.36)" stroke-width="0.2" stroke-dasharray="2,2"
-        />
-        <text
-          :x="display.width/2 + 2" y="3"
-          font-size="3"
-          fill="rgba(115,115,115,0.5)"
-          font-family="var(--font-family-mono)"
-        >
-          {{ fmt(display.width) }}×{{ fmt(display.height) }} mm
-        </text>
       </svg>
 
       <!-- Core dimensions and the current board stay prominent. -->
@@ -539,6 +545,8 @@ const outlinePath = computed(() => {
   background: color-mix(in srgb, var(--bg-brand) 6%, var(--surface-well));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-brand) 12%, transparent);
 }
+.dropzone:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 3px; }
+.dropzone:active { background: var(--control-selection-surface); }
 
 /* 拖文件悬停/解析中:品牌橙提示"投入信号"(与 hover 的绿区分) */
 .dropzone.active {

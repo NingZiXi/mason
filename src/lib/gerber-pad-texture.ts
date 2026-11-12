@@ -14,10 +14,27 @@ export function createPadTexture(width: number, height: number, pads: readonly P
   ctx.fillStyle = "white";
   const patch = document.createElement("canvas");
   for (const pad of pads) {
-    const points = pad.parts.flatMap(part => part.points);
-    if (points.length < 3) continue;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    points.forEach(([x, y]) => { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); });
+    let darkMinX = Infinity, darkMinY = Infinity, darkMaxX = -Infinity, darkMaxY = -Infinity;
+    for (const part of pad.parts) {
+      for (const [x, y] of part.points) {
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+      }
+      if (part.polarity === "C" || part.points.length < 3) continue;
+      for (const ring of [part.points, ...(part.holes ?? [])]) {
+        for (const [x, y] of ring) {
+          darkMinX = Math.min(darkMinX, x); darkMinY = Math.min(darkMinY, y);
+          darkMaxX = Math.max(darkMaxX, x); darkMaxY = Math.max(darkMaxY, y);
+        }
+      }
+    }
+    if (darkMinX === Infinity) continue;
+    // Clear primitives cannot add pixels to this initially transparent patch.
+    // Bound its positive support, including evenodd hole rings, while retaining
+    // the original clipping for malformed holes outside their outer contour.
+    minX = Math.max(minX, darkMinX); minY = Math.max(minY, darkMinY);
+    maxX = Math.min(maxX, darkMaxX); maxY = Math.min(maxY, darkMaxY);
     const left = Math.max(0, Math.floor((minX - centerX + width / 2) * scale) - 1);
     const top = Math.max(0, Math.floor((height / 2 + centerY - maxY) * scale) - 1);
     const right = Math.min(canvas.width, Math.ceil((maxX - centerX + width / 2) * scale) + 1);

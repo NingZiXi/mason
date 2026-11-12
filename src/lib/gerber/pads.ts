@@ -5,12 +5,12 @@
  * 光圈如何定义、图形如何曝光,钢网上就如何开孔。
  * 本模块按 RS-274X 光绘机语义实现,而非启发式猜形状:
  *
- * - 标准光圈: C(圆)/R(矩)/O(长圆)/P(正多边形),均支持旋转与中心孔
+ * - 标准光圈: C(圆)/R(矩)/O(长圆)/P(正多边形),支持中心孔及 LM/LR/LS 变换
  * - 宏光圈 %AM 完整展开: 原语 1(圆)/2,20(矢量线)/21(中心矩)/22(左下矩)/
  *   4(轮廓)/5(正多边形)/6(moire 同心环)/7(thermal 热焊盘),
  *   参数支持 $n 代换与 + - * / ( ) 算术表达式,支持曝光极性(暗/擦除)
  * - 图形: D03 flash / D01 描线(含 G74/G75 圆弧,I/J 偏移)/ G36-G37 区域填充
- * - 图像控制: %LP 图像极性 / %SR 步进重复 / %LM/%LR/%LS 图层变换
+ * - 图像控制: %LP 图像极性 / %SR 步进重复 / %LM/%LR/%LS 光圈变换
  * - %AB 光圈块跳过(计数);G54 旧式光圈选择;D nn ≥ 10 才是光圈选择
  *
  * 输出: 每个焊盘 = 多部件(parts)列表;部件带极性(D=曝光开孔 / C=擦除)
@@ -19,6 +19,7 @@
  */
 
 import { srSpacingMm } from "./parser";
+import { decodeGerberCoordinate } from './coordinate';
 
 export interface PadPart {
   /** 极性:D=dark 曝光(开孔) / C=clear 擦除(在该焊盘内恢复材料) */
@@ -41,6 +42,8 @@ export interface PadPolygon {
   padRole?: "testpoint" | "component";
   /** Supplementary single-pin test-pad evidence from the manufacturing netlist. */
   padRoleSource?: "flying-probe";
+  /** Component identity from X2 object attributes or a matching manufacturing pin. */
+  componentRef?: string;
   /** User decision takes precedence over automatic test-point filtering. */
   apertureOverride?: "open" | "closed";
   /** 部件列表(宏光圈可产生多个,含极性与内孔) */
@@ -464,26 +467,24 @@ function parseAperture(
     if (upper === "R") {
       const w = params[0];
       const h = p(1, params[0]);
-      const rot = p(2, 0);
       return {
         code, kind: "rect", lineWidth: Math.min(w, h),
         make: () => [{
           polarity: "D",
-          points: rotateRing(rectRing(0, 0, w, h), rot),
-          holes: holeOf(num(3)),
+          points: rectRing(0, 0, w, h),
+          holes: holeOf(num(2)),
         }],
       };
     }
     if (upper === "O") {
       const w = params[0];
       const h = p(1, params[0]);
-      const rot = p(2, 0);
       return {
         code, kind: "obround", lineWidth: Math.min(w, h),
         make: () => [{
           polarity: "D",
-          points: rotateRing(obroundRing(0, 0, w, h), rot),
-          holes: holeOf(num(3)),
+          points: obroundRing(0, 0, w, h),
+          holes: holeOf(num(2)),
         }],
       };
     }
@@ -643,7 +644,7 @@ function discretizeArc(
 // 主解析器
 // ---------------------------------------------------------------------------
 
-/** 图层线性变换(LS/LM/LR),逐顶点应用 */
+/** 光圈局部变换(LS/LM/LR)。Gerber §4.9:不变换 flash 位置或描线路径。 */
 function applyTf(
   x: number, y: number,
   tf: { mx: boolean; my: boolean; rot: number; scale: number } | undefined
@@ -651,8 +652,8 @@ function applyTf(
   if (!tf) return [x, y];
   let nx = x * tf.scale;
   let ny = y * tf.scale;
-  if (tf.mx) ny = -ny;
-  if (tf.my) nx = -nx;
+  if (tf.mx) nx = -nx;
+  if (tf.my) ny = -ny;
   if (tf.rot) {
     const a = (tf.rot * Math.PI) / 180;
     const c = Math.cos(a);
@@ -672,10 +673,13 @@ export function extractPads(text: string): ExtractPadsResult {
   const apertureRoles = new Map<string, PadPolygon["padRole"]>();
   let apertureRole: PadPolygon["padRole"];
   let objectHasPin = false;
+  let objectPinRef: string | undefined;
+  let objectComponentRef: string | undefined;
   let currentAperture: Aperture | null = null;
 
   // 格式
   let places: [number, number] = [3, 6];
+  let zero: 'L' | 'T' = 'L';
   let units: "mm" | "in" | null = null;
   const inToMm = 25.4;
   const toMm = (raw: number): number => {
@@ -692,7 +696,7 @@ export function extractPads(text: string): ExtractPadsResult {
   let multiQuadrant = true; // G75 默认(多数现代文件);G74 显式声明
   let imagePolarity: "D" | "C" = "D";
 
-  // 图层变换
+  // 光圈变换(围绕光圈原点,不作用于文件坐标)
   let tfMx = false;
   let tfMy = false;
   let tfRot = 0;
@@ -715,6 +719,7 @@ export function extractPads(text: string): ExtractPadsResult {
   let srDx = 0;
   let srDy = 0;
   let srBuffer: PadPolygon[] = [];
+  let srInstance = 0;
 
   // %AB 块深度
   let abDepth = 0;
@@ -732,24 +737,29 @@ export function extractPads(text: string): ExtractPadsResult {
   let skippedBlockGraphics = 0;
 
   const emit = (pad: PadPolygon) => {
-    if (srActive) srBuffer.push(pad);
-    else pads.push(pad);
+    const componentRef = objectPinRef ?? objectComponentRef;
+    const attributed = componentRef ? { ...pad, componentRef } : pad;
+    if (srActive) srBuffer.push(attributed);
+    else pads.push(attributed);
   };
 
   /** flush SR 缓冲:按步进复制 */
   const flushSR = () => {
     if (!srActive) return;
     srActive = false;
+    const instance = ++srInstance;
     for (let iy = 0; iy < srNy; iy++) {
       for (let ix = 0; ix < srNx; ix++) {
         if (ix === 0 && iy === 0) {
-          pads.push(...srBuffer);
+          pads.push(...srBuffer.map(pad => pad.componentRef
+            ? { ...pad, componentRef: `${pad.componentRef}@SR${instance}:${ix},${iy}` } : pad));
         } else {
           for (const pad of srBuffer) {
             const dx = ix * srDx;
             const dy = iy * srDy;
             pads.push({
               ...pad,
+              ...(pad.componentRef ? { componentRef: `${pad.componentRef}@SR${instance}:${ix},${iy}` } : {}),
               cx: pad.cx + dx,
               cy: pad.cy + dy,
               parts: pad.parts.map((pt) => ({
@@ -772,9 +782,9 @@ export function extractPads(text: string): ExtractPadsResult {
     if (curContour.length >= 3) regionContours.push(curContour);
     curContour = [];
     regionLastOp = null;
-    if (regionContours.length > 0) {
-      const outer = regionContours[0];
-      const holes = regionContours.slice(1);
+    for (const outer of regionContours) {
+      // Gerber §4.10:每条 D02 轮廓独立填充后取并集。孔由 cut-in
+      // 或 clear 对象表达,不能把第二条及后续轮廓视为第一条的内孔。
       let sx = 0;
       let sy = 0;
       for (const [px, py] of outer) {
@@ -790,19 +800,17 @@ export function extractPads(text: string): ExtractPadsResult {
           {
             polarity: "D",
             points: outer[outer.length - 1] === outer[0] ? outer : [...outer, outer[0]],
-            holes: holes.length > 0 ? holes : undefined,
           },
         ],
       });
-      regionCount++;
     }
+    if (regionContours.length > 0) regionCount++;
     regionContours = [];
   };
 
   /** D03 flash */
   const doFlash = (x: number, y: number) => {
     const tf = tfSnapshot();
-    const [px, py] = applyTf(x, y, tf);
     if (!currentAperture) {
       skippedFlashes++;
       return;
@@ -810,45 +818,44 @@ export function extractPads(text: string): ExtractPadsResult {
     const parts = currentAperture.make().map((pt) => ({
       ...pt,
       points: pt.points.map(([vx, vy]): [number, number] => {
-        const [tx, ty] = applyTf(vx + px, vy + py, tf);
-        return [tx, ty];
+        const [tx, ty] = applyTf(vx, vy, tf);
+        return [x + tx, y + ty];
       }),
       holes: pt.holes?.map((h) =>
         h.map(([vx, vy]): [number, number] => {
-          const [tx, ty] = applyTf(vx + px, vy + py, tf);
-          return [tx, ty];
+          const [tx, ty] = applyTf(vx, vy, tf);
+          return [x + tx, y + ty];
         })
       ),
     }));
     const padRole = apertureRoles.get(currentAperture.code) ?? (objectHasPin ? "component" : undefined);
-    emit({ type: currentAperture.kind, cx: px, cy: py, polarity: imagePolarity, parts,
+    emit({ type: currentAperture.kind, cx: x, cy: y, polarity: imagePolarity, parts,
       ...(padRole ? { padRole } : {}),
     });
     flashCount++;
   };
 
-  /** D01 描线(直线或圆弧);局部坐标(未变换) */
+  /** D01 描线(直线或圆弧);只有圆形光圈宽度受 LS 影响,路径坐标不变。 */
   const doStroke = (
     x1: number, y1: number, x2: number, y2: number,
     i: number | null, j: number | null
   ) => {
-    const tf = tfSnapshot();
     if (!currentAperture) {
       skippedLines++;
       return;
     }
     const w = currentAperture.lineWidth * Math.abs(tfScale);
-    // 圆弧:先在局部坐标离散,再逐点变换
+    // 圆弧沿文件坐标离散;LM/LR/LS 不改变路径或圆弧方向。
     let pathPts: Array<[number, number]>;
     if ((interp === 2 || interp === 3) && i !== null) {
       const arc = arcCenter(x1, y1, x2, y2, i, j ?? 0, interp === 3, multiQuadrant);
       if (arc) {
-        pathPts = discretizeArc(x1, y1, x2, y2, arc).map(([x, y]) => applyTf(x, y, tf));
+        pathPts = discretizeArc(x1, y1, x2, y2, arc);
       } else {
-        pathPts = [applyTf(x1, y1, tf), applyTf(x2, y2, tf)];
+        pathPts = [[x1, y1], [x2, y2]];
       }
     } else {
-      pathPts = [applyTf(x1, y1, tf), applyTf(x2, y2, tf)];
+      pathPts = [[x1, y1], [x2, y2]];
     }
     for (let k = 0; k + 1 < pathPts.length; k++) {
       const [ax, ay] = pathPts[k];
@@ -906,7 +913,7 @@ export function extractPads(text: string): ExtractPadsResult {
     // --- 扩展命令 ---
     if (line.startsWith("%")) {
       // X2 attribute scopes: TA is attached when ADD defines an aperture;
-      // TO.P is modal object pin metadata. TD clears attribute state, not
+      // TO.P / TO.C are modal pin / component metadata. TD clears state, not
       // the attributes already attached to previously defined apertures.
       const af = rawLine.match(/%TA\.AperFunction,([^*%]+)\*%/i);
       if (af) {
@@ -914,18 +921,28 @@ export function extractPads(text: string): ExtractPadsResult {
         apertureRole = fn === "testpad" ? "testpoint"
           : ["smdpad", "bgapad", "connectorpad", "componentpad", "heatsinkpad"].includes(fn) ? "component" : undefined;
       }
-      if (/%TO\.P,[^,*%]+,[^,*%]+(?:,[^*%]*)?\*%/i.test(rawLine)) objectHasPin = true;
+      const pinAttribute = rawLine.match(/%TO\.P,([^,*%]+),[^,*%]+(?:,[^*%]*)?\*%/i);
+      if (pinAttribute) {
+        objectHasPin = true;
+        objectPinRef = pinAttribute[1].trim() || undefined;
+      }
+      const componentAttribute = rawLine.match(/%TO\.C,([^,*%]+)(?:,[^*%]*)?\*%/i);
+      if (componentAttribute) objectComponentRef = componentAttribute[1].trim() || undefined;
       const td = rawLine.match(/%TD([^*%]*)\*%/i);
       if (td) {
         const name = td[1].trim().toLowerCase();
         if (!name || name === ".aperfunction") apertureRole = undefined;
-        if (!name || name === ".p") objectHasPin = false;
+        if (!name || name === ".p") { objectHasPin = false; objectPinRef = undefined; }
+        if (!name || name === ".c") objectComponentRef = undefined;
       }
       const fsMatch = rawLine.match(/%FS([LT])?AX(\d)(\d)Y(\d)(\d)\*%/);
-      if (fsMatch) places = [parseInt(fsMatch[2], 10), parseInt(fsMatch[3], 10)];
+      if (fsMatch) {
+        places = [parseInt(fsMatch[2], 10), parseInt(fsMatch[3], 10)];
+        zero = (fsMatch[1] as 'L' | 'T') || 'L';
+      }
       const moMatch = rawLine.match(/%MO(IN|MM)\*%/i);
       if (moMatch) units = moMatch[1].toUpperCase() === "MM" ? "mm" : "in";
-      const lmMatch = rawLine.match(/%LM(XY|X|Y)?\*%/i);
+      const lmMatch = rawLine.match(/%LM(XY|X|Y|N)?\*%/i);
       if (lmMatch) {
         const m = (lmMatch[1] || "").toUpperCase();
         tfMx = m.includes("X");
@@ -952,8 +969,9 @@ export function extractPads(text: string): ExtractPadsResult {
             srActive = true;
             srNx = nx;
             srNy = ny;
-            srDx = srSpacingMm(m[3], places);
-            srDy = srSpacingMm(m[4], places);
+            const unitScale = units === "in" ? inToMm : 1;
+            srDx = srSpacingMm(m[3], places) * unitScale;
+            srDy = srSpacingMm(m[4], places) * unitScale;
             srBuffer = [];
           }
         } else {
@@ -964,7 +982,20 @@ export function extractPads(text: string): ExtractPadsResult {
       // %ADD 光圈定义(其余 % 命令忽略)
       const ap = parseAperture(rawLine, macros);
       if (ap) {
-        apertures.set(ap.code, ap);
+        // AD/AM 的长度与文件坐标采用相同 MO 单位。先统一为 mm,
+        // 再由 flash 应用光圈变换;角度与 LM/LR/LS 无量纲参数保持原值。
+        const unitScale = units === "in" ? inToMm : 1;
+        const scaleRing = (ring: Array<[number, number]>): Array<[number, number]> =>
+          ring.map(([x, y]) => [x * unitScale, y * unitScale]);
+        apertures.set(ap.code, unitScale === 1 ? ap : {
+          ...ap,
+          lineWidth: ap.lineWidth * unitScale,
+          make: () => ap.make().map(part => ({
+            ...part,
+            points: scaleRing(part.points),
+            holes: part.holes?.map(scaleRing),
+          })),
+        });
         apertureRoles.set(ap.code, apertureRole);
       }
       continue;
@@ -1014,22 +1045,22 @@ export function extractPads(text: string): ExtractPadsResult {
     else if (/D0?2\*?\s*$/.test(work)) op = 2;
     else if (/D0?3\*?\s*$/.test(work)) op = 3;
 
-    const xMatch = work.match(/X(-?\d+)/);
-    const yMatch = work.match(/Y(-?\d+)/);
-    const iMatch = work.match(/I(-?\d+)/);
-    const jMatch = work.match(/J(-?\d+)/);
+    const xMatch = work.match(/X([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+    const yMatch = work.match(/Y([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+    const iMatch = work.match(/I([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+    const jMatch = work.match(/J([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
     if (!xMatch && !yMatch && !iMatch && !jMatch) {
       // 无坐标的独立操作行:如 "D03*"(在当前位置 flash)
       if (!inRegion && op === 3) doFlash(curX, curY);
       continue;
     }
 
-    const rawX = xMatch ? parseInt(xMatch[1], 10) : null;
-    const rawY = yMatch ? parseInt(yMatch[1], 10) : null;
+    const rawX = xMatch ? decodeGerberCoordinate(xMatch[1], places, zero) : null;
+    const rawY = yMatch ? decodeGerberCoordinate(yMatch[1], places, zero) : null;
     const x = rawX !== null ? toMm(rawX) : curX;
     const y = rawY !== null ? toMm(rawY) : curY;
-    const i = iMatch ? toMm(parseInt(iMatch[1], 10)) : null;
-    const j = jMatch ? toMm(parseInt(jMatch[1], 10)) : null;
+    const i = iMatch ? toMm(decodeGerberCoordinate(iMatch[1], places, zero)) : null;
+    const j = jMatch ? toMm(decodeGerberCoordinate(jMatch[1], places, zero)) : null;
 
     if (inRegion) {
       if (op === 2) {

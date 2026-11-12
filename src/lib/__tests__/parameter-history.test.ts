@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { nextTick } from "vue";
-import { useConfigStore } from "../../stores/config";
+import { effectScope, nextTick, reactive } from "vue";
+import { DEFAULT, useConfigStore } from "../../stores/config";
 import { usePresetsStore } from "../../stores/presets";
+import { useParameterHistory } from '../../composables/useParameterHistory';
+import type { PadPolygon } from '../gerber/pads';
 import type { PanelVariant } from "../gerber/panel";
 import { pickPresetSettings, PRESETS_STORAGE_KEY } from "../config-presets";
 import { parameterHistoryShortcut } from "../history-shortcuts";
@@ -23,6 +25,117 @@ const imported = () => ({ filename: "board.zip", isPanel: true, hasPads: true, m
   variants: { panel: variant(90), single: variant(30) } });
 
 describe("parameter undo and redo", () => {
+  it('reuses both relief plans across scalar history steps and still observes in-place vertices', async () => {
+    let reads = 0;
+    let x = -5;
+    const point: [number, number] = [-5, -5];
+    Object.defineProperty(point, '0', { get() { ++reads; return x; }, set(value) { x = value; }, enumerable: true });
+    const config = reactive({ ...DEFAULT, componentReliefRegions: {
+      top: [{ id: 'top', shape: 'polygon' as const, x: 0, y: 0, width: 10, height: 10,
+        depth: 3, points: [point, [5, -5] as [number, number], [5, 5] as [number, number], [-5, 5] as [number, number]] }],
+      bottom: [{ id: 'bottom', shape: 'rect' as const, x: 0, y: 0, width: 4, height: 4, depth: 2 }],
+    } });
+    const scope = effectScope();
+    const history = scope.run(() => useParameterHistory({ config: () => config, context: () => [],
+      restore: async snapshot => {
+        const { apertures, ...parameters } = snapshot;
+        Object.assign(config, parameters);
+        await nextTick();
+      },
+    }))!;
+    try {
+      const initialReads = reads;
+      expect(initialReads).toBeGreaterThan(0);
+      for (const value of [8, 12, 16]) {
+        vi.advanceTimersByTime(800);
+        config.ejectHoleDiameter = value;
+        await nextTick();
+      }
+      expect(reads).toBe(initialReads);
+      config.componentReliefRegions.top[0].points[0][0] = -4;
+      await nextTick();
+      expect(reads).toBeGreaterThan(initialReads);
+      await history.undo();
+      expect(config.componentReliefRegions.top[0].points[0][0]).toBe(-5);
+      expect(config.componentReliefRegions.bottom[0].depth).toBe(2);
+      expect(config.ejectHoleDiameter).toBe(16);
+      await history.redo();
+      expect(config.componentReliefRegions.top[0].points[0][0]).toBe(-4);
+      expect(config.componentReliefRegions.bottom[0].depth).toBe(2);
+    } finally { scope.stop(); }
+  });
+
+  it('does not expose stored relief plans or opening decisions to restore callbacks', async () => {
+    const config = reactive({ ...DEFAULT, componentReliefRegions: { top: [
+      { id: 'top', shape: 'rect' as const, x: 0, y: 0, width: 10, height: 10, depth: 3 },
+    ], bottom: [] }, stencilPadsTop: [
+      { type: 'rect' as const, cx: 0, cy: 0, polarity: 'D' as const, parts: [], apertureOverride: 'closed' as const },
+    ] });
+    let restored: Parameters<Parameters<typeof useParameterHistory>[0]['restore']>[0] | undefined;
+    const scope = effectScope();
+    const history = scope.run(() => useParameterHistory({ config: () => config, context: () => [],
+      restore: async snapshot => {
+        restored = snapshot;
+        // The caller is free to retain and later mutate the received object.
+        config.componentReliefRegions = JSON.parse(JSON.stringify(snapshot.componentReliefRegions));
+        config.ejectHoleDiameter = snapshot.ejectHoleDiameter;
+        await nextTick();
+      },
+    }))!;
+    try {
+      config.ejectHoleDiameter = 12;
+      await nextTick();
+      await history.undo();
+      restored!.componentReliefRegions.top[0].depth = 19;
+      restored!.apertures.top[0][1] = 'open';
+      await history.redo();
+      await history.undo();
+      expect(restored!.componentReliefRegions.top[0].depth).toBe(3);
+      expect(restored!.apertures.top).toEqual([[0, 'closed']]);
+      expect(config.componentReliefRegions.top[0].depth).toBe(3);
+    } finally { scope.stop(); }
+  });
+
+  it('reuses sparse opening decisions during parameter edits while still recording in-place opening changes', async () => {
+    let reads = 0;
+    let decision: PadPolygon['apertureOverride'];
+    const pad: PadPolygon = { type: 'rect', cx: 0, cy: 0, polarity: 'D', parts: [],
+      get apertureOverride() { ++reads; return decision; },
+      set apertureOverride(value) { decision = value; },
+    };
+    const config = reactive({ ...DEFAULT, stencilPadsTop: [pad], stencilPadsBottom: [] as PadPolygon[] });
+    const scope = effectScope();
+    const history = scope.run(() => useParameterHistory({
+      config: () => config, context: () => [],
+      restore: async snapshot => {
+        config.ejectHoleDiameter = snapshot.ejectHoleDiameter;
+        config.stencilPadsTop[0].apertureOverride = snapshot.apertures.top[0]?.[1];
+        await nextTick();
+      },
+    }))!;
+    try {
+      const initialReads = reads;
+      config.ejectHoleDiameter = 8;
+      await nextTick();
+      config.ejectHoleDiameter = 12;
+      await nextTick();
+      expect(reads).toBe(initialReads);
+
+      config.stencilPadsTop[0].apertureOverride = 'closed';
+      await nextTick();
+      expect(reads).toBeGreaterThan(initialReads);
+      await history.undo();
+      expect(decision).toBeUndefined();
+      expect(config.ejectHoleDiameter).toBe(12);
+      await history.redo();
+      expect(decision).toBe('closed');
+      const restoredReads = reads;
+      config.ejectHoleDiameter = 16;
+      await nextTick();
+      expect(reads).toBe(restoredReads);
+    } finally { scope.stop(); }
+  });
+
   it("undoes immediately, restores linked values and supports redo", async () => {
     const store = useConfigStore();
     const initial = store.config.stencilSizeX;
@@ -181,6 +294,54 @@ describe("parameter undo and redo", () => {
     expect(store.config.baseHeight).toBe(4);
     expect(store.config.insertHeight).toBe(8);
     expect(store.canUndo).toBe(false);
+  });
+
+  it('resets every advanced control while retaining board work and undoing the reset together', async () => {
+    const store = useConfigStore();
+    store.applyGerberImport(imported());
+    store.config.pcbThickness = 2;
+    store.config.stencilSizeX = 150;
+    store.config.stencilLip = 7;
+    store.config.pryNotchSides = ['up', 'right'];
+    store.config.componentReliefEnabled = true;
+    store.config.jigPrintSide = 'bottom';
+    store.config.componentReliefRegions = {
+      top: [{ id: 'top', shape: 'rect', x: 0, y: 0, width: 4, height: 4, depth: 3 }],
+      bottom: [{ id: 'bottom', shape: 'circle', x: 5, y: 0, width: 4, height: 4, depth: 5 }],
+    };
+    const advancedChanges = { insertHeight: 12, platterCornerRadius: 7, outerCornerRadius: 8,
+      ejectSlotWidth: 0, ejectHoleDiameter: 12, windowGap: 2, pcbPocketClearance: .6,
+      postClearance: .6, useHexNut: false, nutAcrossFlats: 6.2, nutHeight: 3, nutPocketClearance: .4 };
+    Object.assign(store.config, advancedChanges);
+    await nextTick();
+    store.clearParameterHistory();
+    const outline = store.config.pcbOutlinePoints;
+    const plans = JSON.parse(JSON.stringify(store.config.componentReliefRegions));
+
+    store.reset();
+    await nextTick();
+    for (const key of Object.keys(advancedChanges) as Array<keyof typeof advancedChanges>) {
+      expect(store.config[key], key).toBe(DEFAULT[key]);
+    }
+    expect(store.config.pcbThickness).toBe(2);
+    expect(store.config.stencilSizeX).toBe(150);
+    expect(store.config.stencilLip).toBe(7);
+    expect(store.config.pryNotchSides).toEqual(['up', 'right']);
+    expect(store.config.pcbOutlinePoints).toBe(outline);
+    expect(store.config.componentReliefEnabled).toBe(true);
+    expect(store.config.jigPrintSide).toBe('bottom');
+    expect(store.config.componentReliefRegions).toEqual(plans);
+
+    await store.undo();
+    for (const key of Object.keys(advancedChanges) as Array<keyof typeof advancedChanges>) {
+      expect(store.config[key], key).toBe(advancedChanges[key]);
+    }
+    expect(store.canUndo).toBe(false);
+    expect(store.config.componentReliefRegions).toEqual(plans);
+    await store.redo();
+    expect(store.config.windowGap).toBe(DEFAULT.windowGap);
+    expect(store.config.postClearance).toBe(DEFAULT.postClearance);
+    expect(store.config.componentReliefRegions).toEqual(plans);
   });
 
   it("allows undoing manufacturing settings with custom dimensions preserved", async () => {

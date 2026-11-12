@@ -90,6 +90,14 @@ M02*
 });
 
 describe("detectOutlineFiles", () => {
+  it('does not promote copper, paste, or text files because their ZIP folder contains outline', () => {
+    const result = detectOutlineFiles([
+      'board-outline/board.GTL', 'board-outline/board.GTP', 'board-outline/readme.txt',
+      'board-outline/board.GKO',
+    ]);
+    expect(result.map(candidate => candidate.filename)).toEqual(['board-outline/board.GKO']);
+  });
+
   it("优先选 .GKO", () => {
     const files = [
       "Gerber_TopLayer.GTL",
@@ -115,89 +123,6 @@ describe("detectOutlineFiles", () => {
     const result = detectOutlineFiles(files);
     expect(result[0].filename).toBe("board-outline.gko");
     expect(result.length).toBeGreaterThanOrEqual(2);
-  });
-});
-
-describe("图层变换 LM/LR/LS", () => {
-  // 矩形 (0,0)-(5,4) mm,places=[2,4]
-  const rect = (header: string) =>
-    `G04 tf test*\n%FSLAX24Y24*%\n%MOMM*%\n${header}G01*\nX0Y0D02*\nX50000Y0D01*\nX50000Y40000D01*\nX0Y40000D01*\nX0Y0D01*\nM02*\n`;
-
-  it("%LMY 关于 Y 轴镜像(x → -x)", () => {
-    const outline = extractOutline(rect("%LMY*%\n"));
-    expect(outline.bbox.minX).toBeCloseTo(-5, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(0, 3);
-    expect(outline.bbox.minY).toBeCloseTo(0, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(4, 3);
-  });
-
-  it("%LMX 关于 X 轴镜像(y → -y)", () => {
-    const outline = extractOutline(rect("%LMX*%\n"));
-    expect(outline.bbox.minX).toBeCloseTo(0, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(5, 3);
-    expect(outline.bbox.minY).toBeCloseTo(-4, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(0, 3);
-  });
-
-  it("%LMXY 双轴镜像(等价 180° 旋转)", () => {
-    const outline = extractOutline(rect("%LMXY*%\n"));
-    expect(outline.bbox.minX).toBeCloseTo(-5, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(0, 3);
-    expect(outline.bbox.minY).toBeCloseTo(-4, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(0, 3);
-  });
-
-  it("%LR90 旋转 90°(5×4 矩形 → 4×5)", () => {
-    const outline = extractOutline(rect("%LR90*%\n"));
-    expect(outline.bbox.minX).toBeCloseTo(-4, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(0, 3);
-    expect(outline.bbox.minY).toBeCloseTo(0, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(5, 3);
-  });
-
-  it("%LS2 缩放 2 倍", () => {
-    const outline = extractOutline(rect("%LS2.0*%\n"));
-    expect(outline.bbox.maxX).toBeCloseTo(10, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(8, 3);
-  });
-
-  it("组合变换:镜像 + 旋转 + 缩放", () => {
-    // %LMY 后 %LR90:先 x→-x,再旋转 90°(逆时针)
-    // (5,4) → (-5,4) → (-4,-5)
-    const outline = extractOutline(rect("%LMY*%\n%LR90*%\n"));
-    expect(outline.bbox.minX).toBeCloseTo(-4, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(0, 3);
-    expect(outline.bbox.minY).toBeCloseTo(-5, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(0, 3);
-  });
-
-  it("无参数 %LM 重置为恒等", () => {
-    const outline = extractOutline(rect("%LMY*%\n%LM*%\n"));
-    expect(outline.bbox.minX).toBeCloseTo(0, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(5, 3);
-  });
-
-  it("变换中途切换只影响之后的命令", () => {
-    // 前半段无变换画 (0,0)→(5,0);%LMY 后画 (5,0)→(5,4) 变为 (-5,0)→(-5,4)
-    const gerber =
-      "G04 mid switch*\n%FSLAX24Y24*%\n%MOMM*%\nG01*\nX0Y0D02*\nX50000Y0D01*\n%LMY*%\nX50000Y40000D01*\nX0Y40000D01*\nM02*\n";
-    const outline = extractOutline(gerber);
-    expect(outline.bbox.minX).toBeCloseTo(-5, 3);
-    expect(outline.bbox.maxX).toBeCloseTo(5, 3);
-    expect(outline.bbox.maxY).toBeCloseTo(4, 3);
-  });
-
-  it("镜像下的弧线方向自动正确(路径保持圆弧)", () => {
-    // 圆弧:原生空间从 (10,10) G03(CCW)到 (15,15),圆心 (15,10) r=5;
-    // CCW 扫过 270°(经 (15,5)→(20,10)→(15,15)),原生 bbox x∈[10,20] y∈[5,15]
-    // %LMX 镜像(y→-y)后:圆心 (15,-10),bbox x∈[10,20] y∈[-15,-5]
-    const gerber =
-      "G04 mirrored arc*\n%FSLAX24Y24*%\n%MOMM*%\n%LMX*%\nG01*\nX100000Y100000D02*\nG03*\nX150000Y150000I50000J0D01*\nM02*\n";
-    const outline = extractOutline(gerber);
-    expect(outline.bbox.minY).toBeCloseTo(-15, 2);
-    expect(outline.bbox.maxY).toBeCloseTo(-5, 2);
-    expect(outline.bbox.minX).toBeCloseTo(10, 2);
-    expect(outline.bbox.maxX).toBeCloseTo(20, 2);
   });
 });
 

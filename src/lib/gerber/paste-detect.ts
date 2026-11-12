@@ -12,6 +12,8 @@
  * - 文件名含 top/front → top;bottom/back → bottom
  */
 
+import { isArchiveContentFile } from './archive-files';
+
 const EXTENSION_HINTS: Array<{ ext: string; priority: number; reason: string }> = [
   { ext: ".gtp", priority: 100, reason: "Top Paste 锡膏层" },
   { ext: ".gbp", priority: 100, reason: "Bottom Paste 锡膏层" },
@@ -27,12 +29,13 @@ export type PasteSide = "top" | "bottom" | "unknown";
 
 /** 从文件名判断锡膏层属于哪一面 */
 export function detectPasteSide(filename: string): PasteSide {
-  const lower = filename.toLowerCase();
+  // ZIP folders describe the export location, not the layer's physical side.
+  const lower = filename.split(/[/\\]/).pop()!.toLowerCase();
   if (lower.endsWith(".gtp") || lower.endsWith(".gpt")) return "top";
   if (lower.endsWith(".gbp") || lower.endsWith(".gpb")) return "bottom";
   // KiCad 风格:xxx-F_Paste.gbr / xxx-B_Paste.gbr(单字母紧邻 paste)
-  if (/[-_.]f[^a-z]*paste/.test(lower) || /paste[^a-z]*[-_.]f(?![a-z])/.test(lower)) return "top";
-  if (/[-_.]b[^a-z]*paste/.test(lower) || /paste[^a-z]*[-_.]b(?![a-z])/.test(lower)) return "bottom";
+  if (/(^|[-_.])f[^a-z]*paste/.test(lower) || /paste[^a-z]*[-_.]f(?![a-z])/.test(lower)) return "top";
+  if (/(^|[-_.])b[^a-z]*paste/.test(lower) || /paste[^a-z]*[-_.]b(?![a-z])/.test(lower)) return "bottom";
   if (/(^|[^a-z])(top|front)([^a-z]|$)/.test(lower)) return "top";
   if (/(^|[^a-z])(bottom|back)([^a-z]|$)/.test(lower)) return "bottom";
   return "unknown";
@@ -53,11 +56,13 @@ export function detectPasteFiles(filenames: string[]): PasteCandidate[] {
   const candidates: PasteCandidate[] = [];
 
   for (const fn of filenames) {
-    const lower = fn.toLowerCase();
+    if (!isArchiveContentFile(fn)) continue;
+    const basename = fn.split(/[/\\]/).pop()!;
+    const lower = basename.toLowerCase();
     let best: PasteCandidate | null = null;
 
     for (const hint of FILENAME_HINTS) {
-      if (hint.pattern.test(fn)) {
+      if (hint.pattern.test(basename)) {
         if (!best || hint.priority > best.priority) {
           best = { filename: fn, priority: hint.priority, reason: hint.reason, side: detectPasteSide(fn) };
         }

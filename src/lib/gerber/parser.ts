@@ -13,6 +13,7 @@
 
 import { pointInPolygon } from "./geometry";
 import { splitBridgedOutline } from "./bridges";
+import { decodeGerberCoordinate } from './coordinate';
 
 export interface GerberFormat {
   /** [整数位数, 小数位数] */
@@ -21,11 +22,11 @@ export interface GerberFormat {
   zero: "L" | "T";
 }
 
-/** 图层变换(Gerber %LM/%LR/%LS,对后续坐标生效,可中途切换) */
+/** 光圈变换(Gerber §4.9 %LM/%LR/%LS,不改变文件坐标或板框路径) */
 export interface LayerTransform {
-  /** %LMX:关于 X 轴镜像(y → -y) */
+  /** %LMX:光圈局部 x → -x */
   mx: boolean;
-  /** %LMY:关于 Y 轴镜像(x → -x) */
+  /** %LMY:光圈局部 y → -y */
   my: boolean;
   /** %LR:旋转角度(度,逆时针) */
   rot: number;
@@ -53,7 +54,7 @@ export interface ParsedCommand {
   y?: number;
   i?: number;
   j?: number;
-  /** 本命令生效时的图层变换(恒等时省略) */
+  /** 本命令生效时的光圈变换(恒等时省略),不作用于轮廓坐标 */
   tf?: LayerTransform;
   /** 所属 %SR 块(块外命令省略);同块命令共享同一对象引用 */
   sr?: StepRepeat;
@@ -75,7 +76,7 @@ const ARC_MIN_SEGMENTS = 8;
 const ARC_MAX_SEGMENTS = 200;
 
 /**
- * %SR 的列/行间距换算为 mm。
+ * 读取 %SR 的列/行间距(文件 MO 单位;调用方再统一换算 mm)。
  * Gerber 规范要求按 FS 编码写整数(如 places=[4,5] 时 5999492 = 59.99492mm),
  * 但嘉立创/立创EDA 直接写十进制 mm(I59.99492)。无小数点时先按 FS 解释,
  * 结果不落在合理间距区间则退回 mm 解释。
@@ -170,7 +171,7 @@ export function parseGerber(text: string): ParseResult {
   let prevX = 0;
   let prevY = 0;
 
-  // 图层变换状态(%LM/%LR/%LS 可中途切换,快照到每条命令上)
+  // 光圈变换状态(%LM/%LR/%LS 可中途切换,快照到每条命令上)
   let tfMx = false;
   let tfMy = false;
   let tfRot = 0;
@@ -183,10 +184,21 @@ export function parseGerber(text: string): ParseResult {
   // %SR 步进重复状态;srInfo 对象在块内共享,块结束置空
   let srInfo: StepRepeat | null = null;
   let srGrid: { nx: number; ny: number } | undefined;
+  let abDepth = 0;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line || line.startsWith("G04")) continue;
+
+    // AB 定义中的图形属于光圈字典,不是板框;其局部状态也不应泄漏。
+    // 与锡膏解析器保持一致,暂不展开 block aperture 的 flash。
+    const abMatch = line.match(/^%AB\s*([A-Za-z0-9_]*)/i);
+    if (abMatch) {
+      if (abMatch[1]) abDepth++;
+      else abDepth = Math.max(0, abDepth - 1);
+      continue;
+    }
+    if (abDepth > 0) continue;
 
     // 单位 + 格式(必须在 trim 之前的原始行上匹配,因为指令以 % 开头)
     const fsMatch = rawLine.match(/%FS([LT])?AX(\d)(\d)Y(\d)(\d)\*%/);
@@ -199,8 +211,8 @@ export function parseGerber(text: string): ParseResult {
       units = moMatch[1].toUpperCase() === "MM" ? "mm" : "in";
     }
 
-    // 图层变换(同样在原始行上匹配;无参数 = 重置为恒等)
-    const lmMatch = rawLine.match(/%LM(XY|X|Y)?\*%/i);
+    // 光圈变换(标准 LMN = 无镜像;保留对旧式无参数重置的兼容)
+    const lmMatch = rawLine.match(/%LM(XY|X|Y|N)?\*%/i);
     if (lmMatch) {
       const m = (lmMatch[1] || "").toUpperCase();
       tfMx = m.includes("X");
@@ -255,17 +267,17 @@ export function parseGerber(text: string): ParseResult {
     if (/(?<!\d)G01(?!\d)/i.test(line)) arcModeCCW = undefined;
 
     // 解析 D01/D02/D03
-    const xMatch = line.match(/X(-?\d+)/);
-    const yMatch = line.match(/Y(-?\d+)/);
-    const iMatch = line.match(/I(-?\d+)/);
-    const jMatch = line.match(/J(-?\d+)/);
+    const xMatch = line.match(/X([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+    const yMatch = line.match(/Y([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+    const iMatch = line.match(/I([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
+    const jMatch = line.match(/J([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
     if (!xMatch && !yMatch) continue;
 
     // 缺省行为:Gerber spec 规定 X/Y 省略时保留上一次的值
-    const x = xMatch ? parseInt(xMatch[1], 10) : prevX;
-    const y = yMatch ? parseInt(yMatch[1], 10) : prevY;
-    const i = iMatch ? parseInt(iMatch[1], 10) : 0;
-    const j = jMatch ? parseInt(jMatch[1], 10) : 0;
+    const x = xMatch ? decodeGerberCoordinate(xMatch[1], format.places, format.zero) : prevX;
+    const y = yMatch ? decodeGerberCoordinate(yMatch[1], format.places, format.zero) : prevY;
+    const i = iMatch ? decodeGerberCoordinate(iMatch[1], format.places, format.zero) : 0;
+    const j = jMatch ? decodeGerberCoordinate(jMatch[1], format.places, format.zero) : 0;
 
     if (/D02\*/.test(line)) {
       commands.push({
@@ -368,29 +380,8 @@ export function extractOutline(
   let prevX = 0;
   let prevY = 0;
 
-  // 图层变换:对输出的 mm 坐标应用 缩放 → 镜像 → 旋转。
-  // 弧线在原生空间线性化后再统一变换(线性映射保圆弧,镜像翻转弧向自动正确)
-  const applyTf = (
-    x: number,
-    y: number,
-    tf?: { mx: boolean; my: boolean; rot: number; scale: number }
-  ): [number, number] => {
-    if (!tf) return [x, y];
-    let nx = x * tf.scale;
-    let ny = y * tf.scale;
-    if (tf.mx) ny = -ny; // %LMX:关于 X 轴镜像
-    if (tf.my) nx = -nx; // %LMY:关于 Y 轴镜像
-    if (tf.rot) {
-      const a = (tf.rot * Math.PI) / 180;
-      const c = Math.cos(a);
-      const s = Math.sin(a);
-      const rx = nx * c - ny * s;
-      const ry = nx * s + ny * c;
-      nx = rx;
-      ny = ry;
-    }
-    return [nx, ny];
-  };
+  // Gerber §4.9:LM/LR/LS 只变换光圈,不改变直线/圆弧/region
+  // 的路径坐标。板框使用路径中心线,因此始终保留原文件坐标。
 
   for (const cmd of commands) {
     if (cmd.type !== "op") continue;
@@ -400,7 +391,7 @@ export function extractOutline(
 
     if (cmd.op === "move") {
       // D02 = 提笔:结束当前轮廓,下一点开启新轮廓
-      cur = [applyTf(toMm(currX), toMm(currY), cmd.tf as never)];
+      cur = [[toMm(currX), toMm(currY)]];
       contours.push(cur);
       if (cmd.sr) repeatedContours.add(cur);
       prevX = currX;
@@ -427,7 +418,7 @@ export function extractOutline(
         const ccw = cmd.ccw === true;
 
         if (radius < 1e-9) {
-          cur.push(applyTf(x, y, cmd.tf as never));
+          cur.push([x, y]);
           continue;
         }
 
@@ -450,13 +441,11 @@ export function extractOutline(
 
         for (let s = 1; s <= segs; s++) {
           const a = startAngle + stepAngle * s;
-          cur.push(
-            applyTf(cx + radius * Math.cos(a), cy + radius * Math.sin(a), cmd.tf as never)
-          );
+          cur.push([cx + radius * Math.cos(a), cy + radius * Math.sin(a)]);
         }
         arcs++;
       } else {
-        cur.push(applyTf(x, y, cmd.tf as never));
+        cur.push([x, y]);
       }
       // 无论直线还是弧线,interpolate 后 prevX/prevY 更新到当前点(给下一条命令用)
       prevX = currX;
@@ -591,14 +580,14 @@ export function extractOutline(
       if (cmd.type !== "op") continue;
       const x = toMm(cmd.x as number);
       const y = toMm(cmd.y as number);
-      const [tx, ty] = applyTf(x, y, cmd.tf as never);
-      add(tx, ty);
+      add(x, y);
       if (cmd.op === "interpolate" && cmd.isArc) {
         const i = cmd.i !== undefined ? toMm(cmd.i as number) : 0;
         const j = cmd.j !== undefined ? toMm(cmd.j as number) : 0;
         if (Math.abs(i) > 1e-9 || Math.abs(j) > 1e-9) {
-          const [tcx, tcy] = applyTf(prevMmX + i, prevMmY + j, cmd.tf as never);
-          const r = Math.hypot(i, j) * Math.abs((cmd.tf as { scale?: number })?.scale ?? 1);
+          const tcx = prevMmX + i;
+          const tcy = prevMmY + j;
+          const r = Math.hypot(i, j);
           add(tcx - r, tcy - r);
           add(tcx + r, tcy + r);
         }

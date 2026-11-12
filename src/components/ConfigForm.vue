@@ -1,16 +1,40 @@
 <script setup lang="ts">
 import { computed, onBeforeMount, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useConfigStore, windowHalf, platterHalfXY, windowHalfXY, stencilLipMax, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
+import { ElSwitch } from "element-plus";
+import { DEFAULT, useConfigStore, windowHalf, platterHalfXY, windowHalfXY, stencilLipMax, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
 import ClampPlanPreview from "./ClampPlanPreview.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
+import ComponentReliefForm from './ComponentReliefForm.vue';
+import { ejectHoleLimits, resolveEjectHoleSize } from '../lib/eject-hole';
 
 const store = useConfigStore();
 const { t } = useI18n();
 const c = computed(() => store.config);
+// The legacy numeric field remains the switch; diameter is remembered separately.
+const ejectHoleEnabled = computed({
+  get: () => c.value.ejectSlotWidth > 0,
+  set: (enabled: boolean) => { c.value.ejectSlotWidth = enabled ? DEFAULT.ejectSlotWidth : 0; },
+});
+const ejectLimits = computed(() => ejectHoleLimits(c.value));
+const ejectSize = computed(() => resolveEjectHoleSize(ejectLimits.value, c.value.ejectHoleDiameter));
+const ejectSliderValue = computed(() => Math.max(ejectSize.value.min,
+  Math.min(ejectSize.value.max, ejectSize.value.diameter || Math.min(12, ejectSize.value.max))));
+function updateEjectDiameter(value: number | number[]) {
+  if (!ejectHoleEnabled.value || !ejectSize.value.available || Array.isArray(value) || !Number.isFinite(value)) return;
+  c.value.ejectHoleDiameter = Math.max(ejectSize.value.min, Math.min(ejectSize.value.max, Math.round(value * 2) / 2));
+}
+function resetEjectDiameter() { c.value.ejectHoleDiameter = 0; }
+const ejectHoleNote = computed(() => {
+  const size = ejectSize.value;
+  if (!size.available) return t('config.ejectSlotUnavailable');
+  if (!size.custom && !size.diameter) return t('config.ejectSlotAutoSmall');
+  if (size.clamped) return t('config.ejectSlotLimited', { diameter: size.diameter.toFixed(1) });
+  return t(size.custom ? 'config.ejectSlotManualHint' : 'config.ejectSlotAutoHint');
+});
 const warnings = computed(() => store.warnings);
 const stencilSizeReviewed = computed(() => store.stencilSizeReviewed);
 const showStencilSizeGuide = computed(() => !!c.value.gerberFilename && !stencilSizeReviewed.value);
@@ -235,6 +259,8 @@ function applyPreset(id: string) {
 
     </section>
 
+    <ComponentReliefForm />
+
     <!-- 钢网(基本:按板子自动推荐,可改成实际购买的钢网尺寸;长宽独立可矩形) -->
     <section ref="stencilSizeSection" class="parameter-section stencil-size-section" :aria-label="t('config.stencil')">
     <div class="section-label">{{ t('config.stencil') }}</div>
@@ -420,9 +446,36 @@ function applyPreset(id: string) {
           <el-input-number v-model="c.outerCornerRadius" :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%" />
         </div>
       </div>
-      <div class="field">
-        <label class="field-label">{{ t('config.ejectSlot') }}</label>
-        <el-input-number v-model="c.ejectSlotWidth" :min="0" :max="40" :step="1" :precision="0" size="small" style="width: 100%" />
+      <div class="field eject-hole-field">
+        <div class="eject-hole-heading">
+          <InlineHelp id="config-ejectSlot-help" :label="t('config.ejectSlot')" :text="t('config.ejectSlotHint')">
+            <span class="field-label">{{ t('config.ejectSlot') }}</span>
+          </InlineHelp>
+          <el-switch v-model="ejectHoleEnabled" :aria-label="t('config.ejectSlot')" />
+        </div>
+        <MotionCollapse :open="ejectHoleEnabled">
+          <div class="eject-size-control">
+            <div class="eject-size-heading">
+              <span>{{ t('config.ejectSlotDiameter') }}</span>
+              <div class="eject-size-value">
+                <strong><span>{{ ejectSize.diameter ? `Φ ${ejectSize.diameter.toFixed(1)}` : '—' }}</span><small>mm</small></strong>
+                <button type="button" class="eject-auto-button" :class="{ active: !ejectSize.custom }"
+                  :aria-pressed="!ejectSize.custom" @click="resetEjectDiameter">{{ t('config.ejectSlotAuto') }}</button>
+              </div>
+            </div>
+            <el-slider v-if="ejectSize.max > ejectSize.min" :model-value="ejectSliderValue" :min="ejectSize.min" :max="ejectSize.max"
+              :step="0.5" :disabled="!ejectSize.available"
+              :aria-label="t('config.ejectSlotDiameter')" :show-tooltip="true"
+              :format-tooltip="(value: number) => `Φ ${value.toFixed(1)} mm`" @update:model-value="updateEjectDiameter" />
+            <button v-else type="button" class="eject-auto-button eject-fixed-size" :disabled="!ejectSize.available"
+              :class="{ active: ejectSize.custom && ejectSize.diameter === ejectSize.min }"
+              :aria-pressed="ejectSize.custom && ejectSize.diameter === ejectSize.min"
+              :aria-label="`${t('config.ejectSlotDiameter')} Φ ${ejectSize.min.toFixed(1)} mm`"
+              @click="updateEjectDiameter(ejectSize.min)">Φ {{ ejectSize.min.toFixed(1) }} mm</button>
+            <p v-if="ejectSize.max > ejectSize.min || !ejectSize.available || ejectSize.clamped" class="eject-hole-note"
+              :class="{ 'is-limited': ejectSize.clamped || !ejectSize.available }">{{ ejectHoleNote }}</p>
+          </div>
+        </MotionCollapse>
       </div>
 
       <!-- 装配间隙 -->
@@ -661,6 +714,26 @@ function applyPreset(id: string) {
   line-height: 18px;
   margin-bottom: 4px;
 }
+
+.eject-hole-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.eject-hole-heading :deep(.inline-help) { min-width: 0; }
+.eject-hole-heading .field-label { margin-bottom: 0; }
+.eject-hole-heading :deep(.el-switch) { flex-shrink: 0; }
+.eject-size-control { padding: 9px 2px 1px; }
+.eject-size-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-secondary); font-size: 11px; }
+.eject-size-value { display: flex; align-items: center; gap: 10px; }
+.eject-size-value strong { display: inline-flex; align-items: baseline; gap: 4px; color: var(--interaction-ink); font-family: var(--font-family-metric); font-size: 14px; font-weight: var(--font-weight-strong); font-variant-numeric: tabular-nums; }
+.eject-size-value small { color: var(--text-tertiary); font-size: 10px; font-weight: var(--font-weight-default); }
+.eject-auto-button { padding: 3px 8px; border: 1px solid var(--surface-line); border-radius: 999px; background: transparent; color: var(--text-tertiary); font: inherit; font-size: 10px; cursor: pointer; transition: var(--control-transition); }
+.eject-auto-button.active, .eject-auto-button:hover { border-color: var(--interaction-border); background: var(--control-selection-surface); color: var(--interaction-ink); }
+.eject-auto-button:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 2px; }
+.eject-fixed-size { margin: 8px 0; color: var(--interaction-ink); }
+.eject-fixed-size:disabled { opacity: .5; cursor: not-allowed; }
+.eject-fixed-size:disabled:hover { border-color: var(--surface-line); background: transparent; }
+.eject-size-control :deep(.el-slider) { width: auto; margin: 4px 14px 2px; }
+.eject-size-control :deep(.el-slider__runway) { background: var(--parameter-slider-track); }
+.eject-hole-note { margin: 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.6; }
+.eject-hole-note.is-limited { color: var(--status-warning-default); }
 
 .auto-hint {
   display: flex;

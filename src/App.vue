@@ -144,7 +144,7 @@ const sidebarAnimating = ref(true);
 // 每个卡片的高度
 const CARD_MIN = 140;
 const CARD_MAX = 900;
-const CARD_COLLAPSED = 44;
+const CARD_COLLAPSED = 46;
 const cardHeights = ref<Record<string, number>>({
   python: 160,
   gerber: 300,
@@ -552,7 +552,7 @@ onBeforeUnmount(() => {
     </header>
 
     <main class="app-main" :class="{ 'is-sidebar-hidden': sidebarHidden }"
-      :style="{ '--preview-inset': (sidebarHidden ? 0 : visibleSidebarWidth + 5) + 'px' }">
+      :style="{ '--preview-inset': (sidebarHidden ? 0 : visibleSidebarWidth + 5) + 'px', '--slot-header-height': CARD_COLLAPSED + 'px' }">
       <div ref="sidebarShell" class="sidebar-shell" :class="{ 'is-animating': sidebarAnimating, 'is-hidden': sidebarHidden }"
         :style="{ width: (visibleSidebarWidth + 5) + 'px' }"
         :inert="sidebarHidden" :aria-hidden="sidebarHidden">
@@ -927,6 +927,8 @@ onBeforeUnmount(() => {
   gap: 12px;
   height: 100%;
   scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
+  scroll-padding-block: 16px 24px;
 }
 
 /* ===== Card Slots ===== */
@@ -945,12 +947,14 @@ onBeforeUnmount(() => {
 }
 .card-slot:hover { border-color: color-mix(in srgb, var(--text-tertiary) 15%, var(--surface-line)); }
 .card-slot:focus-within { border-color: color-mix(in srgb, var(--bg-brand) 24%, var(--surface-line)); }
+.card-slot:focus-within > .slot-header { background: color-mix(in srgb, var(--control-selection-surface) 36%, var(--surface-raised)); }
 .mode-card { animation: panel-arrive 300ms var(--ease-out) both; }
 #slot-screw.mode-card { animation-delay: 35ms; }
 @keyframes panel-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* Slot Header */
 .slot-header {
+  position: relative;
   width: 100%;
   border: none;
   text-align: left;
@@ -960,7 +964,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 8px;
   padding: 0 16px;
-  height: 44px;
+  height: var(--slot-header-height);
   background: var(--surface-card-heading);
   border-bottom: 1px solid transparent;
   cursor: pointer;
@@ -973,9 +977,11 @@ onBeforeUnmount(() => {
   color: var(--text-brand);
   background: color-mix(in srgb, var(--surface-well) 55%, var(--surface-raised));
 }
-.slot-header::after { content: ''; position: absolute; left: 16px; right: 16px; top: 43px; height: 1px; background: var(--surface-line); opacity: .45; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-out); }
+.slot-header::after { content: ''; position: absolute; left: 16px; right: 16px; bottom: 0; height: 1px; background: var(--surface-line); opacity: .45; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-out); }
 .slot-header[aria-expanded="false"]::after { opacity: 0; }
+.slot-header[aria-expanded="false"] .slot-step-dot:not(.is-done) { background: var(--surface-well); color: var(--text-tertiary); }
 .slot-header:hover .slot-title { color: var(--text-brand); }
+.slot-header:is(:hover, :focus-visible) .chevron { background: var(--control-selection-surface); color: var(--interaction-ink); }
 .slot-header:active:not(:disabled) .slot-label { scale: .99; translate: 1px 0; transition-duration: var(--motion-press); transition-timing-function: var(--ease-out); }
 .slot-header:active:not(:disabled) .chevron { scale: .9; transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-press) var(--ease-out); }
 
@@ -992,8 +998,8 @@ onBeforeUnmount(() => {
 }
 
 .slot-step-dot {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-inner);
   corner-shape: var(--corner-shape);
   display: flex;
@@ -1005,6 +1011,7 @@ onBeforeUnmount(() => {
   background: var(--bg-overlay-l2);
   color: var(--text-secondary);
   flex-shrink: 0;
+  transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
 }
 
 .slot-step-dot[data-step] {
@@ -1072,10 +1079,15 @@ onBeforeUnmount(() => {
 }
 
 .chevron {
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border-radius: var(--radius-inner);
+  corner-shape: var(--corner-shape);
   color: var(--text-tertiary);
   flex-shrink: 0;
   scale: 1;
-  transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-release) var(--ease-settle);
+  transition: transform var(--motion-panel) var(--ease-out), scale var(--motion-release) var(--ease-settle), background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
 }
 
 .chevron.is-collapsed {
@@ -1109,6 +1121,7 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 16px;
+  overscroll-behavior-y: contain;
 }
 
 /* Drag Handle */

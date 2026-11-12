@@ -195,8 +195,7 @@ def test_image_clear_polarity_restores_stencil_material(side):
     dark_volume = jg.build_stencil(params, side).volume
     params[key].append(pad(1, "C"))
     clear_volume = jg.build_stencil(params, side).volume
-    # Steel below the pocket is thickness - 0.05 mm in the current geometry.
-    assert clear_volume - dark_volume == pytest.approx(4 * (0.3 - 0.05), abs=1e-5)
+    assert clear_volume - dark_volume == pytest.approx(4 * params['stencil_thickness'], abs=1e-5)
 
 
 def _paste_pad(geom, kind="circle", polarity="D"):
@@ -228,7 +227,7 @@ def test_small_paste_openings_are_kept_by_default(side):
     params[key][-1]["padRole"] = "component"
     opened_volume = jg.build_stencil(params, side).volume
     expected_area = sum(g.simplify(0.02, preserve_topology=True).area for g in shapes)
-    assert blank_volume - opened_volume == pytest.approx(expected_area * 0.25, abs=1e-5)
+    assert blank_volume - opened_volume == pytest.approx(expected_area * params['stencil_thickness'], abs=1e-5)
     params["stencil_filter_test_points"] = False
     assert jg.build_stencil(params, side).volume == pytest.approx(opened_volume, abs=1e-5)
 
@@ -272,7 +271,7 @@ def test_default_filter_is_used_and_can_be_disabled_during_stencil_generation():
     filtered = jg.build_stencil(params).volume
     params["stencil_filter_test_points"] = False
     original = jg.build_stencil(params).volume
-    assert filtered - original == pytest.approx(circle.simplify(0.02).area * 0.25, abs=1e-5)
+    assert filtered - original == pytest.approx(circle.simplify(0.02).area * params['stencil_thickness'], abs=1e-5)
 
 
 @pytest.mark.parametrize("angle", [0, 37, 90])
@@ -321,7 +320,7 @@ def test_x2_roles_are_applied_to_the_generated_stencil(side):
     opened = jg.build_stencil(params, side).volume
     pad["padRole"] = "testpoint"
     blank = jg.build_stencil(params, side).volume
-    assert blank - opened == pytest.approx(geom.simplify(0.02).area * 0.25, abs=1e-5)
+    assert blank - opened == pytest.approx(geom.simplify(0.02).area * params['stencil_thickness'], abs=1e-5)
     params["stencil_filter_test_points"] = False
     assert jg.build_stencil(params, side).volume == pytest.approx(opened, abs=1e-5)
 
@@ -519,7 +518,7 @@ def test_probe_test_pads_near_components_are_filtered_and_respect_diameter(side)
     params['stencil_filter_test_points'] = False
     assert jg.inspect_stencil(params, side)['summary']['filteredPads'] == 0
     restored_volume = jg.build_stencil(params, side).volume
-    assert filtered_volume - restored_volume == pytest.approx(circle.simplify(.02).area * .25, abs=1e-5)
+    assert filtered_volume - restored_volume == pytest.approx(circle.simplify(.02).area * params['stencil_thickness'], abs=1e-5)
     probe.pop('padRole'); probe.pop('padRoleSource')
     params['stencil_filter_test_points'] = True
     # No metadata: the close neighbour still protects an ambiguous round pad.
@@ -582,3 +581,373 @@ def test_manually_opened_pad_still_uses_shrink_and_grid_settings():
     assert not jg.inspect_stencil(params, 'bottom')['openings']
     pad.pop('apertureOverride')
     assert jg.inspect_stencil(params, 'bottom')['summary']['filteredPads'] == 1
+
+
+def _assert_inspection_and_solid_apertures(params, side, expected):
+    """Check both the shared 2D pipeline and actual OCC steel, including mirroring."""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.gp import gp_Pnt
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+    from shapely.affinity import scale
+
+    oriented = scale(expected, xfact=1, yfact=-1, origin=(0, 0)) if side == 'top' else expected
+    report = jg.inspect_stencil(params, side)
+    assert _inspection_geom(report['openings']).symmetric_difference(oriented).area < 1e-5
+    model = jg.build_stencil(params, side)
+    assert model.is_valid
+    blank_params = dict(params, **{f'stencil_pads_{side}': []})
+    blank = jg.build_stencil(blank_params, side)
+    assert blank.volume - model.volume == pytest.approx(expected.area * params['stencil_thickness'], abs=1e-5)
+
+    # Probe away from boundaries and the upper PCB pocket. This verifies that
+    # the exported solid has material in islands/gaps, not merely matching area.
+    classifiers = [BRepClass3d_SolidClassifier(solid.wrapped) for solid in model.solids()]
+    for x in (-4.5, -3.5, -2.5, -1.5, -.35, .35, 1.5, 2.5, 3.5, 4.5):
+        for original_y in (2.35, 2.75, 3.25, 3.65):
+            y = -original_y if side == 'top' else original_y
+            point = ShapelyPoint(x, y)
+            if oriented.boundary.distance(point) < 1e-5:
+                continue
+            inside = False
+            for classifier in classifiers:
+                classifier.Perform(gp_Pnt(x, y, .1), 1e-6)
+                inside |= classifier.State() in (TopAbs_IN, TopAbs_ON)
+            assert inside == (not oriented.contains(point)), (side, x, y)
+
+
+def _topology_stencil_params(side, pads):
+    return dict(BASE_PARAMS, pcb_size_x=20, pcb_size_y=20,
+                stencil_size=0, stencil_size_x=0, stencil_size_y=0,
+                stencil_frame_width=4, stencil_thickness=.3, pad_shrink=0,
+                stencil_filter_test_points=False, stencil_stagger=False, stencil_grid=False,
+                pry_notch_sides=[], **{f'stencil_pads_{side}': pads})
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('topology', ['hole', 'multipart', 'local_clear'])
+def test_square_conversion_preserves_macro_holes_and_separate_openings(side, topology):
+    from shapely.ops import unary_union
+    outer = shapely_box(-4, 2, 4, 4)
+    if topology == 'hole':
+        expected = outer.difference(shapely_box(-3, 2.5, 3, 3.5))
+        pad = _paste_pad(expected, 'macro')
+    elif topology == 'multipart':
+        components = [shapely_box(-4, 2, -2, 4), shapely_box(2, 2, 4, 4)]
+        expected = unary_union(components)
+        pad = dict(type='macro', polarity='D', parts=[_paste_pad(g)['parts'][0] for g in components])
+    else:
+        cut = shapely_box(-2, 1, 2, 5)
+        expected = outer.difference(cut)
+        pad = _paste_pad(outer, 'macro')
+        pad['parts'].append(dict(_paste_pad(cut)['parts'][0], polarity='C'))
+    _assert_inspection_and_solid_apertures(_topology_stencil_params(side, [pad]), side, expected)
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('topology', ['hole', 'multipart', 'rounded'])
+def test_clear_masks_keep_their_shape_without_expanding_restored_material(side, topology):
+    from shapely.ops import unary_union
+    outer = shapely_box(-5, 1, 5, 5)
+    if topology == 'hole':
+        clear = shapely_box(-4, 2, 4, 4).difference(shapely_box(-3, 2.5, 3, 3.5))
+        clear_pad = _paste_pad(clear, 'macro', 'C')
+    elif topology == 'multipart':
+        parts = [shapely_box(-4, 2, -2, 4), shapely_box(2, 2, 4, 4)]
+        clear = unary_union(parts)
+        clear_pad = dict(type='macro', polarity='C', parts=[_paste_pad(g)['parts'][0] for g in parts])
+    else:
+        clear = shapely_box(-3, 2.8, 3, 3.2).buffer(.8, resolution=16)
+        clear_pad = _paste_pad(clear, 'roundrect', 'C')
+    expected = outer.difference(clear.simplify(.02, preserve_topology=True))
+    params = _topology_stencil_params(side, [_paste_pad(outer, 'rect'), clear_pad])
+    _assert_inspection_and_solid_apertures(params, side, expected)
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('angle', [0, 37])
+def test_simple_dark_long_round_pad_still_becomes_rotated_square_cornered_opening(side, angle):
+    rounded = shapely_box(-3, -.2, 3, .2).buffer(.8, resolution=16)
+    rounded = shapely_translate(shapely_rotate(rounded, angle), yoff=3)
+    expected = rounded.minimum_rotated_rectangle
+    params = _topology_stencil_params(side, [_paste_pad(rounded, 'roundrect')])
+    _assert_inspection_and_solid_apertures(params, side, expected)
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('sequence', ['clear_dark', 'dark_clear_dark', 'dark_clear_dark_clear'])
+def test_image_exposure_order_matches_inspection_and_manufactured_steel(side, sequence):
+    large = shapely_box(-5, -5, 5, 5)
+    middle = shapely_box(-3, -3, 3, 3)
+    small = shapely_box(-1, -1, 1, 1)
+    if sequence == 'clear_dark':
+        pads = [_paste_pad(small, 'rect', 'C'), _paste_pad(small, 'rect')]
+        expected = small
+    else:
+        pads = [_paste_pad(large, 'rect'), _paste_pad(middle, 'rect', 'C'), _paste_pad(small, 'rect')]
+        expected = large.difference(middle).union(small)
+        if sequence == 'dark_clear_dark_clear':
+            last = shapely_box(0, -.5, 1, .5)
+            pads.append(_paste_pad(last, 'rect', 'C'))
+            expected = expected.difference(last)
+    params = _topology_stencil_params(side, pads)
+    _assert_exposure_masks(params, side, expected)
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('sequence', ['clear_dark', 'dark_clear_dark', 'clear_with_hole'])
+def test_macro_exposure_order_respects_later_dark_parts_and_clear_holes(side, sequence):
+    large = shapely_box(-5, -5, 5, 5)
+    middle = shapely_box(-3, -3, 3, 3)
+    small = shapely_box(-1, -1, 1, 1)
+    if sequence == 'clear_dark':
+        parts = [_paste_pad(small, 'rect', 'C')['parts'][0], _paste_pad(small, 'rect')['parts'][0]]
+        parts[0] = dict(parts[0], polarity='C')
+        expected = small
+    else:
+        cut = middle if sequence != 'clear_with_hole' else middle.difference(small)
+        refill = small if sequence != 'clear_with_hole' else shapely_box(2, 2, 2.5, 2.5)
+        parts = [_paste_pad(large, 'rect')['parts'][0], dict(_paste_pad(cut, 'rect')['parts'][0], polarity='C'),
+                 _paste_pad(refill, 'rect')['parts'][0]]
+        expected = large.difference(cut).union(refill)
+    pad = dict(type='macro', polarity='D', parts=parts)
+    _assert_exposure_masks(_topology_stencil_params(side, [pad]), side, expected)
+
+
+def _assert_exposure_masks(params, side, expected, original=None):
+    oriented = lambda geom: jg.shapely_scale_aff(geom, xfact=1, yfact=-1, origin=(0, 0)) if side == 'top' else geom
+    report = jg.inspect_stencil(params, side)
+    assert _inspection_geom(report['original']).symmetric_difference(oriented(expected if original is None else original)).area < 1e-5
+    assert _inspection_geom(report['openings']).symmetric_difference(oriented(expected)).area < 1e-5
+    model = jg.build_stencil(params, side)
+    steel = model._fast_stl[0][0][0]
+    frame = jg.compute_frame_poly(params)
+    if side == 'top':
+        frame = jg.shapely_scale_aff(frame, xfact=1, yfact=-1, origin=(0, 0))
+    assert frame.difference(oriented(expected)).symmetric_difference(steel).area < 1e-5
+    assert steel.difference(frame).area < 1e-6
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_image_exposure_preserves_multipart_clear_holes_and_later_refill(side):
+    large = shapely_box(-5, -5, 5, 5)
+    hole = shapely_box(-.5, -.5, .5, .5)
+    ring = shapely_box(-2, -2, 2, 2).difference(hole)
+    remote = shapely_box(3, -1, 4, 1)
+    refill = shapely_box(1, 1, 1.5, 1.5)
+    clear = dict(type='macro', polarity='C', parts=[_paste_pad(g)['parts'][0] for g in [ring, remote]])
+    pads = [_paste_pad(large, 'rect'), clear, _paste_pad(refill, 'rect')]
+    expected = large.difference(ring.union(remote)).union(refill)
+    _assert_exposure_masks(_topology_stencil_params(side, pads), side, expected)
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_manual_closures_stay_final_after_image_refill_and_filtered_indices_remain_stable(side):
+    square = shapely_box(-1, -1, 1, 1)
+    closed = dict(_paste_pad(square, 'rect'), apertureOverride='closed')
+    refill = dict(_paste_pad(square, 'rect'), apertureOverride='open')
+    testpoint = dict(_paste_pad(ShapelyPoint(4, 0).buffer(.4, resolution=16)), padRole='testpoint')
+    pads = [_paste_pad(square, 'rect', 'C'), closed, testpoint, refill]
+    params = dict(_topology_stencil_params(side, pads), stencil_filter_test_points=True)
+    report = jg.inspect_stencil(params, side)
+    assert [pad['sourceIndex'] for pad in report['pads']] == [1, 2, 3]
+    assert [pad['sourceIndex'] for pad in report['filtered']] == [2]
+    assert [pad['decision'] for pad in report['pads']] == ['closed', 'auto', 'open']
+    assert report['openings'] == []
+    model = jg.build_stencil(params, side)
+    steel = model._fast_stl[0][0][0]
+    frame = jg.compute_frame_poly(params)
+    if side == 'top':
+        frame = jg.shapely_scale_aff(frame, xfact=1, yfact=-1, origin=(0, 0))
+    assert steel.symmetric_difference(frame).area < 1e-5
+
+
+def test_stl_writer_false_raises_and_worker_removes_partial_file(monkeypatch, tmp_path, capsys):
+    import io
+    import json
+    import sys
+
+    class FailingWriter:
+        def Write(self, shape, output):
+            from pathlib import Path
+            Path(output).write_bytes(b'partial mesh')
+            return False
+
+    monkeypatch.setattr(jg, 'StlAPI_Writer', FailingWriter)
+    monkeypatch.setattr(jg, 'build_part', lambda *_: jg.rounded_square_solid(10, 2, 0))
+    direct = tmp_path / 'direct.stl'
+    with pytest.raises(RuntimeError, match='STL 导出失败'):
+        jg.generate_to_file({}, 'insert', direct)
+
+    output = tmp_path / 'worker.stl'
+    requests = [dict(id=1, cmd='generate', part='insert', params={}, output=str(output)),
+                dict(id=2, cmd='ping')]
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join(map(json.dumps, requests))))
+    jg.serve()
+    responses = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert not responses[0]['ok']
+    assert 'STL 导出失败' in responses[0]['error']
+    assert 'path' not in responses[0]
+    assert not output.exists()
+    assert responses[1]['pong']
+
+
+def test_directory_stl_target_fails_in_worker_and_cli_without_deleting_directory(monkeypatch, tmp_path, capsys):
+    import io
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    output = tmp_path / 'destination.stl'
+    output.mkdir()
+    marker = output / 'keep.txt'
+    marker.write_text('existing user content', encoding='utf-8')
+    requests = [dict(id=1, cmd='generate', part='insert', params=BASE_PARAMS, output=str(output)),
+                dict(id=2, cmd='ping')]
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join(map(json.dumps, requests))))
+    jg.serve()
+    responses = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert not responses[0]['ok']
+    assert 'STL 导出失败' in responses[0]['error']
+    assert 'path' not in responses[0]
+    assert responses[1]['pong']
+
+    input_file = tmp_path / 'params.json'
+    input_file.write_text(json.dumps(BASE_PARAMS), encoding='utf-8')
+    process = subprocess.run([sys.executable, '-B', str(Path(jg.__file__).resolve()),
+                              '--input', str(input_file), '--output', str(output), '--part', 'insert'],
+                             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
+    assert process.returncode != 0
+    assert '[ok]' not in process.stderr
+    assert 'RuntimeError' in process.stderr
+    assert marker.read_text(encoding='utf-8') == 'existing user content'
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('thickness', [.05, .3])
+def test_stencil_requested_thickness_matches_occ_floor_and_fast_stl(side, thickness, tmp_path):
+    import numpy as np
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.gp import gp_Pnt
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+
+    aperture = shapely_box(-1, 2, 1, 4)
+    params = dict(_topology_stencil_params(side, [_paste_pad(aperture, 'rect')]),
+                  stencil_thickness=thickness)
+    report = jg.inspect_stencil(params, side)
+    assert _inspection_geom(report['openings']).area == pytest.approx(4)
+    model = jg.build_stencil(params, side)
+    blank = jg.build_stencil(dict(params, **{f'stencil_pads_{side}': []}), side)
+    assert model.is_valid
+    assert blank.volume - model.volume == pytest.approx(4 * thickness, abs=1e-5)
+
+    layers, ring_solids = model._fast_stl
+    assert len(layers) == 1
+    assert layers[0][1:] == (0, thickness)
+    # The ring starts exactly where the thin layer ends, and both are solid
+    # immediately around that interface outside the PCB pocket.
+    for shape in ring_solids:
+        assert jg.bd.Part(shape).bounding_box().min.Z == pytest.approx(thickness)
+    classifiers = [BRepClass3d_SolidClassifier(solid.wrapped) for solid in model.solids()]
+
+    def inside(x, y, z):
+        for classifier in classifiers:
+            classifier.Perform(gp_Pnt(x, y, z), 1e-6)
+            if classifier.State() in (TopAbs_IN, TopAbs_ON):
+                return True
+        return False
+
+    sign = -1 if side == 'top' else 1
+    assert inside(3.17, 1.83 * sign, thickness - .001)
+    assert not inside(3.17, 1.83 * sign, thickness + .001)
+    assert not inside(0, 3 * sign, thickness / 2)
+    assert inside(12, 0, thickness - .001)
+    assert inside(12, 0, thickness + .001)
+
+    output = tmp_path / f'{side}-{thickness}.stl'
+    jg.generate_to_file(params, f'stencil_{side}', output)
+    data = output.read_bytes()
+    assert data.startswith(b'mason fast-stl')
+    dtype = np.dtype([('normal', '<f4', (3,)), ('verts', '<f4', (3, 3)), ('attr', '<u2')])
+    triangles = np.frombuffer(data, dtype=dtype, offset=84)['verts'].astype(float)
+    # STL is Y-up. Intersect a vertical line inside the pocket, away from the
+    # opening, to verify the exported floor is exactly 0..requested thickness.
+    a, b, c = triangles[:, 0], triangles[:, 1], triangles[:, 2]
+    ux, uz = b[:, 0] - a[:, 0], b[:, 2] - a[:, 2]
+    vx, vz = c[:, 0] - a[:, 0], c[:, 2] - a[:, 2]
+    determinant = ux * vz - uz * vx
+    projected = np.abs(determinant) > 1e-10
+    indices = np.flatnonzero(projected)
+    dx, dz = 3.17 - a[projected, 0], -1.83 * sign - a[projected, 2]
+    u = (dx * vz[projected] - dz * vx[projected]) / determinant[projected]
+    v = (ux[projected] * dz - uz[projected] * dx) / determinant[projected]
+    hit = (u >= 0) & (v >= 0) & (u + v <= 1)
+    heights = (a[indices, 1] + u * (b[indices, 1] - a[indices, 1])
+               + v * (c[indices, 1] - a[indices, 1]))[hit]
+    assert sorted(set(np.round(heights, 6))) == pytest.approx([0, thickness])
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+@pytest.mark.parametrize('case', ['two_dark', 'three_dark', 'overlapping_clear', 'manual_closed'])
+def test_stagger_only_moves_dark_pins_and_preserves_clear_masks(side, case):
+    from shapely.ops import unary_union
+    from shapely.affinity import scale
+
+    count = 2 if case == 'two_dark' else 3
+    xs = [-.4, .4] if count == 2 else [-.4, 0, .4]
+    source_dark = [shapely_box(x - .1, 2.9, x + .1, 3.1) for x in xs]
+    clear = shapely_box(-.1, 2.9, .1, 3.1)
+    pads = [_paste_pad(g, 'rect') for g in source_dark]
+    if case == 'manual_closed':
+        # A closed source pad is a stationary restoration mask, not a pin.
+        pads[1]['apertureOverride'] = 'closed'
+    elif case != 'three_dark':
+        pads.insert(1, _paste_pad(clear, 'rect', 'C'))
+    params = dict(_topology_stencil_params(side, pads), stencil_stagger=True,
+                  stencil_stagger_gap=.55, stencil_stagger_offset=.15)
+
+    orient = lambda g: scale(g, xfact=1, yfact=-1, origin=(0, 0)) if side == 'top' else g
+    oriented_dark = [orient(g) for g in source_dark]
+    stationary_clear = [] if case == 'three_dark' else [orient(clear)]
+    if case == 'manual_closed':
+        shifted = [oriented_dark[0], oriented_dark[2]]
+    elif count == 2:
+        shifted = oriented_dark
+    else:
+        shifted = [shapely_translate(g, yoff=.15 if index == 1 else -.15)
+                   for index, g in enumerate(oriented_dark)]
+    if case == 'manual_closed':
+        expected = unary_union(shifted).difference(unary_union(stationary_clear))
+    elif stationary_clear:
+        # The LPC object is between the first and remaining dark objects. It
+        # stays stationary and can erase only the first, never later refills.
+        expected = shifted[0].difference(stationary_clear[0]).union(unary_union(shifted[1:]))
+    else:
+        expected = unary_union(shifted)
+
+    _, pocket = jg._stencil_board_polys(params, side)
+    actual_dark, actual_clear, _, _ = jg._prepare_stencil_pads(params, side, pocket)
+    actual_masks = unary_union(actual_clear)
+    final_closures = stationary_clear if case == 'manual_closed' else []
+    assert actual_masks.symmetric_difference(unary_union(final_closures)).area < 1e-8
+    assert unary_union(actual_dark).difference(actual_masks).symmetric_difference(expected).area < 1e-8
+    assert _inspection_geom(jg.inspect_stencil(params, side)['openings']).symmetric_difference(expected).area < 1e-5
+    # The shared assertion accepts pre-mirror input; expected here is already
+    # in manufacturing coordinates because stagger uses that view's normal.
+    canonical_expected = orient(expected)
+    _assert_inspection_and_solid_apertures(params, side, canonical_expected)
+
+
+@pytest.mark.parametrize('gap, shifted', [(.5, False), (.51, True)])
+def test_stagger_neighbor_cells_preserve_strict_gap_and_negative_coordinates(gap, shifted):
+    # Exact binary coordinates exercise cell boundaries on both sides of zero;
+    # an edge at the threshold must not connect otherwise isolated pins.
+    dark = [shapely_box(x - .0625, .0625, x + .0625, .1875) for x in (-.5, 0, .5)]
+    clear = shapely_box(-.3125, .0625, -.1875, .1875)
+    pads = [(dark[0], 'D'), (clear, 'C'), (dark[1], 'D'), (dark[2], 'D')]
+    actual = jg._stagger_pad_geoms(pads, gap, .15)
+    assert actual[1][0] is clear
+    assert actual[1][1] == 'C'
+    for index, source in enumerate(dark):
+        target = shapely_translate(source, yoff=.15 if index == 1 else -.15) if shifted else source
+        assert actual[[0, 2, 3][index]][0].equals_exact(target, 1e-12)

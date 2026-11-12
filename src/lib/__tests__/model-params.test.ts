@@ -63,6 +63,13 @@ describe("CAD parameter boundary", () => {
     // Cover thickness also controls the tray's locating-post height.
     expect(scadPartHash({ ...params, top_cover_height: 9 }, "insert")).not.toBe(scadPartHash(params, "insert"));
   });
+  it("invalidates the tray mesh when the eject hole is switched off, keeping the base and cover", () => {
+    const params = buildScadParams(useConfigStore().config);
+    const disabled = { ...params, eject_slot_width: 0 };
+    expect(scadPartHash(disabled, "insert")).not.toBe(scadPartHash(params, "insert"));
+    expect(scadPartHash(disabled, "base")).toBe(scadPartHash(params, "base"));
+    expect(scadPartHash(disabled, "cover")).toBe(scadPartHash(params, "cover"));
+  });
   it("keeps jig meshes when only stencil apertures change and keeps the opposite stencil side", () => {
     const store = useConfigStore();
     const before = buildScadParams(store.config);
