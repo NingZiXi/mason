@@ -60,6 +60,10 @@ jobs:
       - name: Test Python server smoke checker
         run: python -m unittest discover -s scripts -p test_check_python_server.py
 
+      - name: Test macOS bundle helpers before building
+        if: matrix.platform == 'macos-latest'
+        run: python3 -m unittest discover -s scripts -p test_check_macos_bundle.py
+
       - name: Validate release version and signing key
         shell: bash
         env:
@@ -94,7 +98,6 @@ jobs:
       - name: Verify macOS app and disk image signature integrity
         if: matrix.platform == 'macos-latest'
         run: |
-          python3 -m unittest discover -s scripts -p test_check_macos_bundle.py
           python3 scripts/check_macos_bundle.py \
             --app src-tauri/target/release/bundle/macos/Mason.app \
             --archive src-tauri/target/release/bundle/macos/Mason.app.tar.gz \

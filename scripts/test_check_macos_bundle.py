@@ -19,7 +19,9 @@ class MacOSBundleCheckTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # macOS exposes /var through /private/var; compare canonical fixture
+        # paths with the scanner's resolved paths on every platform.
+        self.root = Path(self.temp.name).resolve()
 
     def write(self, name, data):
         path = self.root / name
