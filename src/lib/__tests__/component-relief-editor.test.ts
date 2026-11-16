@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canAppendReliefVertex, createReliefPolygon, drawReliefRegion, fitReliefView, isValidReliefPolygon, moveReliefRegion, reliefHandleSize,
+import { canAppendReliefVertex, createReliefPolygon, drawReliefRegion, fitReliefView, isValidReliefPolygon, moveReliefRegion, reliefDepthLabelLayout, reliefDepthOpacity, reliefHandleSize,
   reliefScreenPoint, reliefRegionIntersectsBoard, reliefRegionsInMarquee, resizeReliefRegion, updateReliefDimensions, updateReliefVertex,
   zoomReliefView } from '../component-relief-editor';
 import { MAX_RELIEF_VERTICES } from '../component-relief';
@@ -7,6 +7,57 @@ import type { ComponentReliefRegion } from '../component-relief';
 
 const bounds = { minX: -25, minY: -15, maxX: 25, maxY: 15 };
 const region = { id: 'r1', shape: 'rect' as const, x: 5, y: 3, width: 8, height: 6 };
+
+describe('component relief depth display', () => {
+  it('uses a stable, bounded depth scale and ignores retained blind depth for through cuts', () => {
+    const opacities = [.5, 2, 8, 20].map(depth => reliefDepthOpacity({ ...region, depth }, 3));
+    expect(opacities).toEqual([...opacities].sort((a, b) => a - b));
+    expect(opacities[0]).toBeGreaterThan(.12);
+    expect(opacities[3]).toBeCloseTo(.28);
+    expect(reliefDepthOpacity(region, 3)).toBe(reliefDepthOpacity({ ...region, depth: 3 }, 8));
+    expect(reliefDepthOpacity({ ...region, depth: 99 }, 3)).toBe(opacities[3]);
+    expect(reliefDepthOpacity({ ...region, through: true, depth: 2 }, 3))
+      .toBe(reliefDepthOpacity({ ...region, through: true, depth: 20 }, 3));
+  });
+
+  it('keeps centered labels upright and mirrors their board coordinates for each side', () => {
+    const view = { x: -20, y: -20, width: 40, height: 40 };
+    for (const side of ['top', 'bottom'] as const) {
+      const label = reliefDepthLabelLayout(region, '1 · 2.0 mm', side, view, .05);
+      expect(label.outside).toBe(false);
+      expect(label.x + label.width / 2).toBeCloseTo(region.x);
+      expect(label.y + label.height / 2).toBeCloseTo(side === 'top' ? -region.y : region.y);
+    }
+  });
+
+  it('keeps badges at eleven screen pixels after zooming, resizing or either meet-fit axis', () => {
+    const pocket = { ...region, x: 0, y: 0, width: 100, height: 100 };
+    for (const [width, height, viewportWidth, viewportHeight] of [[200, 20, 600, 400], [20, 200, 600, 400],
+      [100, 100, 300, 200], [50, 50, 600, 400]]) {
+      const view = { x: -width / 2, y: -height / 2, width, height };
+      const unit = reliefHandleSize(view, viewportWidth, viewportHeight) / 8;
+      const label = reliefDepthLabelLayout(pocket, '1 · 2.0 mm', 'top', view, unit);
+      expect(label.fontSize / unit).toBeCloseTo(11);
+      expect(label.height / unit).toBeCloseTo(22);
+    }
+  });
+
+  it('places tiny-pocket badges beyond their handles and avoids neighboring badges when space permits', () => {
+    const view = { x: -10, y: -10, width: 20, height: 20 };
+    const tiny = { ...region, x: 0, y: 0, width: .5, height: .5 };
+    const first = reliefDepthLabelLayout(tiny, '1 · 2.0 mm', 'top', view, .05);
+    const second = reliefDepthLabelLayout(tiny, '2 · 贯穿', 'top', view, .05, [first]);
+    expect(first.outside).toBe(true);
+    expect(first.y + first.height).toBeLessThan(-tiny.height / 2 - .4);
+    expect(first.anchorY).toBe(-tiny.height / 2);
+    expect(second.y >= first.y + first.height || second.y + second.height <= first.y).toBe(true);
+    const edge = reliefDepthLabelLayout({ ...tiny, x: 9.8, y: 9.8 }, '3 · 20.0 mm', 'top', view, .05);
+    expect(edge.x).toBeGreaterThan(view.x);
+    expect(edge.y).toBeGreaterThan(view.y);
+    expect(edge.x + edge.width).toBeLessThan(view.x + view.width);
+    expect(edge.y + edge.height).toBeLessThan(view.y + view.height);
+  });
+});
 
 describe('component relief marquee selection', () => {
   it('selects a subset in input order in either drag direction without modifying region data', () => {

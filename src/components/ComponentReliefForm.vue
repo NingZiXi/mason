@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, watch } from 'vue';
-import { ElSwitch } from 'element-plus';
+import { computed, defineAsyncComponent, ref, useId, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { useI18n } from 'vue-i18n';
 import { DEFAULT, useConfigStore } from '../stores/config';
@@ -14,6 +13,7 @@ import ComponentReliefPreview from './ComponentReliefPreview.vue';
 const ComponentReliefEditor = defineAsyncComponent(() => import('./ComponentReliefEditor.vue'));
 const store = useConfigStore();
 const { t } = useI18n();
+const entryId = useId();
 const c = computed(() => store.config);
 const ejectHoleEnabled = computed({
   get: () => c.value.ejectSlotWidth > 0,
@@ -45,15 +45,32 @@ watch(() => [c.value.componentReliefEnabled, c.value.pcbOutlinePoints, c.value.a
 </script>
 
 <template>
-  <section v-if="c.appMode === 'jig' && c.pcbOutlinePoints.length >= 3" class="relief-section" :aria-label="t('relief.title')">
+  <section v-if="c.appMode === 'jig' && c.pcbOutlinePoints.length >= 3" class="relief-section" :class="{ 'is-enabled': c.componentReliefEnabled }" :aria-label="t('relief.title')">
     <div class="section-heading">
       <InlineHelp id="component-relief-help" :label="t('relief.title')" :text="`${t('relief.enableHint')} ${t('relief.regionAllowanceHint')}`">
         <span class="section-title">{{ t('relief.title') }}</span>
       </InlineHelp>
-      <el-switch v-model="c.componentReliefEnabled" :aria-label="t('relief.enabled')" />
+      <span class="entry-state">{{ t(c.componentReliefEnabled ? 'relief.entryOn' : 'relief.entryOff') }}</span>
     </div>
-    <p class="enable-label">{{ t('relief.enabled') }}</p>
-    <MotionCollapse :open="c.componentReliefEnabled">
+    <button type="button" class="relief-entry" role="switch" :aria-checked="c.componentReliefEnabled"
+      :aria-label="t('relief.title')" :aria-describedby="`${entryId}-hint`" :aria-controls="`${entryId}-settings`"
+      @click="c.componentReliefEnabled = !c.componentReliefEnabled">
+      <span class="entry-art" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="32" height="32">
+          <path class="entry-board" d="m5 15 11-6 11 6-11 6z" />
+          <path class="entry-tray" d="m5 21 11 6 11-6M5 24l11 6 11-6" />
+          <path class="entry-component" d="m11 15 5-2.7 5 2.7-5 2.7zM11 15v3l5 2.7 5-2.7v-3M16 17.7v3" />
+        </svg>
+      </span>
+      <span class="entry-copy">
+        <span class="entry-title">{{ t('relief.enabled') }}</span>
+        <span :id="`${entryId}-hint`" class="entry-hint">{{ t('relief.entryHint') }}</span>
+      </span>
+      <span class="entry-switch" aria-hidden="true"><span class="entry-thumb">
+        <svg viewBox="0 0 12 12" width="12" height="12"><path d="m3 6 2 2 4-4" /></svg>
+      </span></span>
+    </button>
+    <MotionCollapse :id="`${entryId}-settings`" :open="c.componentReliefEnabled">
       <div class="relief-settings">
         <div class="side-heading">
           <span class="field-label">{{ t('relief.printSide') }}</span>
@@ -97,10 +114,32 @@ watch(() => [c.value.componentReliefEnabled, c.value.pcbOutlinePoints, c.value.a
 <style scoped>
 .relief-section { padding: 18px 0; border-top: 1px solid var(--surface-line); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.section-heading :deep(.inline-help) { min-width: 0; }
-.section-heading :deep(.el-switch) { flex-shrink: 0; }
+.section-heading :deep(.inline-help) { flex: 1; min-width: 0; }
 .section-title { color: var(--text-default); font-size: var(--body-md-font-size); font-weight: 600; }
-.enable-label { margin: 1px 0 0; color: var(--text-secondary); font-size: var(--body-sm-font-size); line-height: 1.5; }
+.entry-state { flex-shrink: 0; align-self: flex-start; padding-top: 4px; color: var(--text-tertiary); font-size: 10px; line-height: 1.6; transition: color var(--motion-fast) var(--ease-out); }
+.is-enabled .entry-state { color: var(--interaction-ink); }
+.relief-entry { --button-press-scale: .99; display: flex; align-items: center; gap: 11px; width: 100%; min-height: 76px; margin-top: 9px; padding: 13px 12px; border: 1px solid color-mix(in srgb, var(--interaction-border) 28%, var(--surface-line)); border-radius: var(--radius-popover); corner-shape: var(--corner-shape); background: color-mix(in srgb, var(--interaction-border) 4%, var(--surface-raised)); color: var(--text-default); font: inherit; text-align: start; cursor: pointer; transition: var(--control-transition); }
+.relief-entry:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 3px; }
+.entry-art { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 44px; border-radius: var(--radius-control); background: color-mix(in srgb, var(--interaction-border) 9%, var(--surface-raised)); color: var(--interaction-ink); }
+.entry-art svg { overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.entry-board { fill: color-mix(in srgb, var(--interaction-ink) 12%, transparent); }
+.entry-board, .entry-component { transition: transform var(--motion-panel) var(--ease-out); }
+.entry-tray { opacity: .6; }
+.entry-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
+.entry-title { font-size: var(--body-sm-font-size); font-weight: 600; line-height: 1.5; }
+.entry-hint { color: var(--text-secondary); font-size: 10px; line-height: 1.6; }
+.entry-switch { display: flex; align-items: center; flex: 0 0 38px; width: 38px; height: 24px; padding: 3px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--text-tertiary) 35%, var(--surface-line)); border-radius: var(--radius-full); background: var(--surface-well); transition: background-color var(--motion-panel) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
+.entry-thumb { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--text-tertiary); color: var(--surface-raised); transition: transform var(--motion-selection) var(--ease-selection), background-color var(--motion-fast) var(--ease-out); }
+.entry-thumb svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: 0; transition: opacity var(--motion-fast) var(--ease-out); }
+.is-enabled .relief-entry { border-color: color-mix(in srgb, var(--interaction-border) 58%, var(--surface-line)); background: color-mix(in srgb, var(--interaction-border) 8%, var(--surface-raised)); }
+.is-enabled .entry-board, .is-enabled .entry-component { transform: translateY(-3px); }
+.is-enabled .entry-switch { border-color: var(--interaction-border); background: var(--interaction-border); }
+.is-enabled .entry-thumb { transform: translateX(14px); background: var(--surface-raised); color: var(--interaction-ink); }
+.is-enabled .entry-thumb svg { opacity: 1; }
+@media (hover: hover) and (pointer: fine) {
+  .relief-entry:hover { border-color: var(--interaction-border); background: color-mix(in srgb, var(--interaction-border) 10%, var(--surface-raised)); }
+  .relief-entry:hover .entry-board, .relief-entry:hover .entry-component { transform: translateY(-3px); }
+}
 .relief-settings { display: flex; flex-direction: column; gap: 10px; padding-top: 15px; }
 .side-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; }
 .field-label { color: var(--text-secondary); font-size: var(--body-sm-font-size); }

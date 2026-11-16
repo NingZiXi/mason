@@ -69,10 +69,10 @@ find "$DEST" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$DEST" -type f -name "*.pyc" -delete 2>/dev/null || true
 
 echo "==> 验证 import..."
-"$PY" -c "import build123d, shapely, numpy; print('deps OK')"
+"$PY" -B -c "import build123d, shapely, numpy; print('deps OK')"
 
 echo "==> 验证 server 模式..."
-echo '{"id": 1, "cmd": "ping"}' | "$PY" "$ROOT/python/jig_generator.py" --server
+echo '{"id": 1, "cmd": "ping"}' | "$PY" -B "$ROOT/python/jig_generator.py" --server
 
 SIZE=$(du -sh "$DEST" | cut -f1)
 echo ""

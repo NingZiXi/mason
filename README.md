@@ -19,6 +19,8 @@
 
 </div>
 
+> **macOS (Apple Silicon):** The app is not notarized by Apple. Copy Mason to Applications first. If macOS blocks it, follow the [macOS installation guide](docs/MACOS.md); only allow a download you trust from this project's Releases.
+
 ---
 
 ## 📌 Overview

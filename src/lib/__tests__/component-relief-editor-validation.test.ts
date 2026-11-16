@@ -36,6 +36,7 @@ const resolveImport = (name: string) => {
   if (name.endsWith('/component-relief-editor')) return editorHelpers;
   if (name.endsWith('/component-relief-auto')) return autoHelper;
   if (name.endsWith('/history-shortcuts')) return historyShortcuts;
+  if (name.endsWith('/directives/app-tooltip')) return { vAppTooltip: {} };
   if (name.endsWith('/SlidingIndicator.vue')) return { default: { render: () => null } };
   throw new Error(`Unexpected editor dependency: ${name}`);
 };
@@ -49,8 +50,10 @@ interface Node {
   parent: Node | null;
   text: string;
   closest(selector: string): { dataset: Record<string, string> } | null;
+  getAttribute(name: string): unknown;
 }
 const node = (tag: string, text = ''): Node => Vue.markRaw({ tag, props: {}, children: [], parent: null, text,
+  getAttribute(this: Node, name: string) { return this.props[name] ?? null; },
   closest(this: Node, selector: string) {
     if (selector.includes('input, textarea') && ['input', 'textarea', 'select'].includes(this.tag)) return { dataset: {} };
     let current: Node | null = this;
@@ -62,14 +65,27 @@ const node = (tag: string, text = ''): Node => Vue.markRaw({ tag, props: {}, chi
     }
     return null;
   } });
+interface FeedbackAnimation {
+  onfinish: (() => void) | null;
+  oncancel: (() => void) | null;
+  cancel: ReturnType<typeof vi.fn>;
+}
+const feedback: Array<{ id: string; frames: Keyframe[]; options: KeyframeAnimationOptions; animation: FeedbackAnimation }> = [];
 const renderer = createRenderer<Node, Node>({
   createElement: tag => {
     const element = node(tag);
+    if (tag === 'g') Object.assign(element, { animate: (keyframes: Keyframe[], options: KeyframeAnimationOptions) => {
+      const animation: FeedbackAnimation = { onfinish: null, oncancel: null, cancel: vi.fn(() => animation.oncancel?.()) };
+      feedback.push({ id: String(element.props['data-relief-id']), frames: keyframes, options, animation });
+      return animation;
+    } });
     if (tag === 'svg') {
       const captured = new Set<number>();
       Object.assign(element, { clientWidth: 600, clientHeight: 400, getScreenCTM: () => ({ inverse: () => ({}) }), focus: () => {},
         setPointerCapture: (id: number) => captured.add(id), hasPointerCapture: (id: number) => captured.has(id),
-        releasePointerCapture: (id: number) => captured.delete(id) });
+        releasePointerCapture: (id: number) => captured.delete(id),
+        querySelectorAll: () => all(element).filter(child => child.props['data-relief-id']
+          && String(child.props.class ?? '').split(' ').includes('relief-region')) });
     }
     return element;
   }, createText: text => node('#text', text), createComment: text => node('#comment', text),
@@ -110,6 +126,7 @@ const frames = new Map<number, FrameRequestCallback>();
 const flushFrames = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(0)); };
 beforeEach(() => {
   translations.length = 0;
+  feedback.length = 0;
   frames.clear(); nextFrame = 0;
   vi.stubGlobal('window', { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   vi.stubGlobal('document', { hidden: false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
@@ -761,6 +778,107 @@ describe('relief selected batch properties', () => {
     editor.selectRegion(0); await nextTick();
     editor.selectRegion(1, { shiftKey: true }); await nextTick();
   };
+
+  it('shows each selected effective depth on the canvas while unselected regions retain only their index', async () => {
+    const regions = pockets(); delete regions[0].depth;
+    const editor = await mountEditor(async () => ({ valid: true }), regions);
+    const labels = () => all(editor.root).filter(element => String(element.props.class ?? '').split(' ').includes('region-depth-label'));
+    expect(labels()).toHaveLength(0);
+    await selectPair(editor);
+    expect(labels().map(text)).toEqual(['1 · 3.0 mm', '2 · 4.0 mm']);
+    const unselected = all(editor.root).find(element => element.props.class === 'region-labels')!;
+    expect(text(unselected)).toBe('1 · 3.0 mm2 · 4.0 mm3');
+    editor.click(editor.cutMode('through')); await nextTick();
+    expect(labels().map(text)).toEqual(['1 · relief.through', '2 · relief.through']);
+    editor.clearSelection(); await nextTick();
+    expect(labels()).toHaveLength(0);
+    expect(text(all(editor.root).find(element => element.props.class === 'region-labels')!)).toBe('123');
+  });
+
+  it('briefly emphasizes only pockets whose effective depth changed, and ignores re-emitted values', async () => {
+    const regions = pockets(); regions[1].depth = 5.5;
+    const editor = await mountEditor(async () => ({ valid: true }), regions);
+    await selectPair(editor);
+    editor.updateDepth(5.5); await nextTick();
+    expect(feedback.map(item => item.id)).toEqual(['first']);
+    expect(feedback[0].options.duration).toBe(480);
+    expect(feedback[0].frames).toHaveLength(3);
+    expect(feedback[0].frames[0].fillOpacity).toBe(feedback[0].frames[2].fillOpacity);
+    expect(Number(feedback[0].frames[1].fillOpacity)).toBeGreaterThan(Number(feedback[0].frames[0].fillOpacity));
+    editor.updateDepth(5.5); await nextTick();
+    expect(feedback).toHaveLength(1);
+  });
+
+  it('hides fully offscreen selected depth labels after zooming and restores them when fitted', async () => {
+    const editor = await mountEditor(async () => ({ valid: true }), pockets());
+    const labels = () => all(editor.root).filter(element => String(element.props.class ?? '').split(' ').includes('region-depth-label'))
+      .map(element => all(element).filter(child => child.tag === 'text').map(text).join(''));
+    await selectPair(editor);
+    expect(labels()).toEqual(['1 · 2.0 mm', '2 · 4.0 mm']);
+    const zoomIn = all(editor.root).find(element => element.props['aria-label'] === 'relief.zoomIn')!;
+    for (let i = 0; i < 8; i++) editor.click(zoomIn);
+    await nextTick();
+    expect(labels()).toEqual(['2 · 4.0 mm']);
+    expect(editor.selectedIndices()).toEqual([0, 1]);
+    editor.click(all(editor.root).find(element => element.tag === 'button' && text(element) === 'relief.fit')!);
+    await nextTick();
+    expect(labels()).toEqual(['1 · 2.0 mm', '2 · 4.0 mm']);
+    expect(editor.selectedIndices()).toEqual([0, 1]);
+    expect(editor.commits).toHaveLength(0);
+  });
+
+  it('does not flash when an implicit legacy depth is merely made explicit', async () => {
+    const regions = pockets(); delete regions[0].depth;
+    const editor = await mountEditor(async () => ({ valid: true }), regions);
+    editor.selectRegion(0); await nextTick();
+    editor.updateDepth(3); await nextTick();
+    expect(editor.state.regions[0].depth).toBe(3);
+    expect(feedback).toHaveLength(0);
+  });
+
+  it('emphasizes only changed cut modes and cancels an interrupted feedback animation', async () => {
+    const regions = pockets(); regions[1].through = true;
+    const editor = await mountEditor(async () => ({ valid: true }), regions);
+    await selectPair(editor);
+    editor.click(editor.cutMode('through')); await nextTick();
+    expect(feedback.map(item => item.id)).toEqual(['first']);
+    editor.click(editor.cutMode('blind')); await nextTick();
+    expect(feedback[0].animation.cancel).toHaveBeenCalledOnce();
+    expect(feedback.map(item => item.id)).toEqual(['first', 'first', 'second']);
+  });
+
+  it('cancels active feedback after an undo changes that region but keeps unaffected feedback running', async () => {
+    const editor = await mountEditor(async () => ({ valid: true }), pockets());
+    await selectPair(editor);
+    editor.updateDepth(5); await nextTick();
+    expect(feedback.map(item => item.id)).toEqual(['first', 'second']);
+    editor.state.regions = editor.state.regions.map(region => region.id === 'first' ? { ...region, depth: 2 } : region);
+    await nextTick();
+    expect(feedback[0].animation.cancel).toHaveBeenCalledOnce();
+    expect(feedback[1].animation.cancel).not.toHaveBeenCalled();
+  });
+
+  it.each(['close', 'side', 'unmount'] as const)('cleans active one-shot feedback on %s', async action => {
+    const editor = await mountEditor(async () => ({ valid: true }), pockets());
+    await selectPair(editor);
+    editor.updateDepth(5); await nextTick();
+    if (action === 'close') editor.state.modelValue = false;
+    else if (action === 'side') editor.state.printSide = 'bottom';
+    else editor.unmount();
+    await nextTick();
+    expect(feedback).toHaveLength(2);
+    expect(feedback.every(item => item.animation.cancel.mock.calls.length === 1)).toBe(true);
+    expect(frames.size).toBe(0);
+  });
+
+  it('does not start stale feedback when the edited region changes again before rendering', async () => {
+    const editor = await mountEditor(async () => ({ valid: true }), pockets());
+    await selectPair(editor);
+    editor.updateDepth(5);
+    editor.state.regions = pockets();
+    await nextTick();
+    expect(feedback).toHaveLength(0);
+  });
 
   it('shows mixed depths and applies one undoable change to the selected subset', async () => {
     const editor = await mountEditor(async () => ({ valid: true }), pockets());

@@ -91,6 +91,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npm run tauri:build -- --bundles deb,rpm,appimage
 
+      - name: Verify macOS app and disk image signature integrity
+        if: matrix.platform == 'macos-latest'
+        run: |
+          python3 -m unittest discover -s scripts -p test_check_macos_bundle.py
+          python3 scripts/check_macos_bundle.py \
+            --app src-tauri/target/release/bundle/macos/Mason.app \
+            --archive src-tauri/target/release/bundle/macos/Mason.app.tar.gz \
+            --dmg src-tauri/target/release/bundle/dmg/*.dmg
+
       - name: Collect artifacts (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -107,10 +116,10 @@ jobs:
           cp src-tauri/target/release/bundle/dmg/*.dmg artifacts/ 2>/dev/null || true
           cp src-tauri/target/release/bundle/macos/*.app.tar.gz artifacts/
           cp src-tauri/target/release/bundle/macos/*.app.tar.gz.sig artifacts/
-          # .app 是目录 bundle,打包成 zip 以便上传
+          # Preserve application bundle metadata and symbolic links in the ZIP.
           cd src-tauri/target/release/bundle/macos
           for app in *.app; do
-            [ -d "$app" ] && zip -r "../../../../../artifacts/${app%.app}.zip" "$app"
+            [ -d "$app" ] && ditto -c -k --sequesterRsrc --keepParent "$app" "../../../../../artifacts/${app%.app}.zip"
           done
 
       - name: Collect artifacts (Linux)

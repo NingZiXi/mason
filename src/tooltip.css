@@ -1,0 +1,30 @@
+.app-tooltip {
+  position: fixed;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: hidden;
+  padding: 7px 10px;
+  border: 1px solid var(--surface-line);
+  border-radius: var(--radius-control);
+  corner-shape: var(--corner-shape);
+  background: var(--surface-raised);
+  color: var(--text-default);
+  box-shadow: var(--shadow-control);
+  font-family: var(--font-family-default);
+  font-size: 11px;
+  font-weight: var(--font-weight-default);
+  line-height: 17px;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity 120ms ease, transform 160ms var(--ease-out);
+}
+.app-tooltip[data-side='bottom'] { transform: translateY(-3px); }
+.app-tooltip[data-side='left'] { transform: translateX(3px); }
+.app-tooltip[data-side='right'] { transform: translateX(-3px); }
+.app-tooltip.is-visible { opacity: 1; transform: translate(0, 0); }

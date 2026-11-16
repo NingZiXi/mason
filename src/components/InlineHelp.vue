@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import MotionCollapse from "./MotionCollapse.vue";
+import { vAppTooltip } from '../directives/app-tooltip';
 
 defineProps<{ id: string; label: string; text: string }>();
 const open = ref(false);
@@ -13,6 +14,7 @@ const { t } = useI18n();
     <div class="help-heading">
       <div class="help-label"><slot /></div>
       <button type="button" class="help-button" :class="{ active: open }"
+        v-app-tooltip="t(open ? 'help.hide' : 'help.show', { label })"
         :aria-label="t(open ? 'help.hide' : 'help.show', { label })"
         :aria-expanded="open" :aria-controls="id" @click="open = !open">
         <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">

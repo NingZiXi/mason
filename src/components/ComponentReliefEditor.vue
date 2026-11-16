@@ -6,12 +6,13 @@ import { MAX_RELIEF_REGIONS, MAX_RELIEF_VERTICES, reliefRegionDepth,
   type ComponentReliefMergeResult, type ComponentReliefRegion } from '../lib/component-relief';
 import type { PadPolygon } from '../lib/gerber/pads';
 import { canAppendReliefVertex, clampReliefPoint, createReliefPolygon, drawReliefRegion, fitReliefView, isValidReliefPolygon,
-  moveReliefRegion, reliefEditorBounds, reliefHandleSize, reliefRegionIntersectsBoard, reliefRegionsInMarquee, reliefScreenPoint, resizeReliefRegion,
+  moveReliefRegion, reliefDepthLabelLayout, reliefDepthOpacity, reliefEditorBounds, reliefHandleSize, reliefRegionIntersectsBoard, reliefRegionsInMarquee, reliefScreenPoint, resizeReliefRegion,
   updateReliefDimensions, updateReliefVertex, zoomReliefView,
-  type ReliefCorner, type ReliefPoint, type ReliefView } from '../lib/component-relief-editor';
+  type ReliefCorner, type ReliefLabelBox, type ReliefPoint, type ReliefView } from '../lib/component-relief-editor';
 import { generateAutomaticRelief } from '../lib/component-relief-auto';
 import { reliefPadGuide } from '../lib/relief-pad-guide';
 import { parameterHistoryShortcut } from '../lib/history-shortcuts';
+import { vAppTooltip } from '../directives/app-tooltip';
 import SlidingIndicator from './SlidingIndicator.vue';
 
 const props = defineProps<{
@@ -130,6 +131,48 @@ const intersectsBoard = (region: ComponentReliefRegion) => reliefRegionIntersect
   props.outline, props.holes, props.width, props.height);
 // A viewport-scaled handle remains easy to grab at every zoom level.
 const handleSize = computed(() => reliefHandleSize(view.value, viewport.value.width, viewport.value.height));
+const canvasLabels = computed(() => {
+  const occupied: ReliefLabelBox[] = [];
+  return displayed.value.map((region, index) => {
+    const center = reliefScreenPoint(region, props.printSide), visible = view.value;
+    const inView = center.x + region.width / 2 >= visible.x && center.x - region.width / 2 <= visible.x + visible.width
+      && center.y + region.height / 2 >= visible.y && center.y - region.height / 2 <= visible.y + visible.height;
+    // Keep offscreen selections selected, without collecting their callouts
+    // along the canvas edge while the user inspects another part of the board.
+    const active = selectedIds.value.has(region.id) && inView;
+    const text = active ? `${index + 1} · ${region.through ? t('relief.through') : `${reliefRegionDepth(region, props.depth).toFixed(1)} mm`}` : String(index + 1);
+    const layout = active ? reliefDepthLabelLayout(region, text, props.printSide, view.value, handleSize.value / 8, occupied) : null;
+    if (layout) occupied.push(layout);
+    return { id: region.id, text, center, layout };
+  });
+});
+const feedbackAnimations = new Map<string, { animation: Animation; snapshot: string }>();
+let feedbackSequence = 0;
+function clearRegionFeedback() {
+  ++feedbackSequence;
+  feedbackAnimations.forEach(({ animation }) => animation.cancel());
+  feedbackAnimations.clear();
+}
+function emphasizeRegions(regions: ComponentReliefRegion[]) {
+  clearRegionFeedback();
+  if (!regions.length) return;
+  const sequence = feedbackSequence;
+  const expected = new Map(regions.map(region => [region.id, JSON.stringify(region)]));
+  void nextTick(() => {
+    if (disposed || !props.modelValue || sequence !== feedbackSequence) return;
+    const current = new Map(props.regions.map(region => [region.id, region]));
+    for (const element of svg.value?.querySelectorAll<SVGGraphicsElement>('.relief-region[data-relief-id]') ?? []) {
+      const id = element.getAttribute('data-relief-id') ?? '', region = current.get(id);
+      // A newer edit or an undo can arrive before Vue paints the first change.
+      if (!region || !expected.has(id) || expected.get(id) !== JSON.stringify(region) || typeof element.animate !== 'function') continue;
+      const opacity = reliefDepthOpacity(region, props.depth) + (selectedIds.value.has(id) ? .08 : 0);
+      const animation = element.animate([{ fillOpacity: opacity }, { fillOpacity: Math.min(.6, opacity + .2), offset: .3 }, { fillOpacity: opacity }],
+        { duration: 480, easing: 'cubic-bezier(.2,.7,.2,1)' });
+      feedbackAnimations.set(id, { animation, snapshot: expected.get(id)! });
+      animation.onfinish = animation.oncancel = () => { if (feedbackAnimations.get(id)?.animation === animation) feedbackAnimations.delete(id); };
+    }
+  });
+}
 const cornerHandles = computed(() => {
   const region = selected.value;
   if (!region || tool.value !== 'select') return [];
@@ -462,7 +505,10 @@ function updateSelectedDepth(value: number | undefined) {
   const ids = new Set(selectedIds.value);
   endGesture(true);
   clearNotices();
-  commitRegions(props.regions.map(region => ids.has(region.id) ? { ...cloneRegion(region), depth: value } : region));
+  const changed = new Set(props.regions.filter(region => ids.has(region.id) && reliefRegionDepth(region, props.depth) !== value).map(region => region.id));
+  const regions = props.regions.map(region => ids.has(region.id) ? { ...cloneRegion(region), depth: value } : region);
+  commitRegions(regions);
+  emphasizeRegions(regions.filter(region => changed.has(region.id)));
 }
 function updateSelectedCutMode(through: boolean) {
   if (!selectedRegions.value.length || selectedCutMode.value === through) return;
@@ -470,8 +516,11 @@ function updateSelectedCutMode(through: boolean) {
   const ids = new Set(selectedIds.value);
   endGesture(true);
   clearNotices();
-  commitRegions(props.regions.map(region => ids.has(region.id) && Boolean(region.through) !== through ? { ...cloneRegion(region), through,
-    depth: reliefRegionDepth(region, props.depth) } : region));
+  const changed = new Set(props.regions.filter(region => ids.has(region.id) && Boolean(region.through) !== through).map(region => region.id));
+  const regions = props.regions.map(region => changed.has(region.id) ? { ...cloneRegion(region), through,
+    depth: reliefRegionDepth(region, props.depth) } : region);
+  commitRegions(regions);
+  emphasizeRegions(regions.filter(region => changed.has(region.id)));
 }
 function removeSelected() {
   if (!selectionCount.value) return;
@@ -517,7 +566,7 @@ function onKeydown(event: KeyboardEvent) {
     event.preventDefault(); removeSelected();
   }
 }
-function close() { invalidateAutomatic(); endGesture(true); cancelPolygon(); emit('update:modelValue', false); }
+function close() { clearRegionFeedback(); invalidateAutomatic(); endGesture(true); cancelPolygon(); emit('update:modelValue', false); }
 // Losing focus only ends a live pointer gesture. It does not change the board
 // or the proposals, so background checks and unfinished polygon points remain valid.
 function onBlur() { endGesture(true); polygonHover.value = null; }
@@ -528,6 +577,7 @@ function syncListeners(open: boolean) {
   else if (!open && listening) { window.removeEventListener('blur', onBlur); document.removeEventListener('visibilitychange', onVisibility); listening = false; }
 }
 watch(() => props.modelValue, async open => {
+  clearRegionFeedback();
   invalidateAutomatic();
   endGesture(true);
   cancelPolygon();
@@ -541,10 +591,14 @@ watch(() => props.modelValue, async open => {
   }
 }, { immediate: true });
 watch(() => [props.outline, props.holes, props.width, props.height, props.printSide, props.pads], () => {
-  invalidateAutomatic(); endGesture(true); cancelPolygon(); setSelection([]); clearNotices(); fit();
+  clearRegionFeedback(); invalidateAutomatic(); endGesture(true); cancelPolygon(); setSelection([]); clearNotices(); fit();
 }, { flush: 'sync' });
-watch(() => [props.depth, props.ejectHoleEnabled], () => { invalidateAutomatic(); endGesture(true); cancelPolygon(); clearNotices(); }, { flush: 'sync' });
+watch(() => [props.depth, props.ejectHoleEnabled], () => { clearRegionFeedback(); invalidateAutomatic(); endGesture(true); cancelPolygon(); clearNotices(); }, { flush: 'sync' });
 watch(() => props.regions, regions => {
+  const current = new Map(regions.map(region => [region.id, region]));
+  feedbackAnimations.forEach(({ animation, snapshot }, id) => {
+    if (JSON.stringify(current.get(id)) !== snapshot) animation.cancel();
+  });
   invalidateAutomatic();
   if (gesture && gesture.kind !== 'pan') endGesture(true);
   cancelPolygon();
@@ -552,7 +606,7 @@ watch(() => props.regions, regions => {
 }, { flush: 'sync' });
 watch(allowance, () => { invalidateAutomatic(); clearNotices(); }, { flush: 'sync' });
 watch(tool, invalidateAutomatic, { flush: 'sync' });
-onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidateAutomatic(); endGesture(true); cancelPolygon(); syncListeners(false); });
+onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.disconnect(); invalidateAutomatic(); endGesture(true); cancelPolygon(); syncListeners(false); });
 </script>
 
 <template>
@@ -583,19 +637,19 @@ onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidat
         </div>
         <div class="zoom-tools">
           <template v-if="historyAvailable">
-            <button type="button" class="editor-history-button" :disabled="!canUndoHere" :title="t('history.undoHint')"
+            <button type="button" class="editor-history-button" :disabled="!canUndoHere" v-app-tooltip="t('history.undoHint')"
               :aria-label="t('history.undo')" aria-keyshortcuts="Control+Z Meta+Z" @click="applyHistory('undo')">
               <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="m7 4-4 4 4 4M3.5 8H12a4.5 4.5 0 0 1 0 9" /></svg>
             </button>
-            <button type="button" class="editor-history-button" :disabled="!canRedoHere" :title="t('history.redoHint')"
+            <button type="button" class="editor-history-button" :disabled="!canRedoHere" v-app-tooltip="t('history.redoHint')"
               :aria-label="t('history.redo')" aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" @click="applyHistory('redo')">
               <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><path d="m13 4 4 4-4 4M16.5 8H8a4.5 4.5 0 0 0 0 9" /></svg>
             </button>
             <span class="tool-divider" aria-hidden="true" />
           </template>
-          <button type="button" :aria-label="t('relief.zoomOut')" @click="zoomBy(1 / 1.25)">−</button>
+          <button type="button" :aria-label="t('relief.zoomOut')" v-app-tooltip="t('relief.zoomOut')" @click="zoomBy(1 / 1.25)">−</button>
           <span>{{ zoom }}%</span>
-          <button type="button" :aria-label="t('relief.zoomIn')" @click="zoomBy(1.25)">+</button>
+          <button type="button" :aria-label="t('relief.zoomIn')" v-app-tooltip="t('relief.zoomIn')" @click="zoomBy(1.25)">+</button>
           <button type="button" class="fit-button" @click="fit">{{ t('relief.fit') }}</button>
         </div>
       </div>
@@ -654,7 +708,8 @@ onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidat
                 <rect :x="bounds.minX" :y="bounds.minY" :width="bounds.maxX - bounds.minX" :height="bounds.maxY - bounds.minY"
                   class="pad-guide" :mask="`url(#${padMaskId})`" />
                 <g v-for="region in displayed" :key="region.id" :data-relief-id="region.id"
-                  class="relief-region" :class="{ selected: selectedIds.has(region.id), draft: draft?.id === region.id, through: region.through }">
+                  class="relief-region" :class="{ selected: selectedIds.has(region.id), draft: draft?.id === region.id, through: region.through }"
+                  :style="{ '--relief-depth-opacity': reliefDepthOpacity(region, depth) }">
                   <ellipse v-if="region.shape === 'circle'" :cx="region.x" :cy="region.y" :rx="region.width / 2" :ry="region.height / 2" />
                   <path v-else-if="region.shape === 'polygon'" :d="ringPath(region.points ?? [])" />
                   <rect v-else :x="region.x - region.width / 2" :y="region.y - region.height / 2" :width="region.width" :height="region.height" />
@@ -680,9 +735,17 @@ onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidat
             <rect v-if="marqueeBox" class="marquee-selection" :x="marqueeBox.x" :y="marqueeBox.y"
               :width="marqueeBox.width" :height="marqueeBox.height" aria-hidden="true" />
             <g class="region-labels" aria-hidden="true">
-              <text v-for="(region, index) in displayed" :key="region.id" :x="region.x"
-                :y="reliefScreenPoint({ x: region.x, y: region.y }, printSide).y"
-                :font-size="handleSize * 1.6">{{ index + 1 }}</text>
+              <g v-for="label in canvasLabels" :key="label.id" :class="{ 'region-depth-label': label.layout }">
+                <template v-if="label.layout">
+                  <line v-if="label.layout.outside" class="depth-label-leader" :x1="label.layout.anchorX" :y1="label.layout.anchorY"
+                    :x2="label.layout.connectorX" :y2="label.layout.connectorY" />
+                  <rect class="depth-label-surface" :x="label.layout.x" :y="label.layout.y" :width="label.layout.width"
+                    :height="label.layout.height" :rx="label.layout.height / 2" />
+                  <text :x="label.layout.x + label.layout.width / 2" :y="label.layout.y + label.layout.height / 2"
+                    :font-size="label.layout.fontSize">{{ label.text }}</text>
+                </template>
+                <text v-else :x="label.center.x" :y="label.center.y" :font-size="handleSize * 1.6">{{ label.text }}</text>
+              </g>
             </g>
           </svg>
           <div class="canvas-feedback" :class="{ 'is-visible': autoStatus || autoLimited || mergeStatus }" role="status" aria-live="polite">
@@ -735,7 +798,7 @@ onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidat
                 <label v-if="selected.shape !== 'circle'">{{ t('relief.height') }}<el-input-number :model-value="selected.height" :min="0.5" :max="bounds.maxY - bounds.minY" :precision="2" :step="0.5" :controls="false" size="small" @update:model-value="(value: number | undefined) => updateNumber('height', value)" /></label>
               </template>
               <div class="depth-setting">
-                <label v-if="selectedCutMode === false" class="region-depth-field" :title="t('relief.regionDepthHint')">{{ t('relief.regionDepth') }} <span class="depth-unit">mm</span>
+                <label v-if="selectedCutMode === false" class="region-depth-field" v-app-tooltip="t('relief.regionDepthHint')">{{ t('relief.regionDepth') }} <span class="depth-unit">mm</span>
                   <el-input-number :model-value="selectedDepth" :min="0.5" :max="20" :precision="1" :step="0.5" :controls="false" size="small"
                     :placeholder="selectedDepth === undefined ? t('relief.mixedValues') : undefined" :aria-label="t('relief.regionDepth')" @update:model-value="updateSelectedDepth" />
                 </label>
@@ -840,10 +903,10 @@ onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidat
 .editor-canvas path, .editor-canvas rect, .editor-canvas ellipse, .editor-canvas circle { vector-effect: non-scaling-stroke; }
 .board-outline { fill: var(--inspection-board-fill, var(--surface-raised)); fill-rule: evenodd; stroke: var(--inspection-board-stroke, var(--text-tertiary)); stroke-width: 1; stroke-opacity: .7; }
 .pad-guide { fill: var(--inspection-original, #638caf); opacity: .38; pointer-events: none; }
-.relief-region { fill: var(--bg-brand); fill-opacity: .18; stroke: var(--interaction-ink, var(--bg-brand)); stroke-width: 1.1; cursor: move; transition: fill-opacity 120ms var(--ease-out), stroke-width 120ms var(--ease-out); }
+.relief-region { fill: var(--bg-brand); fill-opacity: var(--relief-depth-opacity, .18); stroke: var(--interaction-ink, var(--bg-brand)); stroke-width: 1.1; cursor: move; transition: fill-opacity 120ms var(--ease-out), stroke-width 120ms var(--ease-out); }
 .drawing .relief-region { cursor: crosshair; }
-.relief-region:hover, .relief-region.selected { fill-opacity: .28; stroke-width: 1.6; }
-.relief-region.draft { fill-opacity: .25; }
+.relief-region:hover, .relief-region.selected { fill-opacity: calc(var(--relief-depth-opacity, .18) + .08); stroke-width: 1.6; }
+.relief-region.draft { fill-opacity: calc(var(--relief-depth-opacity, .18) + .06); }
 .relief-region.through { stroke-dasharray: 5 3; }
 .marquee-selection { fill: var(--bg-brand); fill-opacity: .09; stroke: var(--interaction-ink); stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; }
 .selection-handles .region-bounds { fill: none; stroke: var(--interaction-ink, var(--bg-brand)); stroke-width: 1; stroke-dasharray: 4 3; opacity: .8; pointer-events: none; }
@@ -857,6 +920,8 @@ onBeforeUnmount(() => { disposed = true; canvasObserver?.disconnect(); invalidat
 .resize-handle.nw, .resize-handle.se { cursor: nwse-resize; }
 .resize-handle.ne, .resize-handle.sw { cursor: nesw-resize; }
 .region-labels { pointer-events: none; fill: var(--interaction-ink, var(--bg-brand)); font-family: var(--font-family-mono); font-weight: 600; text-anchor: middle; dominant-baseline: central; }
+.depth-label-surface { fill: var(--surface-raised); stroke: color-mix(in srgb, var(--interaction-ink) 35%, var(--surface-line)); stroke-width: 1; }
+.depth-label-leader { stroke: var(--interaction-ink); stroke-width: 1; stroke-opacity: .5; vector-effect: non-scaling-stroke; }
 .canvas-hint { position: absolute; top: 14px; left: 12px; right: 12px; width: fit-content; margin: auto; padding: 7px 11px; border: 1px solid var(--surface-line); border-radius: var(--radius-inner); background: var(--surface-raised); color: var(--text-tertiary); font-size: 11px; pointer-events: none; }
 .polygon-hint { display: flex; flex-direction: column; gap: 3px; text-align: center; }
 .polygon-hint > span { font-size: 10px; opacity: .85; }

@@ -11,6 +11,7 @@ import { useCompletionFeedback } from "../composables/useCompletionFeedback";
 import ActionStatusIcon from "./ActionStatusIcon.vue";
 import InlineHelp from "./InlineHelp.vue";
 import MotionCollapse from "./MotionCollapse.vue";
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const { t } = useI18n();
 const store = usePresetsStore();
@@ -179,7 +180,7 @@ async function remove() {
         </span>
       </el-button>
       <el-dropdown class="preset-more" popper-class="config-preset-menu" trigger="click" placement="bottom-end" :disabled="disabled" @command="managePreset">
-        <el-button class="preset-more-button" :disabled="disabled" :aria-label="t('presets.more')" :title="t('presets.more')">
+        <el-button class="preset-more-button" :disabled="disabled" :aria-label="t('presets.more')" v-app-tooltip="t('presets.more')">
           <MoreFilled class="action-icon" aria-hidden="true" />
         </el-button>
         <template #dropdown>

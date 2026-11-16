@@ -118,7 +118,10 @@ async fn spawn_server(
         .map_err(|e| AppError::Other(format!("打开日志文件失败 {}: {}", log_path.display(), e)))?;
 
     let mut cmd = Command::new(python_path);
-    cmd.arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
+    // The bundled engine lives inside the signed app; imports must not write
+    // __pycache__ files into its resources after installation.
+    cmd.env("PYTHONDONTWRITEBYTECODE", "1")
+        .arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
         .arg(script_path)
         .arg("--server")
         .kill_on_drop(true)
@@ -650,6 +653,25 @@ impl Drop for TempArtifact {
 #[cfg(test)]
 mod worker_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn python_worker_does_not_write_bytecode_into_bundled_resources() {
+        let Some(python) = bundled_python(None).or_else(python_detect::find_python_in_path) else { return; };
+        let script = TempArtifact::new("py");
+        std::fs::write(&script.0, r#"
+import json, sys
+assert sys.dont_write_bytecode, 'Bundled Python resources must remain read-only'
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({'id': request['id'], 'ok': True}), flush=True)
+"#).unwrap();
+        let log = TempArtifact::new("bytecode.log");
+        let mut server = spawn_server(&python, &script.0, &log.0).await.unwrap();
+        let response = timeout(Duration::from_secs(10),
+            server.request("ping", None, None, None, None, None, None)).await.unwrap().unwrap();
+        assert!(response.ok);
+        server.child.kill().await.unwrap();
+    }
 
     #[test]
     fn merge_selection_serializes_all_empty_and_legacy_requests_distinctly() {

@@ -77,3 +77,5 @@ python -m unittest discover -s scripts -p test_build_sync.py
 发布流程见 [Release 工作流](../.github/workflows/release.yml)。推送 `v*` 标签会触发构建和发布；正式更新包需要配置工作流使用的签名密钥。
 
 发布前同步 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与 `src-tauri/tauri.conf.json` 中的应用版本，并在 `release-notes/v<版本>.md` 编写更新说明。工作流生成签名安装包和 `latest.json`，供软件检查更新。
+
+macOS 应用签名与自动更新签名彼此独立。当前 `bundle.macOS.signingIdentity` 为 `-`，使用临时（ad-hoc）应用签名；发布流程验证 `.app` 的签名完整性，但这不等于苹果公证，用户首次启动仍可能需要手动允许。正式 Developer ID 分发需要另外配置 Apple 签名证书和公证凭据，见 [Tauri 官方指南](https://v2.tauri.app/distribute/sign/macos/)。安装排查见 [macOS 安装说明](./MACOS.md)。

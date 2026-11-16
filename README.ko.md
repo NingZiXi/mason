@@ -21,6 +21,8 @@
 
 </div>
 
+> **macOS(Apple Silicon):** Apple 공증을 받지 않은 앱입니다. Mason을 응용 프로그램 폴더에 복사한 뒤 실행하세요. 실행이 차단되면 [macOS 설치 안내](docs/MACOS.md)를 참고하고, 이 프로젝트의 Releases에서 받은 신뢰할 수 있는 파일만 허용하세요.
+
 ---
 
 ## 📌 소개

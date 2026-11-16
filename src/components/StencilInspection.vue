@@ -15,6 +15,7 @@ import { useFirstUseTour } from '../composables/useFirstUseTour';
 import { useCompletionFeedback } from '../composables/useCompletionFeedback';
 import SlidingIndicator from './SlidingIndicator.vue';
 import ActionStatusIcon from './ActionStatusIcon.vue';
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const OnboardingTour = defineAsyncComponent(() => import('./OnboardingTour.vue'));
 
@@ -35,14 +36,15 @@ const request = computed(() => {
   const part = `stencil_${props.side}`;
   return { key: scadPartHash(params, part), part, params };
 });
-const { data: latest, resolvedKey, loading, error, retry } = useStencilInspection(enabled, request,
+const { data: latest, resolvedKey, loading, error, ready: resultReady, retry } = useStencilInspection(enabled, request,
   (snapshot, signal) => tasks.run<StencilInspection>('inspect_stencil', { params: snapshot.params, part: snapshot.part }, 'preview', signal));
-// Keep the same board visible during a recalculation; actions use only a fresh
-// engine result. A board/side change clears this snapshot synchronously.
+// Raw pad geometry stays editable while its openings recalculate. Only an
+// import/board/side change invalidates those source indices and this snapshot.
 const data = shallowRef<StencilInspection | null>(null);
 const mode = ref<'original' | 'openings' | 'compare'>('original');
 const isEditing = computed(() => mode.value === 'original');
 const showFiltered = ref(true);
+const sourcePads = computed(() => props.side === 'top' ? store.config.stencilPadsTop : store.config.stencilPadsBottom);
 const selectedIds = shallowRef<number[]>([]);
 const decisionEl = ref<HTMLDivElement | null>(null);
 const selectedPads = computed(() => {
@@ -50,13 +52,12 @@ const selectedPads = computed(() => {
   return data.value?.pads.filter(pad => ids.has(pad.sourceIndex)) ?? [];
 });
 const singlePad = computed(() => selectedPads.value.length === 1 ? selectedPads.value[0] : null);
-const selectedFilter = computed(() => singlePad.value
+const selectedFilter = computed(() => resultReady.value && singlePad.value
   ? data.value?.filtered.find(pad => pad.sourceIndex === singlePad.value!.sourceIndex) : null);
-const manualPads = computed(() => data.value?.pads.filter(pad => pad.decision !== 'auto') ?? []);
-const editable = computed(() => isEditing.value && !!latest.value && !loading.value && !error.value && !store.historyBusy);
+const editable = computed(() => props.active && isEditing.value && !!data.value
+  && store.pythonDetected && !store.historyBusy);
 const commonDecision = computed(() => {
-  const pads = props.side === 'top' ? store.config.stencilPadsTop : store.config.stencilPadsBottom;
-  const values = new Set(selectedIds.value.map(index => pads[index]?.apertureOverride ?? 'auto'));
+  const values = new Set(selectedIds.value.map(index => sourcePads.value[index]?.apertureOverride ?? 'auto'));
   return values.size === 1 ? [...values][0] : null;
 });
 const selectedPath = computed(() => selectedPads.value.map(pad => polygonPath(pad.polygons)).join(' '));
@@ -66,12 +67,18 @@ const paths = computed(() => data.value ? {
   openings: polygonPath(data.value.openings), filtered: data.value.filtered.map(pad => polygonPath(pad.polygons)),
   pads: data.value.pads.map(pad => ({ ...pad, path: polygonPath(pad.polygons) })),
 } : null);
+// Decision metadata is cheap and immediate; keep it out of the memoized raw
+// geometry so continuous edits never rebuild the dense pad/hit-target paths.
+const manualPads = computed(() => (paths.value?.pads ?? []).flatMap(pad => {
+  const decision = sourcePads.value[pad.sourceIndex]?.apertureOverride;
+  return decision ? [{ ...pad, decision }] : [];
+}));
 function decide(value: 'auto' | ApertureOverride) {
   if (!selectedIds.value.length || !editable.value) return;
   store.setApertureOverrides(props.side, selectedIds.value, value === 'auto' ? undefined : value);
 }
 async function selectWithKeyboard(index: number, event: KeyboardEvent) {
-  if (!isEditing.value) return;
+  if (!editable.value) return;
   selectedIds.value = mergeSelection(selectedIds.value, [index], event.ctrlKey || event.metaKey ? 'toggle' : event.shiftKey ? 'add' : 'replace');
   await nextTick();
   decisionEl.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
@@ -82,7 +89,7 @@ const gestureKind = ref<'pan' | 'select' | null>(null);
 const zoom = ref(1);
 const interaction = createInspectionInteraction({
   svg: () => svgEl.value, marquee: () => marqueeEl.value,
-  canSelect: () => props.active && isEditing.value && !!data.value,
+  canSelect: () => editable.value,
   pads: () => selectionPads.value, selection: () => selectedIds.value,
   select: indices => { selectedIds.value = indices; },
   gesture: kind => { gestureKind.value = kind; }, zoom: value => { zoom.value = value; },
@@ -94,7 +101,7 @@ let displayedRequestKey = '';
 // context reset below, while rejecting results for a different request.
 watch([latest, resolvedKey, () => props.side,
   () => props.side === 'top' ? store.config.stencilPadsTop : store.config.stencilPadsBottom,
-  () => store.config.pcbOutlinePoints], ([value]) => {
+  () => store.config.pcbOutlinePoints, () => store.config.pcbOutlineHoles], ([value]) => {
   if (!value || resolvedKey.value !== request.value?.key) return;
   const key = `${value.side}:${JSON.stringify(value.outline)}`;
   const updated = !!data.value && key === geometryKey && displayedRequestKey !== request.value?.key;
@@ -106,14 +113,14 @@ watch([latest, resolvedKey, () => props.side,
   if (updated && props.active && !error.value) completeCheck();
 });
 watch([() => props.side, () => props.side === 'top' ? store.config.stencilPadsTop : store.config.stencilPadsBottom,
-  () => store.config.pcbOutlinePoints], () => {
+  () => store.config.pcbOutlinePoints, () => store.config.pcbOutlineHoles], () => {
   interaction.finish(); data.value = null; selectedIds.value = []; geometryKey = ''; displayedRequestKey = ''; resetCheck();
 }, { flush: 'sync' });
 function fit() {
   if (data.value) interaction.fit(inspectionBounds(data.value));
 }
 function canvasKey(event: KeyboardEvent) {
-  if (!isEditing.value) return;
+  if (!editable.value) return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
     event.preventDefault(); selectedIds.value = data.value?.pads.map(pad => pad.sourceIndex) ?? [];
   } else if (event.key === 'Escape') {
@@ -145,18 +152,18 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
       </div>
       <button class="filtered-toggle" :class="{ active: showFiltered, 'is-concealed': mode === 'openings' }"
         :inert="mode === 'openings'" :aria-hidden="mode === 'openings'" :aria-pressed="showFiltered" @click="showFiltered = !showFiltered">
-        <span class="legend-dot filtered" />{{ t('inspection.filtered') }}<span class="count">{{ data?.summary.filteredPads ?? '—' }}</span>
+        <span class="legend-dot filtered" />{{ t('inspection.filtered') }}<span class="count">{{ resultReady ? data?.summary.filteredPads : '—' }}</span>
       </button>
       <button v-if="manualPads.length" class="reset-decisions" :class="{ 'is-concealed': !isEditing }" :inert="!isEditing" :aria-hidden="!isEditing"
         :disabled="!editable" @click="store.resetApertureOverrides(side)">
         {{ t('inspection.resetSide') }}<span class="count">{{ manualPads.length }}</span>
       </button>
       <div class="zoom-tools">
-        <button :aria-label="t('inspection.zoomOut')" :title="t('inspection.zoomOut')" @click="interaction.zoomBy(1 / 1.35)">−</button>
+        <button :aria-label="t('inspection.zoomOut')" v-app-tooltip="t('inspection.zoomOut')" @click="interaction.zoomBy(1 / 1.35)">−</button>
         <span>{{ Math.round(zoom * 100) }}%</span>
-        <button :aria-label="t('inspection.zoomIn')" :title="t('inspection.zoomIn')" @click="interaction.zoomBy(1.35)">+</button>
+        <button :aria-label="t('inspection.zoomIn')" v-app-tooltip="t('inspection.zoomIn')" @click="interaction.zoomBy(1.35)">+</button>
         <button class="fit-button" @click="fit">{{ t('inspection.fit') }}</button>
-        <button class="tour-button" :disabled="!tourReady" :title="t('inspection.tour.replay')"
+        <button class="tour-button" :disabled="!tourReady" v-app-tooltip="t('inspection.tour.replay')"
           :aria-label="t('inspection.tour.replay')" aria-haspopup="dialog" :aria-expanded="tourOpen" @click="replayTour">
           <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
             <circle cx="10" cy="10" r="7.25" stroke="currentColor" stroke-width="1.3" />
@@ -173,8 +180,15 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
         <span v-if="singlePad" class="selection-size">#{{ singlePad.sourceIndex + 1 }} · {{ singlePad.width.toFixed(2) }} × {{ singlePad.height.toFixed(2) }} mm</span>
         <span v-else-if="!selectedIds.length">{{ t('inspection.selectHint') }}</span>
         <span v-else>{{ t(commonDecision ? `inspection.decision_${commonDecision}` : 'inspection.mixedDecisions') }}</span>
-        <details v-if="selectedFilter && commonDecision === 'auto'" :key="`${side}:${selectedFilter.sourceIndex}:${selectedFilter.reason}`" class="selection-reason">
-          <summary :aria-label="t('inspection.filterReason')">?</summary>
+        <details v-if="selectedFilter && commonDecision === 'auto'" :key="`${side}:${selectedFilter.sourceIndex}:${selectedFilter.reason}`" class="selection-reason"
+          @keydown.esc.prevent.stop="($event.currentTarget as HTMLElement).removeAttribute('open')">
+          <summary v-app-tooltip="t('inspection.filterReason')" :aria-label="t('inspection.filterReason')">
+            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="7.25" stroke="currentColor" stroke-width="1.3" />
+              <path d="M7.9 7.6a2.1 2.1 0 1 1 3.5 1.55C10.45 9.8 10 10.05 10 11.1" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+              <circle cx="10" cy="13.5" r=".8" fill="currentColor" />
+            </svg>
+          </summary>
           <p>{{ t(`inspection.reason_${selectedFilter.reason}`) }}</p>
         </details>
       </div>
@@ -191,7 +205,7 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
     </div>
     </div>
     <div class="inspection-canvas" :class="{ panning: gestureKind === 'pan', selecting: gestureKind === 'select', editing: isEditing }">
-      <svg v-if="data && paths" ref="svgEl" viewBox="-10 -10 20 20" :aria-label="t('inspection.title')" tabindex="0"
+      <svg v-if="data && paths" ref="svgEl" viewBox="-10 -10 20 20" :class="{ 'is-stale': !resultReady }" :aria-label="t('inspection.title')" tabindex="0"
         @wheel.prevent="interaction.wheel" @pointerdown="interaction.down" @pointermove="interaction.move" @pointerup="interaction.finish"
         @pointercancel="interaction.finish" @lostpointercapture="interaction.finish" @contextmenu.prevent @keydown="canvasKey">
         <g v-memo="[paths, mode, showFiltered, locale]">
@@ -199,17 +213,12 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
         <g class="inspection-layer" :class="{ 'is-visible': mode !== 'openings' }" aria-hidden="true">
           <path :d="paths.original" class="original-mask" :class="{ overlay: mode === 'compare' }" />
         </g>
-        <g class="inspection-layer" :class="{ 'is-visible': mode !== 'original' }" aria-hidden="true">
+        <g class="inspection-layer derived" :class="{ 'is-visible': mode !== 'original' }" aria-hidden="true">
           <path :d="paths.openings" class="opening-mask" />
         </g>
-        <g class="inspection-layer" :class="{ 'is-visible': showFiltered && mode !== 'openings' }" aria-hidden="true">
+        <g class="inspection-layer derived" :class="{ 'is-visible': showFiltered && mode !== 'openings' }" aria-hidden="true">
           <path v-for="(path, index) in paths.filtered" :key="index" :d="path" class="filtered-mask"
             />
-        </g>
-        <g class="inspection-layer" :class="{ 'is-visible': mode !== 'openings' }" aria-hidden="true">
-          <template v-for="pad in paths.pads" :key="`manual-${pad.sourceIndex}`">
-            <path v-if="pad.decision !== 'auto'" :d="pad.path" class="manual-mask" :class="pad.decision" />
-          </template>
         </g>
         <!-- Hide hit targets immediately; only the visible geometry fades. -->
         <g v-show="isEditing" class="pad-hit-layer" :aria-hidden="!isEditing">
@@ -221,19 +230,22 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
         </path>
         </g>
         </g>
+        <g class="inspection-layer" :class="{ 'is-visible': mode !== 'openings' }" aria-hidden="true">
+          <path v-for="pad in manualPads" :key="`manual-${pad.sourceIndex}`" :d="pad.path" class="manual-mask" :class="pad.decision" />
+        </g>
         <path v-if="isEditing && selectedPath" :d="selectedPath" class="selected-pad" />
         <rect ref="marqueeEl" class="selection-box" style="display: none" />
       </svg>
       <Transition name="inspection-status">
-      <div v-if="loading || error || !store.pythonDetected || checkCompleted" class="inspection-state"
+      <div v-if="loading || error || !store.pythonDetected || (checkCompleted && resultReady)" class="inspection-state"
         :key="error ? 'error' : !store.pythonDetected ? 'unavailable' : 'progress'"
-        :class="{ compact: data && (loading || checkCompleted) && store.pythonDetected && !error, 'is-complete': checkCompleted && !loading }" role="status">
-        <template v-if="loading || checkCompleted">
+        :class="{ compact: data && store.pythonDetected, 'has-error': !!error, 'is-complete': checkCompleted && resultReady }" role="status">
+        <template v-if="error"><strong>{{ t('inspection.failed') }}</strong><span v-if="!data" class="error-detail">{{ error }}</span><button @click="retry">{{ t('inspection.retry') }}</button></template>
+        <template v-else-if="!store.pythonDetected">{{ t('preview.noPythonPreview') }}</template>
+        <template v-else>
           <ActionStatusIcon :state="loading ? 'busy' : 'success'" :size="data ? 14 : 22" />
           <span>{{ t(loading ? 'inspection.loading' : 'preview.refreshed') }}</span>
         </template>
-        <template v-else-if="error"><strong>{{ t('inspection.failed') }}</strong><span class="error-detail">{{ error }}</span><button @click="retry">{{ t('inspection.retry') }}</button></template>
-        <template v-else>{{ t('preview.noPythonPreview') }}</template>
       </div>
       </Transition>
       <div v-if="data" class="inspection-legend" aria-hidden="true">
@@ -247,8 +259,8 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
     <div class="inspection-footer" aria-live="polite">
       <div v-if="data" class="inspection-counts">
         <span>{{ t('inspection.sourceCount') }} <strong>{{ data.summary.sourcePads }}</strong></span>
-        <span>{{ t('inspection.openingCount') }} <strong>{{ data.summary.openings }}</strong></span>
-        <span :class="{ warning: data.summary.filteredPads > 0 }">{{ t('inspection.filtered') }} <strong>{{ data.summary.filteredPads }}</strong></span>
+        <span>{{ t('inspection.openingCount') }} <strong>{{ resultReady ? data.summary.openings : '—' }}</strong></span>
+        <span :class="{ warning: resultReady && data.summary.filteredPads > 0 }">{{ t('inspection.filtered') }} <strong>{{ resultReady ? data.summary.filteredPads : '—' }}</strong></span>
         <span v-if="manualPads.length">{{ t('inspection.manualCount') }} <strong>{{ manualPads.length }}</strong></span>
         <span v-if="data.summary.invalidPads" class="warning">{{ t('inspection.invalid', { n: data.summary.invalidPads }) }}</span>
       </div>
@@ -283,9 +295,11 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
 .selection-label strong { color: var(--text-default); font-size: 12px; font-weight: 500; }
 .selection-size { font-family: var(--font-family-mono); font-size: 10px; }
 .selection-reason { position: relative; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
-.selection-reason summary { display: grid; place-items: center; width: 19px; height: 19px; box-sizing: border-box; border: 1px solid var(--surface-line); border-radius: 50%; cursor: pointer; list-style: none; }
+.selection-reason summary { display: grid; place-items: center; width: 24px; height: 24px; box-sizing: border-box; border-radius: 50%; color: var(--text-tertiary); cursor: pointer; list-style: none; transition: var(--control-transition); }
+.selection-reason summary:hover, .selection-reason[open] summary { background: var(--control-selection-surface); color: var(--interaction-ink); }
+.selection-reason summary:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 2px; }
 .selection-reason summary::-webkit-details-marker { display: none; }
-.selection-reason p { position: absolute; z-index: 3; top: 23px; left: 0; width: 240px; max-width: 60vw; margin: 0; padding: 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow-card); }
+.selection-reason p { position: absolute; z-index: 3; top: 30px; left: 0; width: 240px; max-width: 60vw; margin: 0; padding: 10px 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow-card); }
 .clear-selection { background: transparent; border: none; padding: 5px 0; }
 .readonly-notice { display: flex; align-items: center; gap: 10px; box-sizing: border-box; min-height: 58px; padding: 10px 20px; border-bottom: 1px solid var(--surface-line); color: var(--text-tertiary); font-size: 11px; }
 .readonly-badge { flex-shrink: 0; border: 1px solid var(--surface-line); background: var(--surface-well); padding: 3px 7px; border-radius: var(--radius-inner); color: var(--text-secondary); font-size: 10px; }
@@ -312,6 +326,7 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
 .inspection-canvas path { fill-rule: evenodd; vector-effect: non-scaling-stroke; }
 .inspection-layer { opacity: 0; pointer-events: none; transition: opacity 180ms var(--ease-out); }
 .inspection-layer.is-visible { opacity: 1; }
+.inspection-canvas > svg.is-stale .inspection-layer.derived.is-visible { opacity: .4; }
 .pcb-outline { fill: var(--inspection-board-fill, var(--surface-raised)); stroke: var(--inspection-board-stroke, var(--text-tertiary)); stroke-opacity: .6; stroke-width: 1; }
 .original-mask { fill: var(--inspection-original, #638caf); fill-opacity: 1; stroke-opacity: 0; transition: fill-opacity 180ms var(--ease-out), stroke-opacity 180ms var(--ease-out); }
 .original-mask.overlay { fill-opacity: .3; stroke: var(--inspection-original, #638caf); stroke-opacity: .65; stroke-width: .6; }
@@ -327,6 +342,7 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
 .selection-box { fill: var(--inspection-selection, var(--bg-brand)); fill-opacity: .1; stroke: var(--inspection-selection, var(--bg-brand)); stroke-width: 1; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .inspection-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; background: var(--surface-well); color: var(--text-secondary); font-size: 12px; text-align: center; }
 .inspection-state.compact { inset: 14px auto auto 16px; flex-direction: row; gap: 8px; padding: 9px 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow-card); pointer-events: none; }
+.inspection-state.compact.has-error { flex-wrap: wrap; max-width: calc(100% - 64px); color: var(--status-warning-default); pointer-events: auto; }
 .inspection-state.is-complete { color: var(--interaction-ink); }
 .inspection-status-enter-active { transition: opacity 180ms var(--ease-out); }
 .inspection-status-leave-active { transition: opacity 120ms ease; pointer-events: none; }

@@ -8,6 +8,9 @@ export default {
     "outsideBoard": "The area must overlap PCB material, rather than sit entirely outside the board or inside a cutout.",
     "title": "Double-sided printing",
     "enabled": "Components already fitted underneath",
+    "entryHint": "Add component clearance for printing the other side",
+    "entryOn": "Enabled",
+    "entryOff": "Off",
     "enableHint": "Mark the component areas to leave space when printing the other side. The bottom push-out hole and edge access notches keep their existing settings.",
     "printSide": "Print side",
     "top": "Top",
@@ -311,6 +314,8 @@ export default {
     failed: "The update operation failed. Check your connection and try again.",
     manualOnly: "Startup checks are off. You can check for updates manually.",
     development: "Updates are disabled in development preview. Use an installed release.",
+    releaseNotes: "What's new", expandNotes: "Show all", collapseNotes: "Show less",
+    errorDetails: "Error details", restartFailed: "Automatic restart failed. Please restart the app manually.",
   },
   win: {
     minimize: "Minimize",

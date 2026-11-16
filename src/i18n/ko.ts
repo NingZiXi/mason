@@ -10,6 +10,9 @@ export default {
     "outsideBoard": "영역은 기판과 겹쳐야 하며, 기판 바깥이나 내부 구멍 안에만 놓을 수 없습니다.",
     "title": "양면 페이스트 인쇄",
     "enabled": "아래쪽 면에 부품이 실장되어 있음",
+    "entryHint": "뒤집어 인쇄할 때 부품이 들어갈 공간을 만듭니다",
+    "entryOn": "켜짐",
+    "entryOff": "꺼짐",
     "enableHint": "부품 영역을 지정해 뒤집어 인쇄할 때 필요한 공간을 만듭니다. 바닥 밀어내기 구멍과 가장자리 꺼내기 홈은 기존 설정을 따릅니다.",
     "printSide": "인쇄할 면",
     "top": "앞면",
@@ -376,7 +379,12 @@ export default {
     "restart": "앱 재시작",
     "failed": "업데이트에 실패했습니다. 연결을 확인하고 다시 시도하세요.",
     "manualOnly": "시작 시 확인이 꺼져 있습니다. 직접 업데이트를 확인할 수 있습니다.",
-    "development": "개발 미리보기에서는 업데이트할 수 없습니다. 설치된 정식 버전을 사용하세요."
+    "development": "개발 미리보기에서는 업데이트할 수 없습니다. 설치된 정식 버전을 사용하세요.",
+    "releaseNotes": "업데이트 내용",
+    "expandNotes": "모두 보기",
+    "collapseNotes": "접기",
+    "errorDetails": "오류 세부 정보",
+    "restartFailed": "자동 재시작에 실패했습니다. 앱을 직접 다시 시작해 주세요."
   },
   "win": {
     "minimize": "최소화",

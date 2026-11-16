@@ -41,6 +41,7 @@ function loadComponent(name: 'ComponentReliefEditor' | 'ComponentReliefForm'): C
     if (dependency.endsWith('/component-relief-auto')) return automatic;
     if (dependency.endsWith('/relief-pad-guide')) return padGuide;
     if (dependency.endsWith('/history-shortcuts')) return shortcuts;
+    if (dependency.endsWith('/directives/app-tooltip')) return { vAppTooltip: {} };
     if (dependency.endsWith('/model-params')) return params;
     if (dependency.endsWith('/ComponentReliefEditor.vue')) return { __esModule: true, default: Editor };
     if (dependency.endsWith('/ComponentReliefPreview.vue')) return { default: preview };

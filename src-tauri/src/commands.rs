@@ -289,7 +289,7 @@ fn check_deps_blocking(python: &str) -> Vec<String> {
          print(','.join(missing))"
     );
     let mut check_cmd = std::process::Command::new(python);
-    check_cmd.arg("-c").arg(&script);
+    check_cmd.env("PYTHONDONTWRITEBYTECODE", "1").arg("-c").arg(&script);
 
     // Windows: 隐藏控制台黑窗口
     #[cfg(target_os = "windows")]
@@ -430,10 +430,22 @@ pub async fn install_deps(
     if !std::path::Path::new(&python_path).exists() {
         return Err(AppError::Other(format!("路径不存在: {}", python_path)));
     }
+    // Installed resources are part of the signed application. Repairing the
+    // packaged engine in place would invalidate that signature.
+    #[cfg(not(debug_assertions))]
+    if let Some(bundled) = scad::bundled_python(Some(&app)) {
+        let selected = std::fs::canonicalize(&python_path)?;
+        if std::fs::canonicalize(bundled).is_ok_and(|path| path == selected) {
+            return Err(AppError::Other(
+                "内置引擎不能原地安装依赖。请重新安装 Mason，或选择外部 Python 后安装依赖。".into(),
+            ));
+        }
+    }
     let _ = app.emit("install-log", "> pip install build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy(清华镜像)");
 
     let mut cmd = std::process::Command::new(&python_path);
-    cmd.arg("-m")
+    cmd.env("PYTHONDONTWRITEBYTECODE", "1")
+        .arg("-m")
         .arg("pip")
         .arg("install")
         .arg("--no-input")

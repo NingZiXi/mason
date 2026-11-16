@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { computed, ref, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useUiStore } from "../stores/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -10,6 +10,10 @@ import { useUpdaterStore } from "../stores/updater";
 import { useExitConfirmation } from "../composables/useExitConfirmation";
 import { version } from "../../package.json";
 import { LOCALE_NAMES } from '../lib/locales';
+import ActionStatusIcon from './ActionStatusIcon.vue';
+import MotionCollapse from './MotionCollapse.vue';
+import UpdateNotes from './UpdateNotes.vue';
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const { t } = useI18n();
 const emit = defineEmits<{ startTour: [] }>();
@@ -19,6 +23,31 @@ const updater = useUpdaterStore();
 const confirmExit = useExitConfirmation();
 const canUpdate = isTauri() && !import.meta.env.DEV;
 const confirmingUpdate = ref(false);
+const showUpdateError = ref(false);
+const updateStatusText = computed(() => {
+  if (!canUpdate) return t('updates.development');
+  if (updater.error) return t(updater.status === 'ready' ? 'updates.restartFailed' : 'updates.failed');
+  switch (updater.status) {
+    case 'checking': return t('updates.checking');
+    case 'latest': return t('updates.latest');
+    case 'downloading': return t('updates.downloading');
+    case 'installing': return t('updates.installing');
+    case 'ready': return t('updates.ready');
+    default: return updater.update
+      ? t('updates.available', { version: updater.update.version })
+      : t(ui.checkUpdatesOnStartup ? 'updates.automatic' : 'updates.manualOnly');
+  }
+});
+const updateIconState = computed(() => updater.error ? 'idle'
+  : updater.busy ? 'busy'
+  : updater.status === 'latest' || updater.status === 'ready' ? 'success' : 'idle');
+watch(() => updater.error, () => { showUpdateError.value = false; });
+function hidePreviousUpdateStatus(el: Element) {
+  el.setAttribute('aria-hidden', 'true');
+}
+function showCurrentUpdateStatus(el: Element) {
+  el.removeAttribute('aria-hidden');
+}
 const showSettings = ref(false);
 const appVersion = ref("");
 const activeTab = ref<"about" | "general">("about");
@@ -91,8 +120,8 @@ function onSettingsClosed() {
 </script>
 
 <template>
-  <button class="settings-btn" :title="t('settings.button')" :aria-label="t('settings.button')" aria-haspopup="dialog" :aria-expanded="showSettings" @click="showSettings = true">
-    <span v-if="updater.update" class="update-dot" :title="t('updates.title')" />
+  <button class="settings-btn" v-app-tooltip="{ content: updater.update ? t('updates.title') : t('settings.button'), placement: 'bottom' }" :aria-label="t('settings.button')" aria-haspopup="dialog" :aria-expanded="showSettings" @click="showSettings = true">
+    <span v-if="updater.update" class="update-dot" />
     <svg viewBox="0 0 24 24" width="15" height="15">
       <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
@@ -113,7 +142,7 @@ function onSettingsClosed() {
           </svg>
           <span class="header-title">{{ t('settings.button') }}</span>
         </div>
-        <button class="close-btn" :title="t('settings.close')" :aria-label="t('settings.close')" @click="closeSettings">
+        <button class="close-btn" v-app-tooltip="t('settings.close')" :aria-label="t('settings.close')" @click="closeSettings">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
@@ -170,29 +199,53 @@ function onSettingsClosed() {
 
             <p class="about-desc">{{ t('about.desc') }}</p>
 
-            <div class="update-card" aria-live="polite">
+            <div class="update-card">
               <strong>{{ t('updates.title') }}</strong>
-              <p v-if="!canUpdate">{{ t('updates.development') }}</p>
-              <template v-else>
-                <p v-if="updater.status === 'checking'">{{ t('updates.checking') }}</p>
-                <p v-else-if="updater.status === 'latest'">{{ t('updates.latest') }}</p>
-                <p v-else-if="updater.status === 'downloading'">
-                  {{ updater.total ? t('updates.progress', { percent: updater.progress }) : t('updates.downloading') }}
-                </p>
-                <p v-else-if="updater.status === 'installing'">{{ t('updates.installing') }}</p>
-                <p v-else-if="updater.status === 'ready'">{{ t('updates.ready') }}</p>
-                <p v-else-if="updater.update">{{ t('updates.available', { version: updater.update.version }) }}</p>
-                <p v-else>{{ t(ui.checkUpdatesOnStartup ? 'updates.automatic' : 'updates.manualOnly') }}</p>
-                <el-progress v-if="updater.status === 'downloading' && updater.total" :percentage="updater.progress" />
-                <pre v-if="updater.update?.body" class="update-notes">{{ updater.update.body }}</pre>
-                <p v-if="updater.error" class="update-error">{{ t('updates.failed') }}<br>{{ updater.error }}</p>
-                <div class="update-actions">
-                  <el-button v-if="updater.status === 'ready'" size="small" type="primary" @click="restart">{{ t('updates.restart') }}</el-button>
-                  <template v-else>
-                    <el-button size="small" :loading="updater.status === 'checking'" :disabled="updater.busy || confirmingUpdate" @click="updater.checkForUpdates()">{{ t('updates.check') }}</el-button>
-                    <el-button v-if="updater.update" size="small" type="primary" :loading="updater.status === 'downloading' || updater.status === 'installing'" :disabled="updater.busy || confirmingUpdate" @click="installUpdate">{{ t('updates.install') }}</el-button>
-                  </template>
+              <div class="update-status" :class="{ 'has-error': !!updater.error }">
+                <ActionStatusIcon :state="updateIconState" :size="15">
+                  <svg v-if="updater.error" viewBox="0 0 16 16" fill="none">
+                    <circle cx="8" cy="8" r="5.7" /><path d="M8 4.7v3.9M8 11v.2" />
+                  </svg>
+                  <svg v-else viewBox="0 0 16 16" fill="none">
+                    <path d="M8 10.5v-8m-3 3 3-3 3 3M3 10v2.3c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V10" />
+                  </svg>
+                </ActionStatusIcon>
+                <div class="update-status-copy" role="status" aria-live="polite" aria-atomic="true">
+                  <Transition name="update-copy" @before-enter="showCurrentUpdateStatus" @before-leave="hidePreviousUpdateStatus">
+                    <span :key="updater.error ? 'error' : updater.status">{{ updateStatusText }}</span>
+                  </Transition>
                 </div>
+                <span v-if="updater.status === 'downloading' && updater.total" class="update-percent" aria-hidden="true">{{ updater.progress }}%</span>
+              </div>
+              <template v-if="canUpdate">
+                <div class="update-progress-slot">
+                  <div v-if="updater.status === 'downloading'" class="update-progress" role="progressbar" :aria-label="t('updates.downloading')"
+                    :aria-valuemin="0" :aria-valuemax="100" :aria-valuenow="updater.total ? updater.progress : undefined">
+                    <span :class="{ indeterminate: !updater.total }" :style="updater.total ? { transform: `scaleX(${updater.progress / 100})` } : undefined" />
+                  </div>
+                </div>
+                <div class="update-actions">
+                  <el-button v-if="updater.status === 'ready'" size="small" type="primary" @click="restart">
+                    <span class="update-action-label"><ActionStatusIcon state="success" />{{ t('updates.restart') }}</span>
+                  </el-button>
+                  <template v-else>
+                    <el-button size="small" :disabled="updater.busy || confirmingUpdate" @click="updater.checkForUpdates()">
+                      <span class="update-action-label"><ActionStatusIcon :state="updater.status === 'checking' ? 'busy' : 'idle'">
+                        <svg viewBox="0 0 16 16" fill="none"><path d="M12.7 6.4A5 5 0 0 0 4 4.2L2.7 5.7m0-3v3h3M3.3 9.6a5 5 0 0 0 8.7 2.2l1.3-1.5m0 3v-3h-3" /></svg>
+                      </ActionStatusIcon>{{ t('updates.check') }}</span>
+                    </el-button>
+                    <el-button v-if="updater.update" size="small" type="primary" :disabled="updater.busy || confirmingUpdate" @click="installUpdate">
+                      <span class="update-action-label"><ActionStatusIcon :state="updater.status === 'downloading' || updater.status === 'installing' ? 'busy' : 'idle'">
+                        <svg viewBox="0 0 16 16" fill="none"><path d="M8 2.5v8m-3-3 3 3 3-3M3 10v2.3c0 .7.5 1.2 1.2 1.2h7.6c.7 0 1.2-.5 1.2-1.2V10" /></svg>
+                      </ActionStatusIcon>{{ t('updates.install') }}</span>
+                    </el-button>
+                  </template>
+                  <button v-if="updater.error" class="update-error-toggle" :aria-expanded="showUpdateError" aria-controls="update-error-details" @click="showUpdateError = !showUpdateError">{{ t('updates.errorDetails') }}</button>
+                </div>
+                <MotionCollapse :open="!!updater.error && showUpdateError">
+                  <p id="update-error-details" class="update-error-details">{{ updater.error }}</p>
+                </MotionCollapse>
+                <UpdateNotes v-if="updater.update?.body" :body="updater.update.body" />
               </template>
             </div>
 
@@ -446,12 +499,30 @@ function onSettingsClosed() {
 .update-dot { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-brand); }
 .update-card { padding: 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-popover); corner-shape: var(--corner-shape); background: var(--surface-well); font-size: 12px; color: var(--text-secondary); }
 .update-card > strong { display: block; color: var(--text-default); font-size: var(--heading-2xs-font-size); font-weight: var(--font-weight-strong); line-height: var(--body-md-line-height); }
-.update-card p { margin: 8px 0; line-height: var(--body-md-line-height); }
-.update-notes { max-height: 140px; margin: 10px 0; padding-top: 10px; border-top: 1px solid var(--surface-line); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: var(--body-md-line-height); }
-.update-error { color: var(--el-color-danger); overflow-wrap: anywhere; }
-.update-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.update-actions .el-button { max-width: 100%; height: auto; min-height: 24px; margin-left: 0; padding-block: 2px; line-height: 18px; white-space: normal; }
+.update-status { display: flex; align-items: center; gap: 8px; min-height: 38px; margin-top: 5px; line-height: var(--body-md-line-height); }
+.update-status > .action-status-icon { color: var(--interaction-ink); }
+.update-status.has-error > .action-status-icon { color: var(--el-color-danger); }
+.update-status-copy { display: grid; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.update-status-copy > span { grid-area: 1 / 1; align-self: center; }
+.update-percent { color: var(--text-default); font-size: 11px; font-variant-numeric: tabular-nums; }
+.update-copy-enter-active { transition: opacity 160ms var(--ease-out), transform 220ms var(--ease-out); }
+.update-copy-leave-active { transition: opacity 100ms ease; }
+.update-copy-enter-from { opacity: 0; transform: translateY(3px); }
+.update-copy-leave-to { opacity: 0; }
+.update-progress-slot { height: 3px; margin-top: 2px; }
+.update-progress { height: 3px; border-radius: var(--radius-full); overflow: hidden; background: var(--surface-line); }
+.update-progress > span { display: block; width: 100%; height: 100%; background: var(--interaction-ink); transform-origin: left; transition: transform 180ms linear; }
+.update-progress > span.indeterminate { width: 34%; animation: update-progress-travel 1.2s var(--ease-out) infinite; }
+@keyframes update-progress-travel { from { transform: translateX(-100%); } to { transform: translateX(400%); } }
+.update-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.update-actions .el-button { max-width: 100%; height: auto; min-height: 28px; margin-left: 0; padding-block: 4px; line-height: 18px; white-space: normal; }
 .update-actions :deep(.el-button > span) { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.update-action-label { display: inline-flex; align-items: center; gap: 6px; }
+.update-status :deep(.action-icon-state > svg), .update-action-label :deep(.action-icon-state > svg) { display: block; width: 100%; height: 100%; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.update-error-toggle { padding: 4px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font: inherit; cursor: pointer; transition: var(--control-transition); }
+.update-error-toggle:hover { background: var(--bg-overlay-l1); color: var(--text-default); }
+.update-error-toggle:focus-visible { outline: 2px solid var(--interaction-border); outline-offset: 2px; }
+.update-error-details { margin: 10px 0 0; padding: 8px 10px; border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-secondary); overflow-wrap: anywhere; line-height: var(--body-md-line-height); }
 
 /* 侧边栏 */
 .sidebar {
@@ -767,7 +838,6 @@ html.dark .skin-preview--sakura { --preview-bg: #242329; --preview-side: #29282e
 
 @media (max-height: 600px) {
   .pane { gap: 12px; padding-block: 16px; }
-  .update-notes { max-height: 100px; }
 }
 
 @media (max-width: 600px) {

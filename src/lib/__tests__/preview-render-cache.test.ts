@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createSourceFile, isFunctionDeclaration, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { createPreviewFramingMotion } from '../preview-camera-motion';
 
 // Execute the real render, mesh replacement and teardown paths with an in-memory
 // Three.js scene. No WebGL context or desktop interaction is needed.
@@ -26,11 +27,11 @@ function setup() {
   const schedulePreload = vi.fn();
   const ensurePart = vi.fn(async () => {});
   const cancelPreviewTasks = vi.fn();
-  const create = new Function('THREE', 'cam', 'orbit', 'clearMeasureSpy', 'resetTopology', 'schedulePreload', 'ensurePart', 'cancelPreviewTasks', `
+  const create = new Function('THREE', 'cam', 'orbit', 'clearMeasureSpy', 'resetTopology', 'schedulePreload', 'ensurePart', 'cancelPreviewTasks', 'createPreviewFramingMotion', `
     const scene = { value: new THREE.Scene() }, currentMesh = { value: null }, currentAssembly = { value: null };
     const camera = { value: cam }, controls = { value: orbit };
     const cancelCameraMotion = () => {}, settleCameraControls = () => {}, selectedView = { value: 'iso' };
-    let currentMeshPart = null, framedBoardOutline = null, disposed = false, renderSeq = 0, cacheGeneration = 0, renderTimer = null;
+    let currentMeshPart = null, framedBoardOutline = null, disposed = false, renderSeq = 0, cacheGeneration = 0, renderTimer = null, cameraMotion = null;
     const inspectionOpen = { value: false }, hasData = { value: true };
     const store = { pythonDetected: true, config: { pcbOutlinePoints: [[-15,-10], [15,-10], [15,10], [-15,10]] } };
     const activePart = { value: 'insert' }, loading = { value: false }, errorMsg = { value: null };
@@ -59,7 +60,7 @@ function setup() {
         error: errorMsg.value, selected, geometry: currentMesh.value?.geometry }),
       dispose: disposeMesh };
   `);
-  const harness = create(THREE, camera, controls, clearMeasure, resetTopology, schedulePreload, ensurePart, cancelPreviewTasks) as {
+  const harness = create(THREE, camera, controls, clearMeasure, resetTopology, schedulePreload, ensurePart, cancelPreviewTasks, createPreviewFramingMotion) as {
     render: (force?: boolean) => Promise<boolean>;
     cache: (part: Part, geometry: THREE.BufferGeometry) => void;
     select: (part: Part) => void;

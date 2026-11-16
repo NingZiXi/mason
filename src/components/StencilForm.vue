@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import type { InputNumberInstance } from "element-plus";
 import { useConfigStore } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
 import InlineHelp from "./InlineHelp.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -17,6 +19,19 @@ const THICKNESS_PRESETS = [
   { label: "stencil.presetStandard", value: 0.2 },
   { label: "stencil.presetFdm", value: 0.3 },
 ];
+const thicknessInput = ref<InputNumberInstance>();
+const customThicknessFocused = ref(false);
+const customThicknessActive = computed(() => customThicknessFocused.value ||
+  !THICKNESS_PRESETS.some((preset) => Math.abs(c.value.stencilThickness - preset.value) < 0.001));
+
+function selectThickness(value: number) {
+  customThicknessFocused.value = false;
+  c.value.stencilThickness = value;
+}
+
+function editCustomThickness() {
+  thicknessInput.value?.focus();
+}
 
 const thicknessHint = computed(() => {
   const thickness = c.value.stencilThickness;
@@ -44,7 +59,7 @@ function toggleNotchSide(s: NotchSide) {
 }
 
 // 高级参数默认折叠:常规流程(Gerber → 导出)用默认值即可
-const showAdvanced = ref(false);
+const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 </script>
 
 <template>
@@ -107,21 +122,24 @@ const showAdvanced = ref(false);
           v-for="p in THICKNESS_PRESETS"
           :key="p.label"
           class="preset-btn"
-          :class="{ active: Math.abs(c.stencilThickness - p.value) < 0.001 }"
-          @click="store.config.stencilThickness = p.value"
+          :class="{ active: !customThicknessActive && Math.abs(c.stencilThickness - p.value) < 0.001 }"
+          :aria-pressed="!customThicknessActive && Math.abs(c.stencilThickness - p.value) < 0.001"
+          @click="selectThickness(p.value)"
         >
           <span class="preset-name">{{ t(p.label) }}</span>
           <span class="preset-val"><span>{{ p.value }}</span><small>mm</small></span>
         </button>
         <button
           class="preset-btn"
-          :class="{ active: !THICKNESS_PRESETS.some((p) => Math.abs(c.stencilThickness - p.value) < 0.001) }"
-          @click="store.config.stencilThickness = 0.4"
+          :class="{ active: customThicknessActive }"
+          :aria-pressed="customThicknessActive"
+          @click="editCustomThickness"
         >
           <span class="preset-name">{{ t('stencil.presetCustom') }}</span>
         </button>
       </div>
       <el-input-number
+        ref="thicknessInput"
         v-model="c.stencilThickness"
         :min="0.05"
         :max="1.0"
@@ -129,6 +147,8 @@ const showAdvanced = ref(false);
         :precision="2"
         size="small"
         style="width: 100%; margin-top: 8px"
+        @focus="customThicknessFocused = true"
+        @blur="customThicknessFocused = false"
       />
       <div class="auto-hint">
         <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
@@ -204,7 +224,9 @@ const showAdvanced = ref(false);
           :key="s"
           class="notch-btn"
           :class="[`notch-${s}`, { active: c.pryNotchSides.includes(s) }]"
-          :title="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
+          v-app-tooltip="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
+          :aria-label="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
+          :aria-pressed="c.pryNotchSides.includes(s)"
           @click="toggleNotchSide(s)"
         >
           <svg viewBox="0 0 16 16" width="12" height="12">

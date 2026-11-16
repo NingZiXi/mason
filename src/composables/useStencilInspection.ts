@@ -1,4 +1,4 @@
-import { ref, shallowRef, watch, onScopeDispose, type Ref } from 'vue';
+import { computed, ref, shallowRef, watch, onScopeDispose, type Ref } from 'vue';
 import type { StencilInspection } from '../lib/stencil-inspection';
 import { isGenerationCancelled } from '../lib/generation-tasks';
 
@@ -14,12 +14,16 @@ export function useStencilInspection<P>(
   const resolvedKey = ref('');
   const loading = ref(false);
   const error = ref('');
+  const ready = computed(() => active.value && !!data.value && !!request.value
+    && resolvedKey.value === request.value.key && !loading.value && !error.value);
   const cache = new Map<string, StencilInspection>();
   let revision = 0;
   let controller: AbortController | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   async function load() {
+    // A manual retry replaces a debounced refresh instead of starting it twice.
+    clearTimeout(timer); timer = undefined;
     if (!active.value || !request.value) return;
     const snapshot = request.value;
     const token = ++revision;
@@ -35,7 +39,8 @@ export function useStencilInspection<P>(
       data.value = result;
       resolvedKey.value = snapshot.key;
     } catch (e) {
-      if (token === revision && !signal.aborted && !isGenerationCancelled(e)) error.value = String(e);
+      if (token === revision && !signal.aborted && active.value && snapshot.key === request.value?.key
+        && !isGenerationCancelled(e)) error.value = String(e);
     } finally {
       if (token === revision) loading.value = false;
     }
@@ -53,5 +58,5 @@ export function useStencilInspection<P>(
     }
   }, { immediate: true });
   onScopeDispose(() => { invalidate(); cache.clear(); });
-  return { data, resolvedKey, loading, error, retry: load };
+  return { data, resolvedKey, loading, error, ready, retry: load };
 }

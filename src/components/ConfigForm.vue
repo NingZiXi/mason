@@ -10,6 +10,7 @@ import ClampPlanPreview from "./ClampPlanPreview.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
 import ComponentReliefForm from './ComponentReliefForm.vue';
 import { ejectHoleLimits, resolveEjectHoleSize } from '../lib/eject-hole';
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -156,7 +157,7 @@ function toggleNotchSide(s: NotchSide) {
 }
 
 // 高级参数默认折叠:常规流程(Gerber → 导出)用默认值即可
-const showAdvanced = ref(false);
+const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 
 function resetAll() {
   store.reset();
@@ -365,7 +366,9 @@ function applyPreset(id: string) {
           :key="s"
           class="notch-btn"
           :class="[`notch-${s}`, { active: c.pryNotchSides.includes(s) }]"
-          :title="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
+          v-app-tooltip="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
+          :aria-label="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
+          :aria-pressed="c.pryNotchSides.includes(s)"
           @click="toggleNotchSide(s)"
         >
           <svg viewBox="0 0 16 16" width="12" height="12">

@@ -2,6 +2,7 @@
 import { onBeforeUnmount, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useUiStore } from '../stores/ui';
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const { t } = useI18n();
 const ui = useUiStore();
@@ -181,7 +182,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <button ref="logo" type="button" class="brand-logo" :title="t('app.logoInteraction')"
+  <button ref="logo" type="button" class="brand-logo" v-app-tooltip="{ content: t('app.logoInteraction'), placement: 'bottom' }"
     :aria-label="t('app.logoInteraction')" @click="illuminate" @dblclick.stop>
     <svg class="brand-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
       <g ref="symbol" class="brand-symbol">

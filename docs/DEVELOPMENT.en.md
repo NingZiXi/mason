@@ -77,3 +77,5 @@ The frontend handles Gerber parsing, parameters, and previews, and calls Rust th
 See the [Release workflow](../.github/workflows/release.yml). Pushing a `v*` tag triggers builds and publication. Official update packages require the signing key configured for the workflow.
 
 Before releasing, synchronize the app version in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and `src-tauri/tauri.conf.json`, and write notes in `release-notes/v<version>.md`. The workflow produces signed update artifacts and `latest.json` for the in-app updater.
+
+macOS app signing is separate from updater signing. `bundle.macOS.signingIdentity` is currently `-` for ad-hoc app signing. Release builds verify the `.app` signature, but this is not Apple notarization and users may still need to allow the first launch manually. Developer ID distribution requires separate Apple signing certificates and notarization credentials; see the [Tauri guide](https://v2.tauri.app/distribute/sign/macos/) and [macOS installation notes](./MACOS.md).

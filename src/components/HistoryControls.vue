@@ -3,6 +3,7 @@ import { onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import { parameterHistoryShortcut } from "../lib/history-shortcuts";
+import { vAppTooltip } from '../directives/app-tooltip';
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -21,13 +22,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 <template>
   <div class="history-controls" role="group" :aria-label="t('history.label')">
-    <button type="button" :disabled="!store.canUndo" :title="t('history.undoHint')" :aria-label="t('history.undo')"
+    <button type="button" :disabled="!store.canUndo" v-app-tooltip="{ content: t('history.undoHint'), placement: 'bottom' }" :aria-label="t('history.undo')"
       aria-keyshortcuts="Control+Z Meta+Z" @click="store.undo()">
       <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
         <path d="m7 4-4 4 4 4M3.5 8H12a4.5 4.5 0 0 1 0 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
     </button>
-    <button type="button" :disabled="!store.canRedo" :title="t('history.redoHint')" :aria-label="t('history.redo')"
+    <button type="button" :disabled="!store.canRedo" v-app-tooltip="{ content: t('history.redoHint'), placement: 'bottom' }" :aria-label="t('history.redo')"
       aria-keyshortcuts="Control+Y Control+Shift+Z Meta+Shift+Z" @click="store.redo()">
       <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
         <path d="m13 4 4 4-4 4M16.5 8H8a4.5 4.5 0 0 0 0 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />

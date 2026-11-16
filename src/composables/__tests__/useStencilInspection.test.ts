@@ -91,4 +91,74 @@ describe('inspection request lifetime', () => {
     expect(fetch.mock.calls[0]?.[0]?.key).toBe('batch-500');
     expect(state.data.value?.summary.openings).toBe(500);
   });
+
+  it('marks a result stale synchronously, including before a key watcher runs', async () => {
+    vi.useFakeTimers();
+    const state = setup(async () => result(1));
+    expect(state.ready.value).toBe(false);
+    state.active.value = true;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(state.ready.value).toBe(true);
+    state.request.value = snapshot('two');
+    expect(state.data.value).not.toBeNull();
+    expect(state.ready.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(state.ready.value).toBe(true);
+    state.active.value = false;
+    expect(state.ready.value).toBe(false);
+  });
+
+  it('coalesces successive decisions while retaining only the last request', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async (_request: InspectionRequest<{}>, _signal: AbortSignal) => result(1));
+    const state = setup(fetch);
+    state.active.value = true;
+    await vi.advanceTimersByTimeAsync(200);
+    fetch.mockClear();
+    for (const key of ['closed', 'open', 'closed-and-open']) {
+      state.request.value = snapshot(key);
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(state.ready.value).toBe(false);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]?.[0]?.key).toBe('closed-and-open');
+    expect(state.ready.value).toBe(true);
+  });
+
+  it('ignores a rejected obsolete request and never reports failure as ready', async () => {
+    vi.useFakeTimers();
+    let rejectOld!: (reason: Error) => void;
+    const state = setup(request => request.key === 'one'
+      ? new Promise((_resolve, reject) => { rejectOld = reject; })
+      : Promise.resolve(result(2)));
+    state.active.value = true;
+    await vi.advanceTimersByTimeAsync(200);
+    state.request.value = snapshot('two');
+    rejectOld(new Error('outdated failure'));
+    await nextTick();
+    expect(state.error.value).toBe('');
+    expect(state.ready.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(state.ready.value).toBe(true);
+    expect(state.error.value).toBe('');
+  });
+
+  it('replaces a queued refresh with an explicit retry without duplicating work', async () => {
+    vi.useFakeTimers();
+    let resolve!: (value: StencilInspection) => void;
+    const fetch = vi.fn(() => new Promise<StencilInspection>(done => { resolve = done; }));
+    const state = setup(fetch);
+    state.active.value = true;
+    await nextTick();
+    const retry = state.retry();
+    await vi.advanceTimersByTimeAsync(220);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(state.ready.value).toBe(false);
+    resolve(result(3)); await retry;
+    expect(state.ready.value).toBe(true);
+    expect(state.data.value?.summary.openings).toBe(3);
+  });
 });

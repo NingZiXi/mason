@@ -1,4 +1,4 @@
-import { MAX_RELIEF_VERTICES, type ComponentReliefRegion } from './component-relief';
+import { MAX_RELIEF_VERTICES, reliefRegionDepth, type ComponentReliefRegion } from './component-relief';
 
 export interface ReliefPoint { x: number; y: number }
 export interface ReliefBounds { minX: number; minY: number; maxX: number; maxY: number }
@@ -14,6 +14,67 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 export function reliefHandleSize(view: ReliefView, viewportWidth: number, viewportHeight: number): number {
   const width = Math.max(1, finite(viewportWidth, 600)), height = Math.max(1, finite(viewportHeight, 400));
   return Math.max(view.width / width, view.height / height) * 8;
+}
+
+/** Use one theme hue, with a stable scale so editing another pocket cannot
+ * change the apparent depth of existing pockets. Through cuts keep their dash. */
+export function reliefDepthOpacity(region: ComponentReliefRegion, defaultDepth: number): number {
+  if (region.through) return .23;
+  const depth = clamp(finite(reliefRegionDepth(region, defaultDepth), 2), .5, 20);
+  return .12 + .16 * Math.log2(1 + depth) / Math.log2(21);
+}
+
+export interface ReliefLabelBox { x: number; y: number; width: number; height: number }
+export interface ReliefDepthLabel extends ReliefLabelBox {
+  fontSize: number;
+  outside: boolean;
+  anchorX: number;
+  anchorY: number;
+  connectorX: number;
+  connectorY: number;
+}
+
+/** Coordinates live outside the board's flipped group, keeping labels upright.
+ * Small pockets use a callout rather than hiding their handles under a badge. */
+export function reliefDepthLabelLayout(region: ComponentReliefRegion, text: string, side: 'top' | 'bottom',
+  view: ReliefView, unitsPerPixel: number, occupied: readonly ReliefLabelBox[] = []): ReliefDepthLabel {
+  const unit = Math.max(1e-6, finite(unitsPerPixel, 1));
+  const center = reliefScreenPoint(region, side);
+  const fontSize = 11 * unit, height = 22 * unit, gap = 10 * unit;
+  const textWidth = Array.from(text).reduce((width, character) => width + (character.charCodeAt(0) > 255 ? 1 : .62), 0) * fontSize;
+  const width = Math.min(textWidth + 16 * unit, Math.max(unit, view.width - 8 * unit));
+  const fitsInside = region.width >= width + 12 * unit && region.height >= height + 12 * unit;
+  const boxAt = (x: number, y: number): ReliefLabelBox => ({
+    x: clamp(x, view.x + 4 * unit, Math.max(view.x + 4 * unit, view.x + view.width - width - 4 * unit)),
+    y: clamp(y, view.y + 4 * unit, Math.max(view.y + 4 * unit, view.y + view.height - height - 4 * unit)),
+    width, height,
+  });
+  const centered = boxAt(center.x - width / 2, center.y - height / 2);
+  const above = center.y - region.height / 2 - gap - height;
+  const below = center.y + region.height / 2 + gap;
+  const candidates = fitsInside ? [centered] : [];
+  // Prefer above, then below. Additional rows keep adjacent tiny selections
+  // readable without creating a layout loop or moving labels during animation.
+  for (let row = 0; row < 4; row++) {
+    candidates.push(boxAt(center.x - width / 2, above - row * (height + 4 * unit)));
+    candidates.push(boxAt(center.x - width / 2, below + row * (height + 4 * unit)));
+  }
+  candidates.push(boxAt(center.x + region.width / 2 + gap, center.y - height / 2));
+  candidates.push(boxAt(center.x - region.width / 2 - gap - width, center.y - height / 2));
+  const overlap = (box: ReliefLabelBox) => occupied.reduce((area, other) => area
+    + Math.max(0, Math.min(box.x + box.width, other.x + other.width) - Math.max(box.x, other.x))
+    * Math.max(0, Math.min(box.y + box.height, other.y + other.height) - Math.max(box.y, other.y)), 0);
+  let box = candidates[0], score = overlap(box);
+  for (const candidate of candidates.slice(1)) {
+    if (score === 0) break;
+    const next = overlap(candidate);
+    if (next < score) { box = candidate; score = next; }
+  }
+  const outside = box !== centered;
+  const anchorX = outside ? clamp(box.x + width / 2, center.x - region.width / 2, center.x + region.width / 2) : center.x;
+  const anchorY = outside ? clamp(box.y + height / 2, center.y - region.height / 2, center.y + region.height / 2) : center.y;
+  return { ...box, fontSize, outside, anchorX, anchorY,
+    connectorX: clamp(anchorX, box.x, box.x + width), connectorY: clamp(anchorY, box.y, box.y + height) };
 }
 type Ring = ReadonlyArray<readonly [number, number]>;
 const EPSILON = 1e-8;

@@ -8,6 +8,9 @@ export default {
     "outsideBoard": "区域需与 PCB 相交，不能全部落在板外或内孔中。",
     "title": "双面刷锡",
     "enabled": "朝下的一面已有元件",
+    "entryHint": "开启避空，为翻面刷锡留出空间",
+    "entryOn": "已开启",
+    "entryOff": "未开启",
     "enableHint": "圈出元件占用区域，为翻面刷锡留出空间。底部顶出孔和边缘取放缺口沿用原设置。",
     "printSide": "待刷面",
     "top": "正面",
@@ -311,6 +314,8 @@ export default {
     failed: "更新操作失败，请检查网络后重试。",
     manualOnly: "已关闭启动检查，可手动检查新版本。",
     development: "开发预览不执行更新，请在安装版中使用此功能。",
+    releaseNotes: "更新内容", expandNotes: "展开全部", collapseNotes: "收起",
+    errorDetails: "错误详情", restartFailed: "自动重启失败，请手动重启软件。",
   },
   win: {
     minimize: "最小化",

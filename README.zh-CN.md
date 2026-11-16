@@ -19,6 +19,8 @@
 
 </div>
 
+> **macOS（Apple Silicon）：** 应用尚未经过苹果公证。请先将 Mason 拖入「应用程序」；若系统阻止打开，请参阅 [macOS 安装说明](docs/MACOS.md)。仅允许从本项目 Releases 下载并确认可信的安装包。
+
 ---
 
 ## 📌 概述

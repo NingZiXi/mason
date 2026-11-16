@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Spherical, Vector3 } from "three";
-import { createPreviewCameraMotion, type PreviewView } from "../preview-camera-motion";
+import { createPreviewCameraMotion, createPreviewFramingMotion, type PreviewView } from "../preview-camera-motion";
 
 describe("preview camera motion", () => {
   it.each<PreviewView>(["front", "top", "iso"])("keeps the orbit distance when moving to %s", view => {
@@ -86,5 +86,61 @@ describe("preview camera motion", () => {
     expect(out).toEqual(new Vector3(0, 0, 100));
     expect(createPreviewCameraMotion(new Vector3(), "top", 100).sample(100, out)).toBe(false);
     expect(out).toEqual(new Vector3());
+  });
+});
+
+describe("preview framing motion", () => {
+  it("moves the target and distance together without cutting through the orbit", () => {
+    const from = new Vector3(-240, 160, -300), to = new Vector3(120, 80, 150);
+    const fromTarget = new Vector3(0, 120, 0), toTarget = new Vector3(0, 4, 0);
+    const motion = createPreviewFramingMotion(from, to, fromTarget, toTarget, 100);
+    const offset = new Vector3(), target = new Vector3();
+    let previousDistance = Infinity;
+    for (let now = 100; now <= 380; now += 14) {
+      motion.sample(now, offset, target);
+      expect(offset.length()).toBeGreaterThanOrEqual(to.length() - 1e-10);
+      expect(offset.length()).toBeLessThanOrEqual(previousDistance + 1e-10);
+      expect(target.y).toBeGreaterThanOrEqual(4);
+      expect(target.y).toBeLessThanOrEqual(120);
+      expect([offset.x, offset.y, offset.z].every(Number.isFinite)).toBe(true);
+      previousDistance = offset.length();
+    }
+    expect(motion.sample(380, offset, target)).toBe(false);
+    expect(offset).toEqual(to);
+    expect(target).toEqual(toTarget);
+    expect(fromTarget).toEqual(new Vector3(0, 120, 0));
+  });
+
+  it("animates a center change even if the viewing offset is unchanged", () => {
+    const offset = new Vector3(120, 80, 150), target = new Vector3();
+    const motion = createPreviewFramingMotion(offset, offset, new Vector3(0, 30, 0), new Vector3(0, 10, 0), 0);
+    expect(motion.sample(140, offset, target)).toBe(true);
+    expect(target).toEqual(new Vector3(0, 20, 0));
+    expect(motion.sample(280, offset, target)).toBe(false);
+    expect(target).toEqual(new Vector3(0, 10, 0));
+  });
+
+  it("starts a replacement from the visible offset and target, including aliased outputs", () => {
+    const offset = new Vector3(120, 80, 150), target = new Vector3(0, 2, 0);
+    const first = createPreviewFramingMotion(offset, new Vector3(-300, 200, -250), target, new Vector3(0, 140, 0), 0);
+    first.sample(115, offset, target);
+    const visibleOffset = offset.clone(), visibleTarget = target.clone();
+    const nextTarget = new Vector3(0, 4, 0), nextOffset = new Vector3(150, 100, 170);
+    const replacement = createPreviewFramingMotion(offset, nextOffset, target, nextTarget, 115);
+    expect(replacement.sample(115, offset, target)).toBe(true);
+    expect(offset).toEqual(visibleOffset);
+    expect(target).toEqual(visibleTarget);
+    replacement.sample(116, offset, target);
+    expect(offset.distanceTo(visibleOffset)).toBeLessThan(.001);
+    expect(target.distanceTo(visibleTarget)).toBeLessThan(.001);
+    expect(replacement.sample(395, offset, target)).toBe(false);
+    expect(offset).toEqual(nextOffset);
+    expect(target).toEqual(nextTarget);
+  });
+
+  it("does not move the orbit target for an ordinary orientation shortcut", () => {
+    const target = new Vector3(12, 8, -4), out = new Vector3();
+    createPreviewCameraMotion(new Vector3(120, 80, 150), "front", 0).sample(180, out, target);
+    expect(target).toEqual(new Vector3(12, 8, -4));
   });
 });

@@ -8,7 +8,7 @@ import zhCn from "element-plus/es/locale/lang/zh-cn";
 import enLocale from "element-plus/es/locale/lang/en";
 import jaLocale from "element-plus/es/locale/lang/ja";
 import koLocale from "element-plus/es/locale/lang/ko";
-import { useConfigStore } from "./stores/config";
+import { useConfigStore, type AppMode } from "./stores/config";
 import { useUiStore } from "./stores/ui";
 import ConfigForm from "./components/ConfigForm.vue";
 import GerberImport, { type GerberImportPayload } from "./components/GerberImport.vue";
@@ -24,6 +24,8 @@ import BrandLogo from "./components/BrandLogo.vue";
 import { usePresetsStore } from "./stores/presets";
 import { useWorkSessionStore } from "./stores/work-session";
 import { useExitConfirmation } from "./composables/useExitConfirmation";
+import { useSidebarModeScroll } from "./composables/useSidebarModeScroll";
+import { vAppTooltip } from "./directives/app-tooltip";
 import { createWindowCloseHandler } from "./lib/window-close";
 import { fitMainWindowToMonitor } from "./lib/window-layout";
 import { watchDesktopSkinIcon } from "./lib/desktop-icon";
@@ -133,6 +135,9 @@ const SIDEBAR_KEY = "psj_sidebar_width";
 const SIDEBAR_HIDDEN_KEY = "psj_sidebar_hidden";
 const sidebarHidden = ref(false);
 const sidebarShell = ref<HTMLElement | null>(null);
+const parametersSidebar = ref<HTMLElement | null>(null);
+const advancedOpen = ref<Record<AppMode, boolean>>({ jig: false, stencil: false });
+useSidebarModeScroll(appMode, parametersSidebar);
 const configFormRef = ref<InstanceType<typeof ConfigForm> | null>(null);
 let importGuideSequence = 0;
 const viewportWidth = ref(window.innerWidth);
@@ -519,7 +524,8 @@ onBeforeUnmount(() => {
       <div class="window-controls">
         <button
           class="win-btn"
-          :title="t('win.minimize')"
+          v-app-tooltip="{ content: t('win.minimize'), placement: 'bottom' }"
+          :aria-label="t('win.minimize')"
           @click="appWindow.minimize()"
         >
           <svg viewBox="0 0 10 10" width="10" height="10">
@@ -528,7 +534,8 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="win-btn"
-          :title="isMaximized ? t('win.restore') : t('win.maximize')"
+          v-app-tooltip="{ content: isMaximized ? t('win.restore') : t('win.maximize'), placement: 'bottom' }"
+          :aria-label="isMaximized ? t('win.restore') : t('win.maximize')"
           @click="appWindow.toggleMaximize()"
         >
           <svg v-if="isMaximized" viewBox="0 0 10 10" width="10" height="10">
@@ -541,7 +548,8 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="win-btn win-close"
-          :title="t('win.close')"
+          v-app-tooltip="{ content: t('win.close'), placement: 'bottom' }"
+          :aria-label="t('win.close')"
           @click="appWindow.close()"
         >
           <svg viewBox="0 0 10 10" width="10" height="10">
@@ -556,7 +564,7 @@ onBeforeUnmount(() => {
       <div ref="sidebarShell" class="sidebar-shell" :class="{ 'is-animating': sidebarAnimating, 'is-hidden': sidebarHidden }"
         :style="{ width: (visibleSidebarWidth + 5) + 'px' }"
         :inert="sidebarHidden" :aria-hidden="sidebarHidden">
-      <aside id="parameters-sidebar" class="app-sidebar" :aria-label="t('layout.parameters')"
+      <aside ref="parametersSidebar" id="parameters-sidebar" class="app-sidebar" :aria-label="t('layout.parameters')"
         @pointerdown.capture="configStore.beginParameterInteraction()"
         :style="{ width: visibleSidebarWidth + 'px' }">
         <ConfigPresets />
@@ -633,7 +641,7 @@ onBeforeUnmount(() => {
           </button>
           <MotionCollapse id="body-config" :open="!collapsed.config" :height="slotBodyHeight('config')">
           <div class="slot-body">
-            <ConfigForm ref="configFormRef" />
+            <ConfigForm ref="configFormRef" v-model:advanced-open="advancedOpen.jig" />
           </div>
           <div
             class="drag-handle"
@@ -683,7 +691,7 @@ onBeforeUnmount(() => {
           </button>
           <MotionCollapse id="body-stencil" :open="!collapsed.stencil" :height="slotBodyHeight('stencil')">
           <div class="slot-body">
-            <StencilForm />
+            <StencilForm v-model:advanced-open="advancedOpen.stencil" />
           </div>
           <div
             class="drag-handle"
@@ -705,7 +713,7 @@ onBeforeUnmount(() => {
       </div>
 
       <button class="sidebar-toggle" :class="{ 'is-animating': sidebarAnimating, 'is-hidden': sidebarHidden }"
-        :title="sidebarHidden ? t('layout.expandSidebar') : t('layout.collapseSidebar')"
+        v-app-tooltip="{ content: sidebarHidden ? t('layout.expandSidebar') : t('layout.collapseSidebar'), placement: 'right' }"
         :aria-label="sidebarHidden ? t('layout.expandSidebar') : t('layout.collapseSidebar')"
         :aria-expanded="!sidebarHidden" aria-controls="parameters-sidebar" @click="toggleSidebar">
         <svg viewBox="0 0 20 20" width="20" height="20" fill="none" aria-hidden="true">

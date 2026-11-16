@@ -21,9 +21,10 @@ import { reviewOutlineForExport } from "../lib/outline-export-review";
 import { defaultExportName, validExportName } from "../lib/export-name";
 import { exportModels, ModelExportError } from "../lib/model-export";
 import { exportReadiness } from "../lib/export-readiness";
-import { createPreviewCameraMotion, type PreviewView } from "../lib/preview-camera-motion";
+import { createPreviewCameraMotion, createPreviewFramingMotion, type PreviewView } from "../lib/preview-camera-motion";
 import SlidingIndicator from "./SlidingIndicator.vue";
 import ActionStatusIcon from "./ActionStatusIcon.vue";
+import { vAppTooltip } from '../directives/app-tooltip';
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -258,7 +259,7 @@ function animate() {
   if (!scene.value || !camera.value || !renderer.value) return;
   const now = performance.now();
   if (cameraMotion && controls.value) {
-    const continuing = cameraMotion.sample(now, cameraOffset);
+    const continuing = cameraMotion.sample(now, cameraOffset, controls.value.target);
     camera.value.position.copy(controls.value.target).add(cameraOffset);
     if (!continuing) cameraMotion = null;
     needsRender = true;
@@ -439,13 +440,14 @@ function ensurePart(part: PartName, generation: number, params: ReturnType<typeo
   return request;
 }
 
-function framePreviewObject(object: THREE.Object3D, resetView = false) {
+function framePreviewObject(object: THREE.Object3D, resetView = false, smooth = false) {
   const cam = camera.value;
   const ctrl = controls.value;
   if (!cam || !ctrl) return;
   const box = new THREE.Box3().setFromObject(object);
   const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
   if (!Number.isFinite(radius) || radius <= 0) return;
+  const view = selectedView.value;
   cancelCameraMotion();
   settleCameraControls();
   const direction = resetView ? new THREE.Vector3(120, 80, 150) : cam.position.clone().sub(ctrl.target);
@@ -453,12 +455,19 @@ function framePreviewObject(object: THREE.Object3D, resetView = false) {
   const center = box.getCenter(new THREE.Vector3());
   const halfFov = Math.atan(Math.tan(THREE.MathUtils.degToRad(cam.fov / 2)) * Math.min(cam.aspect, 1));
   const distance = radius / Math.sin(halfFov) * 1.12;
-  ctrl.target.copy(center);
-  cam.position.copy(center).addScaledVector(direction.normalize(), distance);
+  const offset = direction.normalize().multiplyScalar(distance);
+  if (smooth) {
+    cameraMotion = createPreviewFramingMotion(cam.position.clone().sub(ctrl.target), offset,
+      ctrl.target, center, performance.now());
+  } else {
+    ctrl.target.copy(center);
+    cam.position.copy(center).add(offset);
+  }
   // Narrow windows can need a distant camera even for a supported board size.
-  cam.far = Math.max(5000, distance + radius * 2);
+  cam.far = Math.max(5000, distance + radius * 2,
+    smooth ? cam.position.distanceTo(ctrl.target) + ctrl.target.distanceTo(center) + radius * 2 : 0);
   cam.updateProjectionMatrix();
-  if (resetView) selectedView.value = 'iso';
+  selectedView.value = resetView ? 'iso' : view;
   ctrl.update();
   framedBoardOutline = store.config.pcbOutlinePoints;
 }
@@ -478,7 +487,9 @@ function applyAssembly() {
   }, { ...store.config, insertHeight: effectiveInsertHeight(store.config),
     jigPrintSide: store.config.componentReliefEnabled ? effectiveJigPrintSide(store.config) : undefined,
     screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture, palette: modelPalette.value });
-  const entering = !currentAssembly.value || framedBoardOutline !== store.config.pcbOutlinePoints;
+  const sameBoard = framedBoardOutline === store.config.pcbOutlinePoints;
+  const smoothFraming = sameBoard && !!(currentMesh.value || currentAssembly.value);
+  const entering = !currentAssembly.value || !sameBoard;
   setMeasureMode(false);
   disposeMesh();
   scene.value?.add(group);
@@ -491,7 +502,7 @@ function applyAssembly() {
     // Frame the full travel once, so dragging never moves the camera or clips
     // the raised screws. Keep the user's orbit/zoom on parameter refreshes.
     setJigExplosion(group, 1);
-    framePreviewObject(group, true);
+    framePreviewObject(group, true, smoothFraming);
   }
   setJigExplosion(group, displayedExplosion);
   invalidate();
@@ -499,6 +510,8 @@ function applyAssembly() {
 
 // 把 geometry 应用到 mesh(独立函数,缓存命中时直接用)
 function applyStlToMesh(geometry: THREE.BufferGeometry) {
+  const smoothFraming = framedBoardOutline === store.config.pcbOutlinePoints
+    && !!(currentMesh.value || currentAssembly.value);
   const entering = !currentMesh.value || currentMeshPart !== activePart.value
     || framedBoardOutline !== store.config.pcbOutlinePoints;
   // Single parts, assembly materials, and their legends share one palette.
@@ -524,7 +537,7 @@ function applyStlToMesh(geometry: THREE.BufferGeometry) {
   if (scene.value) scene.value.add(mesh);
   currentMesh.value = mesh;
   currentMeshPart = activePart.value === 'assembly' ? null : activePart.value;
-  if (entering) framePreviewObject(mesh);
+  if (entering) framePreviewObject(mesh, false, smoothFraming);
   resetTopology(); // 新几何 → 拓扑缓存与测量状态作废
   invalidate();
 }
@@ -2224,7 +2237,7 @@ watch(partTabs, (tabs) => {
             <span :class="{ 'is-visible': refreshState === 'success' }">{{ t('preview.refreshed') }}</span>
           </span>
         </button>
-        <button v-if="!inspectionOpen" class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" :title="t('preview.printInfo')">
+        <button v-if="!inspectionOpen" class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" v-app-tooltip="t('preview.printInfo')">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M8 1.5l5.5 3.1v6.8L8 14.5l-5.5-3.1V4.6zM8 8l5.5-3.1M8 8v6.5M8 8L2.5 4.9"
               fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
@@ -2234,7 +2247,7 @@ watch(partTabs, (tabs) => {
         <div class="export-actions" :class="{ 'is-disabled': exporting || store.gerberImporting || !hasData, 'is-complete': exportCompleted }" :aria-busy="exporting">
           <button class="action-btn primary export-default"
             :disabled="exporting || store.gerberImporting || !hasData"
-            :title="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
+            v-app-tooltip="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
             :aria-label="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
             @click="exportAll(ui.defaultExportFormat)">
             <ActionStatusIcon :state="exportState">
@@ -2250,7 +2263,7 @@ watch(partTabs, (tabs) => {
             </span>
           </button>
           <el-dropdown trigger="click" @command="(f: string | number | object) => exportAll(f as 'stl' | 'step')">
-            <button class="action-btn primary export-format-toggle" :disabled="exporting || store.gerberImporting || !hasData" :title="t('preview.exportOptions')" :aria-label="t('preview.exportOptions')">
+            <button class="action-btn primary export-format-toggle" :disabled="exporting || store.gerberImporting || !hasData" v-app-tooltip="t('preview.exportOptions')" :aria-label="t('preview.exportOptions')">
               <svg class="caret" viewBox="0 0 16 16" width="10" height="10">
                 <path d="M4 6.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
@@ -2293,17 +2306,17 @@ watch(partTabs, (tabs) => {
         <!-- 视图快捷切换 -->
         <div class="view-btns">
           <SlidingIndicator />
-          <button class="view-btn" :title="t('preview.viewFront')" :aria-label="t('preview.viewFront')" :aria-pressed="selectedView === 'front'" @click="setView('front')">
+          <button class="view-btn" v-app-tooltip="t('preview.viewFront')" :aria-label="t('preview.viewFront')" :aria-pressed="selectedView === 'front'" @click="setView('front')">
             <svg viewBox="0 0 16 16" width="14" height="14">
               <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4" />
             </svg>
           </button>
-          <button class="view-btn" :title="t('preview.viewTop')" :aria-label="t('preview.viewTop')" :aria-pressed="selectedView === 'top'" @click="setView('top')">
+          <button class="view-btn" v-app-tooltip="t('preview.viewTop')" :aria-label="t('preview.viewTop')" :aria-pressed="selectedView === 'top'" @click="setView('top')">
             <svg viewBox="0 0 16 16" width="14" height="14">
               <path d="M8 3.5l4.5 4.5L8 12.5 3.5 8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
             </svg>
           </button>
-          <button class="view-btn" :title="t('preview.viewIso')" :aria-label="t('preview.viewIso')" :aria-pressed="selectedView === 'iso'" @click="setView('iso')">
+          <button class="view-btn" v-app-tooltip="t('preview.viewIso')" :aria-label="t('preview.viewIso')" :aria-pressed="selectedView === 'iso'" @click="setView('iso')">
             <svg viewBox="0 0 16 16" width="14" height="14">
               <path d="M8 2l5.2 3v6L8 14l-5.2-3V5zM8 8l5.2-3M8 8L2.8 5M8 8v6"
                 fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
@@ -2311,7 +2324,7 @@ watch(partTabs, (tabs) => {
           </button>
         </div>
         <span class="viewport-tool-divider" aria-hidden="true" />
-        <button class="action-btn" :aria-pressed="measureMode" :class="{ active: measureMode }" :disabled="activePart === 'assembly' || !!currentAssembly" @click="setMeasureMode(!measureMode)" :title="t(activePart === 'assembly' ? 'preview.measureSinglePart' : 'preview.measure')">
+        <button class="action-btn" :aria-pressed="measureMode" :class="{ active: measureMode }" :disabled="activePart === 'assembly' || !!currentAssembly" @click="setMeasureMode(!measureMode)" v-app-tooltip="t(activePart === 'assembly' ? 'preview.measureSinglePart' : 'preview.measure')">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M1.6 11.2L11.2 1.6l3.2 3.2-9.6 9.6zM4.4 8.4l1.6 1.6M6.8 6l1.6 1.6M9.2 3.6l1.6 1.6"
               fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
@@ -2326,7 +2339,7 @@ watch(partTabs, (tabs) => {
               <path d="m10 2 7 4-7 4-7-4 7-4ZM3 10l7 4 7-4M3 14l7 4 7-4" />
             </svg>
             <span>{{ t('preview.assemblyControls') }}</span>
-            <button class="explosion-reset" :title="t('preview.resetAssembly')" :aria-label="t('preview.resetAssembly')" @click="explosionPercent = 0">
+            <button class="explosion-reset" v-app-tooltip="t('preview.resetAssembly')" :aria-label="t('preview.resetAssembly')" @click="explosionPercent = 0">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a5 5 0 1 1 0 4M3 2v4h4" /></svg>
             </button>
           </div>
@@ -2340,14 +2353,14 @@ watch(partTabs, (tabs) => {
                 <path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" /><circle cx="10" cy="10" r="2" /><path v-if="!showAssemblyPcb" d="m3 3 14 14" />
               </svg>
             </button>
-            <button role="switch" :aria-checked="showAssemblyStencil" class="assembly-layer-toggle" :class="{ 'is-on': showAssemblyStencil }" :title="t('preview.metalStencilHint')" @click="showAssemblyStencil = !showAssemblyStencil">
+            <button role="switch" :aria-checked="showAssemblyStencil" class="assembly-layer-toggle" :class="{ 'is-on': showAssemblyStencil }" v-app-tooltip="t('preview.metalStencilHint')" @click="showAssemblyStencil = !showAssemblyStencil">
               <span class="assembly-layer-dot metal-dot" /><span>{{ t('preview.metalStencil') }}</span>
               <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">
                 <path d="M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Z" /><circle cx="10" cy="10" r="2" /><path v-if="!showAssemblyStencil" d="m3 3 14 14" />
               </svg>
             </button>
             <button v-if="hasRelief" role="switch" :aria-checked="inspectRelief" class="assembly-layer-toggle"
-              :class="{ 'is-on': inspectRelief }" :title="t('relief.inspectHint')" @click="inspectRelief = !inspectRelief">
+              :class="{ 'is-on': inspectRelief }" v-app-tooltip="t('relief.inspectHint')" @click="inspectRelief = !inspectRelief">
               <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.35" aria-hidden="true"><path d="m10 2 7 4-7 4-7-4 7-4ZM3 10l7 4 7-4M3 14l7 4 7-4" /></svg>
               <span>{{ t('relief.inspect3d') }}</span>
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path v-if="inspectRelief" d="m3 8 3 3 7-7" /></svg>
@@ -2365,7 +2378,7 @@ watch(partTabs, (tabs) => {
             <span class="sel-kind">{{ featureKindLabel(selA) }}</span>
             <span class="sel-detail" :title="featureInfo(selA)">{{ featureInfo(selA) }}</span>
           </div>
-          <button type="button" class="sel-del" :title="t('preview.measureRemove')" :aria-label="t('preview.measureRemove')" @click="removeSelection(1)">
+          <button type="button" class="sel-del" v-app-tooltip="t('preview.measureRemove')" :aria-label="t('preview.measureRemove')" @click="removeSelection(1)">
             <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
               <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
@@ -2377,7 +2390,7 @@ watch(partTabs, (tabs) => {
             <span class="sel-kind">{{ featureKindLabel(selB) }}</span>
             <span class="sel-detail" :title="featureInfo(selB)">{{ featureInfo(selB) }}</span>
           </div>
-          <button type="button" class="sel-del" :title="t('preview.measureRemove')" :aria-label="t('preview.measureRemove')" @click="removeSelection(2)">
+          <button type="button" class="sel-del" v-app-tooltip="t('preview.measureRemove')" :aria-label="t('preview.measureRemove')" @click="removeSelection(2)">
             <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
               <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
@@ -2439,7 +2452,7 @@ watch(partTabs, (tabs) => {
               <path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
             </svg>
           </span>
-          <button type="button" class="metrics-close" :title="t('preview.metricsClose')" :aria-label="t('preview.metricsClose')" @click="showMetrics = false">
+          <button type="button" class="metrics-close" v-app-tooltip="t('preview.metricsClose')" :aria-label="t('preview.metricsClose')" @click="showMetrics = false">
             <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
               <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
@@ -3161,7 +3174,8 @@ canvas {
   position: absolute;
   right: 20px;
   top: 50%;
-  transform: translateY(-50%);
+  translate: 0 -50%;
+  transition: translate 280ms var(--ease-out), max-height 280ms var(--ease-out);
   width: 176px;
   max-width: calc(100% - 40px);
   max-height: calc(100% - 176px);
@@ -3175,6 +3189,10 @@ canvas {
   pointer-events: auto;
   font-size: 11px;
 }
+/* Position uses translate so a card can give way while its enter/leave
+   transform still runs. Only the capped scroll area changes layout. */
+.assembly-explosion.preview-panel-enter-active { transition: opacity 220ms ease, transform 260ms var(--ease-out), translate 280ms var(--ease-out), max-height 280ms var(--ease-out); }
+.assembly-explosion.preview-panel-leave-active { transition: opacity 140ms ease, transform 160ms ease, translate 280ms var(--ease-out), max-height 280ms var(--ease-out); }
 .assembly-panel-heading { display: flex; align-items: center; gap: 7px; color: var(--text-secondary); font-weight: 600; margin-bottom: 18px; }
 .assembly-panel-heading > svg { color: var(--interaction-ink, var(--bg-brand)); }
 .explosion-reset {
@@ -3214,7 +3232,6 @@ canvas {
 .assembly-layer-toggle.is-on .assembly-layer-dot { opacity: 1; }
 .pcb-dot { background: var(--model-pcb); }
 .metal-dot { background: var(--model-metal); }
-.assembly-explosion.preview-panel-enter-from, .assembly-explosion.preview-panel-leave-to { transform: translateY(calc(-50% + 6px)); }
 .assembly-layer-toggle:focus-visible, .explosion-reset:focus-visible { outline: 2px solid var(--interaction-ink, var(--bg-brand)); outline-offset: 2px; }
 
 /* Print information shares the output accent. */
@@ -3365,9 +3382,6 @@ canvas {
   max-height: calc((100% - 128px) / 2);
 }
 .assembly-explosion:has(~ .metrics-card) {
-  top: calc((100% - 128px) / 2 + 24px);
-  transform: none;
+  translate: 0 -40px;
 }
-.assembly-explosion:has(~ .metrics-card).preview-panel-enter-from,
-.assembly-explosion:has(~ .metrics-card).preview-panel-leave-to { transform: translateY(6px); }
 </style>
