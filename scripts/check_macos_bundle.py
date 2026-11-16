@@ -9,6 +9,7 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+from typing import Iterator
 
 
 MACHO_ENDIAN = {b"\xce\xfa\xed\xfe": "<", b"\xcf\xfa\xed\xfe": "<",
@@ -59,23 +60,62 @@ def run(command: list[str]) -> None:
         print(result.stdout.strip())
 
 
+def native_runtimes(root: Path) -> Iterator[Path]:
+    """Visit real files once; never follow a runtime alias outside the tree."""
+    resolved_root = root.resolve(strict=True)
+    checked = set()
+    # Sign nested code before shallower executables; the outer .app signature is
+    # created later by Tauri, after this source resource tree is complete.
+    for path in sorted(root.rglob("*"), key=lambda entry: (-len(entry.parts), str(entry))):
+        if not path.is_file():
+            continue
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(resolved_root):
+            raise ValueError(f"Runtime alias escapes its resource tree: {path}")
+        if resolved in checked:
+            continue
+        checked.add(resolved)
+        if is_native_runtime(resolved):
+            yield resolved
+
+
+def sign_runtime_tree(root: Path) -> None:
+    """Repair unsigned/invalid native dependencies before the app is sealed.
+
+    Preserve valid upstream signatures. Sign each raw Mach-O individually;
+    codesign --deep is deliberately not used for signing nested code.
+    """
+    resolved = root.resolve(strict=True)
+    if not resolved.is_dir():
+        raise ValueError(f"Not a runtime resource directory: {root}")
+    if any(path.suffix.lower() == ".app" for path in (resolved, *resolved.parents)):
+        raise ValueError("Sign the source runtime tree before packaging the .app")
+    checked = repaired = 0
+    for path in native_runtimes(resolved):
+        verify = ["codesign", "--verify", "--strict", "--verbose=2", str(path)]
+        try:
+            run(verify)
+        except subprocess.CalledProcessError as error:
+            print(f"Repairing native runtime signature: {path}")
+            if error.stdout:
+                print(error.stdout.strip())
+            run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(path)])
+            run(verify)
+            repaired += 1
+        checked += 1
+    if not checked:
+        raise ValueError(f"No native runtime files found: {root}")
+    print(f"Runtime signature integrity OK: {checked} native files, {repaired} repaired")
+
+
 def verify_app(app: Path) -> None:
     if not (app / "Contents/Info.plist").is_file():
         raise ValueError(f"Not a macOS application bundle: {app}")
     run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", str(app)])
     # Resources are sealed as data by the outer app signature. Verify each native
     # dependency too: --deep alone need not inspect code stored in Resources.
-    resources = app / "Contents/Resources"
-    checked = set()
-    for path in sorted(resources.rglob("*")):
-        if not path.is_file():
-            continue
-        resolved = path.resolve(strict=True)
-        if resolved in checked:
-            continue
-        checked.add(resolved)
-        if is_native_runtime(path):
-            run(["codesign", "--verify", "--strict", "--verbose=2", str(path)])
+    for path in native_runtimes(app / "Contents/Resources"):
+        run(["codesign", "--verify", "--strict", "--verbose=2", str(path)])
     print(f"Signature integrity OK: {app}")
 
 
@@ -107,12 +147,22 @@ def verify_archive(archive: Path, app_name: str) -> None:
         verify_app(entries[0])
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--app", required=True, type=Path)
-    parser.add_argument("--dmg", required=True, nargs="+", type=Path)
-    parser.add_argument("--archive", required=True, type=Path)
-    args = parser.parse_args()
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--app", type=Path)
+    mode.add_argument("--sign-runtime-tree", type=Path,
+                      help="Repair native signatures in the source runtime, before app packaging")
+    parser.add_argument("--dmg", nargs="+", type=Path)
+    parser.add_argument("--archive", type=Path)
+    args = parser.parse_args(argv)
+    if args.sign_runtime_tree is not None:
+        if args.dmg or args.archive:
+            parser.error("--sign-runtime-tree cannot be combined with bundle verification options")
+        sign_runtime_tree(args.sign_runtime_tree)
+        return
+    if not args.dmg or args.archive is None:
+        parser.error("--app requires both --archive and --dmg")
     verify_app(args.app)
     verify_archive(args.archive, args.app.name)
     for dmg in args.dmg:
@@ -123,4 +173,4 @@ if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as error:
-        raise SystemExit(f"macOS bundle verification failed: {error.cmd}\n{error.stdout or ''}")
+        raise SystemExit(f"macOS bundle signature operation failed: {error.cmd}\n{error.stdout or ''}")

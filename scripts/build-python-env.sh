@@ -74,6 +74,15 @@ echo "==> 验证 import..."
 echo "==> 验证 server 模式..."
 echo '{"id": 1, "cmd": "ping"}' | "$PY" -B "$ROOT/python/jig_generator.py" --server
 
+# This must remain after pip, pruning and smoke checks, before Tauri copies and
+# seals the resources into Mason.app. Never repair signatures inside a built app.
+if [[ "$OS" == Darwin* ]]; then
+  echo "==> 补齐并校验 macOS 原生引擎签名..."
+  # Use the host interpreter: the bundled Python is also a signing target and
+  # must have finished running before codesign can replace its signature.
+  python3 -B "$ROOT/scripts/check_macos_bundle.py" --sign-runtime-tree "$DEST"
+fi
+
 SIZE=$(du -sh "$DEST" | cut -f1)
 echo ""
 echo "==> 完成: $DEST"
