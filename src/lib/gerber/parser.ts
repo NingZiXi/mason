@@ -12,6 +12,7 @@
  */
 
 import { pointInPolygon } from "./geometry";
+import { stitchOutline } from "./outline-stitching";
 import { splitBridgedOutline } from "./bridges";
 import { decodeGerberCoordinate } from './coordinate';
 
@@ -108,50 +109,6 @@ function pointInPoly(x: number, y: number, poly: Array<[number, number]>): boole
     }
   }
   return inside;
-}
-
-/**
- * 链接开放笔画:嘉立创EDA 等工具把板框画成一段段 D02+D01 独立笔画
- * (每条边提一次笔),把端点相接(≤tol)的笔画串成完整轮廓。
- */
-function chainOpenStrokes(
-  open: Array<Array<[number, number]>>,
-  tol = 0.02
-): Array<Array<[number, number]>> {
-  const dist = (a: [number, number], b: [number, number]) =>
-    Math.hypot(a[0] - b[0], a[1] - b[1]);
-
-  const result: Array<Array<[number, number]>> = [];
-  const remaining = [...open];
-  while (remaining.length > 0) {
-    let cur = remaining.shift()!;
-    for (;;) {
-      const tail = cur[cur.length - 1];
-      let merged = false;
-      for (let k = 0; k < remaining.length; k++) {
-        const s = remaining[k];
-        const head = s[0];
-        const end = s[s.length - 1];
-        if (dist(tail, head) <= tol) {
-          // 尾接头
-          cur = cur.concat(s.slice(1));
-          remaining.splice(k, 1);
-          merged = true;
-          break;
-        }
-        if (dist(tail, end) <= tol) {
-          // 尾接尾(反向并入)
-          cur = cur.concat(s.slice(0, -1).reverse());
-          remaining.splice(k, 1);
-          merged = true;
-          break;
-        }
-      }
-      if (!merged) break;
-    }
-    result.push(cur);
-  }
-  return result;
 }
 
 /**
@@ -439,10 +396,12 @@ export function extractOutline(
         );
         const stepAngle = delta / segs;
 
-        for (let s = 1; s <= segs; s++) {
+        for (let s = 1; s < segs; s++) {
           const a = startAngle + stepAngle * s;
           cur.push([cx + radius * Math.cos(a), cy + radius * Math.sin(a)]);
         }
+        // X/Y is the declared endpoint; rounded I/J may project it off the next stroke.
+        cur.push([x, y]);
         arcs++;
       } else {
         cur.push([x, y]);
@@ -453,41 +412,10 @@ export function extractOutline(
     }
   }
 
-  // 原始轮廓分为两类:已闭合(首尾相接)与开放笔画(嘉立创EDA 风格逐边提笔)
-  const closeness = (c: Array<[number, number]>): boolean => {
-    if (c.length < 2) return false;
-    const [fx, fy] = c[0];
-    const [lx, ly] = c[c.length - 1];
-    return Math.hypot(fx - lx, fy - ly) <= 0.01;
-  };
-  const closedContours = contours.filter(closeness);
-  const openContours = contours.filter((c) => !closeness(c) && c.length >= 2);
-  const repeatedChains = chainOpenStrokes(openContours.filter((c) => repeatedContours.has(c)));
-  repeatedChains.forEach((c) => repeatedContours.add(c));
-  const allContours = [
-    ...closedContours,
-    ...chainOpenStrokes(openContours.filter((c) => !repeatedContours.has(c))),
-    ...repeatedChains,
-  ];
-  // Legacy outline fallback may close an unfinished path, but such paths are
-  // not reliable candidates for individual board selection.
-  const naturallyClosed = new Set(allContours.filter(closeness));
-
-  // 每条轮廓单独闭合
-  for (const c of allContours) {
-    if (c.length > 1) {
-      const first = c[0];
-      const last = c[c.length - 1];
-      const dx = first[0] - last[0];
-      const dy = first[1] - last[1];
-      if (Math.sqrt(dx * dx + dy * dy) > 0.01) {
-        c.push([first[0], first[1]]);
-      }
-    }
-  }
-
-  // 过滤退化轮廓(闭合后 <4 个点 = 不足 3 个不同顶点)
-  const valid = allContours.filter((c) => c.length >= 4);
+  const ordinary = stitchOutline(contours.filter(c => !repeatedContours.has(c)));
+  const repeated = stitchOutline(contours.filter(c => repeatedContours.has(c)));
+  const valid = [...ordinary.closed, ...repeated.closed];
+  const repeatedLoops = new Set(repeated.closed);
 
   const areaOf = (c: Array<[number, number]>): number => Math.abs(signedArea(c));
   const contourBbox = (c: Array<[number, number]>) => {
@@ -502,7 +430,7 @@ export function extractOutline(
   };
   const contourEntries = valid
     .map((c) => ({ c, area: areaOf(c), bbox: contourBbox(c) }))
-    .filter((entry) => naturallyClosed.has(entry.c) && entry.area > 1e-6);
+    .filter((entry) => entry.area > 1e-6);
   type ContourEntry = typeof contourEntries[number];
   const contourContains = (outer: ContourEntry, inner: ContourEntry) => {
     const a = outer.bbox, b = inner.bbox;
@@ -519,7 +447,7 @@ export function extractOutline(
   );
   // A nested outline alone is indistinguishable from a board cutout. Only
   // exclude a surrounding process frame when SR explicitly identifies boards.
-  const repeatedEntries = contourEntries.filter((entry) => repeatedContours.has(entry.c));
+  const repeatedEntries = contourEntries.filter((entry) => repeatedLoops.has(entry.c));
   const boardEntries = topLevel(repeatedEntries.length ? repeatedEntries : contourEntries)
     .sort((a, b) => b.bbox.y1 - a.bbox.y1 || a.bbox.x0 - b.bbox.x0);
   let boardContours: GerberBoardOutline[] = boardEntries.map((entry) => {
@@ -547,8 +475,8 @@ export function extractOutline(
   const srCols = parsed.srGrid?.nx ?? 1;
   const srRows = parsed.srGrid?.ny ?? 1;
   let disjointPanel = false;
-  if (closedContours.length >= 2) {
-    const ranked = closedContours
+  if (valid.length >= 2) {
+    const ranked = valid
       .map((c) => ({ c, a: areaOf(c) }))
       .sort((p, q) => q.a - p.a);
     if (ranked[1].a > 1 && ranked[1].a >= ranked[0].a * 0.5) {
@@ -637,6 +565,18 @@ export function extractOutline(
         outerArea = a;
         outer = c;
       }
+    }
+    // If an unfinished perimeter surrounds the only candidate, that candidate
+    // may be a cutout. Let the importer report/fall back on an invalid outline.
+    if (outer && !isPanel) {
+      const candidate = outer;
+      const b = contourBbox(candidate);
+      if (ordinary.open.some(path => {
+        if (path.length < 3) return false;
+        const p = contourBbox(path);
+        return p.x0 <= b.x0 && p.y0 <= b.y0 && p.x1 >= b.x1 && p.y1 >= b.y1 &&
+          candidate.every(([x, y]) => pointInPolygon(x, y, path));
+      })) outer = null;
     }
     if (outer) {
       if (connectedPanel && opts?.panel === false) {
