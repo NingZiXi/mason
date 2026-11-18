@@ -915,8 +915,10 @@ export const useConfigStore = defineStore("config", () => {
         deps_ok: boolean;
         missing: string[];
         bundled: boolean;
+        probe_error?: string | null;
       }>("get_engine_status");
       pythonPath.value = st.python_path;
+      pythonError.value = st.probe_error ?? null;
       depsMissing.value = st.missing ?? [];
       bundledEngine.value = !!st.bundled;
       // 只有 python + 依赖全齐才算就绪(否则常驻 server 起不来)

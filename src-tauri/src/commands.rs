@@ -278,39 +278,40 @@ pub struct EngineStatus {
     pub missing: Vec<String>,
     /// 是否使用随应用打包的内置引擎
     pub bundled: bool,
+    pub probe_error: Option<String>,
 }
 
 /// 用 find_spec 检查依赖(只查不导入,秒回;真 import build123d 要 ~5s)
-fn check_deps_blocking(python: &str) -> Vec<String> {
-    const REQUIRED: &[&str] = &["build123d", "shapely", "numpy"];
-    let script = format!(
-        "import importlib.util,sys;\
-         missing=[m for m in {REQUIRED:?} if importlib.util.find_spec(m) is None];\
-         print(','.join(missing))"
-    );
-    let mut check_cmd = std::process::Command::new(python);
-    check_cmd.env("PYTHONDONTWRITEBYTECODE", "1").arg("-c").arg(&script);
+pub(crate) fn check_deps_blocking(python: &str) -> Result<Vec<String>, String> {
+    probe_deps(python_detect::python_command(python))
+}
 
-    // Windows: 隐藏控制台黑窗口
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        check_cmd.creation_flags(CREATE_NO_WINDOW);
+fn probe_deps(mut cmd: std::process::Command) -> Result<Vec<String>, String> {
+    let script = "import importlib.util,json; print(json.dumps([m for m in ('build123d','shapely','numpy') if importlib.util.find_spec(m) is None]))";
+    let output = cmd.args(["-c", script]).output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<_> = stderr.trim().chars().rev().take(1200).collect();
+        return Err(format!("{}: {}", output.status, tail.into_iter().rev().collect::<String>()));
     }
+    serde_json::from_slice(&output.stdout).map_err(|err| err.to_string())
+}
 
-    match check_cmd.output()
-    {
-        Ok(out) if out.status.success() => {
-            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if text.is_empty() {
-                Vec::new()
-            } else {
-                text.split(',').map(|s| s.to_string()).collect()
-            }
-        }
-        // python 本身跑不起来(损坏/版本过老):全部视为缺失
-        _ => REQUIRED.iter().map(|s| s.to_string()).collect(),
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    #[test]
+    fn failed_interpreter_is_not_reported_as_three_missing_packages() {
+        let python = python_detect::find_python_in_path().expect("Python on test host");
+        let mut failed = python_detect::python_command(&python);
+        failed.args(["-c", "import sys; sys.exit('startup failed')"]);
+        assert!(probe_deps(failed).unwrap_err().contains("startup failed"));
+        // A working interpreter with site-packages disabled really is missing all three.
+        let mut empty = python_detect::python_command(&python);
+        empty.args(["-I", "-S"]);
+        assert_eq!(probe_deps(empty).unwrap(), ["build123d", "shapely", "numpy"]);
     }
 }
 
@@ -331,17 +332,22 @@ pub async fn get_engine_status(app: AppHandle) -> Result<EngineStatus, AppError>
         .clone()
         .or_else(|| bundled.clone())
         .or_else(python_detect::detect_python);
-    let using_bundled = configured.is_none() && python == bundled && bundled.is_some();
+    let using_bundled = python == bundled && bundled.is_some();
 
     match python {
         Some(p) => {
             let py = p.clone();
-            let missing = tokio::task::spawn_blocking(move || check_deps_blocking(&py))
+            let result = tokio::task::spawn_blocking(move || check_deps_blocking(&py))
                 .await
                 .map_err(|e| AppError::Other(format!("依赖检查失败: {}", e)))?;
+            let (missing, probe_error) = match result {
+                Ok(missing) => (missing, None),
+                Err(err) => (Vec::new(), Some(err)),
+            };
             Ok(EngineStatus {
                 python_path: Some(p),
-                deps_ok: missing.is_empty(),
+                deps_ok: probe_error.is_none() && missing.is_empty(),
+                probe_error,
                 missing,
                 bundled: using_bundled,
             })
@@ -351,6 +357,7 @@ pub async fn get_engine_status(app: AppHandle) -> Result<EngineStatus, AppError>
             deps_ok: false,
             missing: Vec::new(),
             bundled: false,
+            probe_error: None,
         }),
     }
 }
@@ -443,9 +450,8 @@ pub async fn install_deps(
     }
     let _ = app.emit("install-log", "> pip install build123d==0.12.0 cadquery-ocp-novtk==7.9.3.1.1 shapely numpy(清华镜像)");
 
-    let mut cmd = std::process::Command::new(&python_path);
-    cmd.env("PYTHONDONTWRITEBYTECODE", "1")
-        .arg("-m")
+    let mut cmd = python_detect::python_command(&python_path);
+    cmd.arg("-m")
         .arg("pip")
         .arg("install")
         .arg("--no-input")

@@ -95,6 +95,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: npm run tauri:build -- --bundles deb,rpm,appimage
 
+      - name: Test the final Linux AppImage through its real launcher
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          set -euo pipefail
+          images=(src-tauri/target/release/bundle/appimage/*.AppImage)
+          test "${#images[@]}" -eq 1
+          timeout 180s "${images[0]}" --check-bundled-engine
+
       - name: Verify macOS app and disk image signature integrity
         if: matrix.platform == 'macos-latest'
         run: |

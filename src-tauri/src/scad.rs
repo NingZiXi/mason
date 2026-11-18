@@ -51,6 +51,8 @@ struct ServerResponse {
     id: u32,
     ok: bool,
     #[serde(default)]
+    pong: bool,
+    #[serde(default)]
     path: Option<String>,
     #[serde(default)]
     error: Option<String>,
@@ -117,24 +119,16 @@ async fn spawn_server(
         .open(log_path)
         .map_err(|e| AppError::Other(format!("打开日志文件失败 {}: {}", log_path.display(), e)))?;
 
-    let mut cmd = Command::new(python_path);
+    let mut cmd = Command::from(python_detect::python_command(python_path));
     // The bundled engine lives inside the signed app; imports must not write
     // __pycache__ files into its resources after installation.
-    cmd.env("PYTHONDONTWRITEBYTECODE", "1")
-        .arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
+    cmd.arg("-u") // 关键:禁用 stdout 缓冲,行协议才实时
         .arg(script_path)
         .arg("--server")
         .kill_on_drop(true)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(log_file));
-
-    // Windows: 隐藏控制台黑窗口
-    #[cfg(target_os = "windows")]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
 
     let mut child = cmd.spawn().map_err(|e| {
         AppError::Io(format!(
@@ -272,6 +266,28 @@ fn log_tail(path: &std::path::Path, max_lines: usize) -> String {
 // 公共 API
 // ---------------------------------------------------------------------------
 
+fn packaged_asset(root: &std::path::Path, subdir: &str, file: &str) -> Option<PathBuf> {
+    [root.join("resources"), root.to_owned()].into_iter()
+        .map(|base| base.join(subdir).join(file)).find(|path| path.is_file())
+}
+
+/// Headless package check: no source checkout, system Python or UI fallback.
+pub async fn check_packaged_engine(root: &std::path::Path) -> Result<(), AppError> {
+    let python = packaged_asset(root, "python-env", BUNDLED_PYTHON_EXE)
+        .ok_or_else(|| AppError::PythonNotFound(root.display().to_string()))?;
+    let script = packaged_asset(root, "scripts", "jig_generator.py")
+        .ok_or_else(|| AppError::Other(format!("No packaged CAD script under {}", root.display())))?;
+    let python = python.to_string_lossy();
+    let missing = crate::commands::check_deps_blocking(&python).map_err(AppError::Other)?;
+    if !missing.is_empty() { return Err(AppError::Other(format!("Missing: {}", missing.join(", ")))); }
+    let log = TempArtifact::new("log");
+    let mut server = spawn_server(&python, &script, &log.0).await?;
+    let reply = server.request("ping", None, None, None, None, None, None).await?;
+    if !reply.ok || !reply.pong { return Err(AppError::Other("Invalid CAD ping response".into())); }
+    println!("Bundled CAD engine OK: {}", python);
+    Ok(())
+}
+
 /// 内置 Python 引擎可执行文件名
 /// Windows: python.exe (嵌入式发行版)
 /// Unix: bin/python3 (python-build-standalone)
@@ -285,20 +301,19 @@ const BUNDLED_PYTHON_EXE: &str = "bin/python3";
 /// 落在 resource_dir/resources/python-env)→ exe 旁(便携部署)
 pub fn bundled_python(app: Option<&AppHandle>) -> Option<String> {
     // 开发模式:resources 原地(CARGO_MANIFEST_DIR 编译期常量,发布机上不存在,自然跳过)
+    #[cfg(debug_assertions)]
     let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
         .join("python-env")
         .join(BUNDLED_PYTHON_EXE);
+    #[cfg(debug_assertions)]
     if dev.exists() {
         return Some(dev.to_string_lossy().into_owned());
     }
     if let Some(app) = app {
         if let Ok(dir) = app.path().resource_dir() {
-            for rel in ["resources/python-env", "python-env"] {
-                let p = dir.join(rel).join(BUNDLED_PYTHON_EXE);
-                if p.exists() {
-                    return Some(p.to_string_lossy().into_owned());
-                }
+            if let Some(p) = packaged_asset(&dir, "python-env", BUNDLED_PYTHON_EXE) {
+                return Some(p.to_string_lossy().into_owned());
             }
         }
     }
@@ -328,35 +343,20 @@ fn resolve_python(app: Option<&AppHandle>, configured: Option<&str>) -> Option<S
 /// 开发模式:项目根目录 python/jig_generator.py(CARGO_MANIFEST_DIR 编译期常量)
 /// 发布模式:resource_dir/resources/scripts/jig_generator.py
 fn find_script(app: &AppHandle) -> PathBuf {
-    // 开发模式:CARGO_MANIFEST_DIR 上溯一层 = 项目根目录
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("python")
-        .join("jig_generator.py");
-    if dev.exists() {
-        return dev;
+    #[cfg(debug_assertions)]
+    {
+        let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../python/jig_generator.py");
+        if dev.is_file() { return dev; }
     }
-    // 发布模式:resource_dir
-    if let Ok(dir) = app.path().resource_dir() {
-        for rel in ["resources/scripts", "scripts"] {
-            let p = dir.join(rel).join("jig_generator.py");
-            if p.exists() {
-                return p;
-            }
-        }
+    let root = app.path().resource_dir().ok();
+    if let Some(script) = root.as_deref().and_then(|dir| packaged_asset(dir, "scripts", "jig_generator.py")) {
+        return script;
     }
-    // 兜底:exe 同级
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("scripts").join("jig_generator.py");
-            if p.exists() {
-                return p;
-            }
-        }
-    }
-    dev
+    let exe = std::env::current_exe().unwrap_or_default();
+    let portable = exe.with_file_name("scripts").join("jig_generator.py");
+    if portable.is_file() { return portable; }
+    // Return the expected installed location for the caller's missing-file diagnostic.
+    root.map(|dir| dir.join("resources/scripts/jig_generator.py")).unwrap_or(portable)
 }
 
 /// 诊断日志路径:app 日志目录(权限/隔离优于临时目录),回落 temp

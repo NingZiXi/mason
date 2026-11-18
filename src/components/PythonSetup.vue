@@ -18,10 +18,10 @@ const logEl = ref<HTMLDivElement | null>(null);
 
 let unlistenLog: UnlistenFn | null = null;
 
-// 状态视图:就绪 / 缺依赖 / 无 Python
-const view = computed<"ok" | "missing" | "none">(() => {
-  if (store.pythonPath) return store.depsMissing.length > 0 ? "missing" : "ok";
-  return "none";
+const view = computed(() => {
+  if (store.pythonError) return 'failed';
+  if (!store.pythonPath) return 'none';
+  return store.pythonDetected ? 'ok' : 'missing';
 });
 
 const busy = computed(() => phase.value !== "idle");
@@ -77,10 +77,6 @@ async function installAll() {
 async function pickFile() {
   const selected = await open({
     title: t("python.pickFile"),
-    filters: [
-      { name: "python", extensions: ["exe"] },
-      { name: "All", extensions: ["*"] },
-    ],
     multiple: false,
   });
   if (!selected || Array.isArray(selected)) return;
@@ -129,26 +125,35 @@ function openPythonDownload() {
     </template>
 
     <!-- ===== 状态:缺依赖 ===== -->
-    <template v-else-if="view === 'missing'">
+    <template v-else-if="view === 'missing' || view === 'failed'">
       <div class="banner warn">
         <svg viewBox="0 0 16 16" width="14" height="14" class="banner-icon">
           <path d="M8 2L1.5 13.5h13L8 2zM8 6.5v3.5M8 11.8v.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
         <div class="banner-text">
-          <span class="banner-title">{{ t('python.missingDeps') }}</span>
-          <span class="banner-sub">{{ t('python.missingDepsHint') }}</span>
-          <div class="dep-tags">
+          <span class="banner-title">{{ t(view === 'failed' ? 'python.unavailable' : 'python.missingDeps') }}</span>
+          <span class="banner-sub">{{ store.bundledEngine ? t('python.reinstallHint') : t(view === 'failed' ? 'python.probeFailedHint' : 'python.missingDepsHint') }}</span>
+          <details v-if="view === 'failed'" class="engine-details">
+            <summary>{{ t('python.details') }}</summary>
+            <pre>{{ store.pythonError }}</pre>
+          </details>
+          <div v-else class="dep-tags">
             <code v-for="d in store.depsMissing" :key="d" class="dep-tag">{{ d }}</code>
           </div>
         </div>
       </div>
-      <button class="primary-btn" :disabled="busy" @click="installDeps">
+      <div class="path-row" v-if="store.pythonPath"><code class="path">{{ store.pythonPath }}</code></div>
+      <button v-if="view === 'missing' && !store.bundledEngine" class="primary-btn" :disabled="busy" @click="installDeps">
         <svg viewBox="0 0 16 16" width="13" height="13">
           <path d="M9 1.5L3 9h3.5L6 14.5 13 7H9.5L9 1.5z" fill="currentColor" />
         </svg>
         {{ busy && phase === 'install-deps' ? t('python.installing') : t('python.installDeps') }}
       </button>
-      <p class="footnote">{{ t('python.pipHint') }}</p>
+      <p v-if="view === 'missing' && !store.bundledEngine" class="footnote">{{ t('python.pipHint') }}</p>
+      <div class="alt-actions">
+        <button class="link-btn" :disabled="busy" @click="store.detectPython">{{ t('python.reDetect') }}</button>
+        <button class="link-btn" :disabled="busy" @click="pickFile">{{ t('python.pickFile') }}</button>
+      </div>
     </template>
 
     <!-- ===== 状态:无 Python ===== -->
@@ -201,6 +206,10 @@ function openPythonDownload() {
   gap: 12px;
   font-size: var(--body-md-font-size);
 }
+
+.engine-details { margin-top: 6px; font-size: var(--body-sm-font-size); }
+.engine-details summary { cursor: pointer; }
+.engine-details pre { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 
 /* 检测中 */
 .state-row.checking {

@@ -10,6 +10,15 @@ mod scad;
 mod skin_icon;
 
 pub fn run() {
+    let context = tauri::generate_context!();
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--check-bundled-engine")) {
+        let result = tauri::utils::platform::resource_dir(context.package_info(), &tauri::utils::Env::default())
+            .map_err(|e| e.to_string()).and_then(|root| {
+                tauri::async_runtime::block_on(scad::check_packaged_engine(&root)).map_err(|e| e.to_string())
+            });
+        if let Err(err) = result { eprintln!("Bundled CAD engine failed: {err}"); std::process::exit(1); }
+        return;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -36,6 +45,6 @@ pub fn run() {
             commands::abort_model_export,
             skin_icon::set_skin_icon,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

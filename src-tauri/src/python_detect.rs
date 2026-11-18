@@ -4,6 +4,33 @@
 use std::path::Path;
 use std::process::Command;
 
+/// AppRun exports PYTHONHOME=$APPDIR/usr and adds usr/share/pyshared to
+/// PYTHONPATH. Neither is the home of Mason's Python (or an external venv).
+/// Only change the child process; GTK/WebKit still need the launcher environment.
+pub fn python_command(exe: &str) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.env("PYTHONDONTWRITEBYTECODE", "1");
+    #[cfg(target_os = "linux")]
+    if let Some(appdir) = std::env::var_os("APPDIR").filter(|v| !v.is_empty()) {
+        clean_appimage_env(&mut cmd, Path::new(&appdir));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn clean_appimage_env(cmd: &mut Command, appdir: &Path) {
+    cmd.env_remove("PYTHONHOME").env_remove("PYTHONPATH");
+    // External interpreters must still see packages installed in the user site.
+    if Path::new(cmd.get_program()).starts_with(appdir) {
+        cmd.env("PYTHONNOUSERSITE", "1");
+    }
+}
+
 #[cfg(target_os = "windows")]
 const PYTHON_PATHS: &[&str] = &[
     "C:/Espressif/tools/python/python.exe",
@@ -119,4 +146,24 @@ pub fn find_python_in_standard_paths() -> Option<String> {
 /// 综合探测 Python
 pub fn detect_python() -> Option<String> {
     find_python_in_path().or_else(find_python_in_standard_paths)
+}
+#[cfg(test)]
+mod appimage_tests {
+    use super::*;
+
+    #[test]
+    fn appimage_child_can_load_stdlib_without_gui_python_paths() {
+        let python = find_python_in_path().expect("Python on test host");
+        let appdir = Path::new(&python).parent().unwrap();
+        for (root, bundled) in [(appdir.to_owned(), true), (appdir.join("other-app"), false)] {
+            let mut cmd = Command::new(&python);
+            cmd.env("PYTHONHOME", root.join("usr")).env("PYTHONPATH", root.join("usr/share/pyshared"))
+                .env_remove("PYTHONNOUSERSITE");
+            clean_appimage_env(&mut cmd, &root);
+            let check = "import encodings, os; assert 'PYTHONHOME' not in os.environ and 'PYTHONPATH' not in os.environ; print(os.getenv('PYTHONNOUSERSITE', 'external'))";
+            let result = cmd.args(["-c", check]).output().unwrap();
+            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+            assert_eq!(String::from_utf8_lossy(&result.stdout).trim(), if bundled { "1" } else { "external" });
+        }
+    }
 }

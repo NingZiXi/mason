@@ -38,6 +38,8 @@ const SkinUnlockCelebration = defineAsyncComponent(() => import("./components/Sk
 const ModelPreview = defineAsyncComponent(() => import("./components/ModelPreview.vue"));
 
 const configStore = useConfigStore();
+const engineBadgeKey = computed(() => configStore.pythonDetected ? 'cards.configured' :
+  configStore.pythonError ? 'python.unavailable' : configStore.pythonPath ? 'cards.depsMissing' : 'cards.notDetected');
 const workSession = useWorkSessionStore();
 void workSession.initialize(usePresetsStore().initialize());
 const confirmExit = useExitConfirmation();
@@ -578,10 +580,10 @@ onBeforeUnmount(() => {
             <div class="slot-meta">
               <span
                 class="status-badge"
-                :class="configStore.pythonDetected ? 'is-ok' : configStore.pythonPath ? 'is-warn' : 'is-err'"
-                :title="configStore.pythonDetected ? t('cards.configured') : configStore.pythonPath ? t('cards.depsMissing') : t('cards.notDetected')"
+                :class="configStore.pythonDetected ? 'is-ok' : configStore.pythonPath && !configStore.pythonError ? 'is-warn' : 'is-err'"
+                :title="t(engineBadgeKey)"
               >
-                {{ configStore.pythonDetected ? t('cards.configured') : configStore.pythonPath ? t('cards.depsMissing') : t('cards.notDetected') }}
+                {{ t(engineBadgeKey) }}
               </span>
               <svg class="chevron" :class="{ 'is-collapsed': collapsed.python }" viewBox="0 0 16 16" width="16" height="16">
                 <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
