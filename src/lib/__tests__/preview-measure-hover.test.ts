@@ -45,7 +45,8 @@ function setup() {
   const flush = () => { const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(0)); };
   return { handlers, frames, requestFrame, cancelFrame, pick, rebuild, click, flush };
 }
-const pointer = (x = 20, y = 20, buttons = 0): PointerEvent => ({ clientX: x, clientY: y, buttons, button: 0 } as PointerEvent);
+const pointer = (x = 20, y = 20, buttons = 0, props: Partial<PointerEvent> = {}): PointerEvent =>
+  ({ clientX: x, clientY: y, buttons, button: 0, isPrimary: true, pointerId: 1, ...props } as PointerEvent);
 
 describe('3D measurement hover lifecycle', () => {
   it('coalesces pointer motion into one pick at the latest position', () => {
@@ -86,6 +87,30 @@ describe('3D measurement hover lifecycle', () => {
     handlers.up(pointer(60, 20));
     expect(click).toHaveBeenCalledTimes(1);
     expect(click).toHaveBeenCalledWith({ id: 'surface' });
+  });
+
+  it('does not select when a drag returns to its origin, but tolerates small click jitter', () => {
+    const { handlers, pick, click } = setup();
+    handlers.down(pointer(20, 20, 1));
+    handlers.move(pointer(35, 20, 1));
+    handlers.move(pointer(20, 20, 1));
+    handlers.up(pointer(20, 20));
+    expect(pick).not.toHaveBeenCalled();
+    handlers.down(pointer(20, 20, 1));
+    handlers.move(pointer(23, 21, 1));
+    handlers.up(pointer(23, 21));
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it('does not turn a two-finger pinch or a different pointer release into a measurement', () => {
+    const { handlers, pick } = setup();
+    handlers.down(pointer(20, 20, 1));
+    handlers.down(pointer(25, 20, 1, { isPrimary: false, pointerId: 2 }));
+    handlers.up(pointer(25, 20, 0, { isPrimary: false, pointerId: 2 }));
+    handlers.up(pointer(20, 20));
+    handlers.down(pointer(20, 20, 1));
+    handlers.up(pointer(20, 20, 0, { pointerId: 3 }));
+    expect(pick).not.toHaveBeenCalled();
   });
 
   it('clears transient hover on canvas leave or cancellation and retains selected measurements', () => {

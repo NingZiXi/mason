@@ -8,7 +8,8 @@ import { defineStore } from "pinia";
 import { computed, nextTick, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import type { PadPolygon } from "../lib/gerber/pads";
-import type { GerberVariants, PanelMode, PanelVariant } from "../lib/gerber/panel";
+import type { GerberFileDetails, GerberImportPayload } from "../composables/useGerberImportSession";
+import type { GerberVariants, PanelMode } from "../lib/gerber/panel";
 import { getPanelBoards, resolvePanelSelection } from "../lib/gerber/panel";
 import { readPresetSettings } from "../lib/config-presets";
 import { useParameterHistory } from "../composables/useParameterHistory";
@@ -671,6 +672,7 @@ export const useConfigStore = defineStore("config", () => {
   /** 当前导入文件的整版与子板几何，用于切换预览和同步开孔选择。 */
   const gerberVariants = ref<GerberVariants | null>(null);
   const gerberSourceFilename = ref<string | null>(null);
+  const gerberFileDetails = ref<GerberFileDetails | null>(null);
   const panelBoards = computed(() => config.value.panelAvailable && gerberVariants.value ? getPanelBoards(gerberVariants.value) : []);
   const panelOverview = computed(() => gerberVariants.value?.panel);
   const selectedPanelBoard = computed(() => gerberVariants.value
@@ -744,18 +746,7 @@ export const useConfigStore = defineStore("config", () => {
   }
 
   /** 导入 Gerber:写入两套口径并按 mode 应用(hasPads = 是否带锡膏层结果) */
-  function applyGerberImport(payload: {
-    filename: string;
-    sourceFilename?: string;
-    outlineSource?: 'gerber' | 'pads-bounds';
-    outlineFallbackReason?: 'missing' | 'invalid';
-    isPanel: boolean;
-    panelGrid?: { nx: number; ny: number };
-    hasPads: boolean;
-    mode: PanelMode;
-    boardIndex?: number;
-    variants: { panel: PanelVariant; single: PanelVariant; boards?: PanelVariant[] };
-  }) {
+  function applyGerberImport(payload: GerberImportPayload & { mode: PanelMode }) {
     invalidateStencilSizeReview();
     invalidateOutlineReview();
     historyEpoch.value++;
@@ -768,6 +759,7 @@ export const useConfigStore = defineStore("config", () => {
     const c = config.value;
     c.gerberFilename = payload.filename;
     gerberSourceFilename.value = payload.sourceFilename ?? null;
+    gerberFileDetails.value = payload.details ?? null;
     gerberOutlineSource.value = payload.outlineSource ?? 'gerber';
     gerberOutlineFallbackReason.value = payload.outlineFallbackReason ?? null;
     c.panelAvailable = payload.isPanel;
@@ -814,6 +806,7 @@ export const useConfigStore = defineStore("config", () => {
     historyEpoch.value++;
     gerberVariants.value = null;
     gerberSourceFilename.value = null;
+    gerberFileDetails.value = null;
     gerberOutlineSource.value = null;
     gerberOutlineFallbackReason.value = null;
     invalidateOutlineReview();
@@ -906,7 +899,17 @@ export const useConfigStore = defineStore("config", () => {
   const engineLoading = ref(false);
   const bundledEngine = ref(false); // 使用随应用打包的内置引擎
 
-  async function detectPython() {
+  let engineProbe: Promise<void> | null = null;
+  let probeRevision = 0;
+  function detectPython(force = false) {
+    if (engineProbe && !force) return engineProbe;
+    if (force) pythonDetected.value = false;
+    const revision = ++probeRevision;
+    engineProbe = readEngineStatus(revision);
+    return engineProbe;
+  }
+
+  async function readEngineStatus(revision: number) {
     pythonError.value = null;
     engineLoading.value = true;
     try {
@@ -917,6 +920,7 @@ export const useConfigStore = defineStore("config", () => {
         bundled: boolean;
         probe_error?: string | null;
       }>("get_engine_status");
+      if (revision !== probeRevision) return;
       pythonPath.value = st.python_path;
       pythonError.value = st.probe_error ?? null;
       depsMissing.value = st.missing ?? [];
@@ -924,13 +928,14 @@ export const useConfigStore = defineStore("config", () => {
       // 只有 python + 依赖全齐才算就绪(否则常驻 server 起不来)
       pythonDetected.value = !!st.python_path && st.deps_ok;
     } catch (e) {
+      if (revision !== probeRevision) return;
       pythonPath.value = null;
       pythonDetected.value = false;
       depsMissing.value = [];
       bundledEngine.value = false;
       pythonError.value = e instanceof Error ? e.message : String(e);
     } finally {
-      engineLoading.value = false;
+      if (revision === probeRevision) { engineLoading.value = false; engineProbe = null; }
     }
   }
 
@@ -964,6 +969,7 @@ export const useConfigStore = defineStore("config", () => {
   return {
     config,
     gerberSourceFilename,
+    gerberFileDetails,
     gerberOutlineSource,
     gerberImporting,
     gerberOutlineFallbackReason,

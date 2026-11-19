@@ -25,6 +25,7 @@ import { usePresetsStore } from "./stores/presets";
 import { useWorkSessionStore } from "./stores/work-session";
 import { useExitConfirmation } from "./composables/useExitConfirmation";
 import { useSidebarModeScroll } from "./composables/useSidebarModeScroll";
+import { useWorkspaceModeMotion } from "./composables/useWorkspaceModeMotion";
 import { vAppTooltip } from "./directives/app-tooltip";
 import { createWindowCloseHandler } from "./lib/window-close";
 import { fitMainWindowToMonitor } from "./lib/window-layout";
@@ -38,7 +39,7 @@ const SkinUnlockCelebration = defineAsyncComponent(() => import("./components/Sk
 const ModelPreview = defineAsyncComponent(() => import("./components/ModelPreview.vue"));
 
 const configStore = useConfigStore();
-const engineBadgeKey = computed(() => configStore.pythonDetected ? 'cards.configured' :
+const engineBadgeKey = computed(() => configStore.engineLoading ? 'python.checking' : configStore.pythonDetected ? 'cards.configured' :
   configStore.pythonError ? 'python.unavailable' : configStore.pythonPath ? 'cards.depsMissing' : 'cards.notDetected');
 const workSession = useWorkSessionStore();
 void workSession.initialize(usePresetsStore().initialize());
@@ -51,6 +52,7 @@ const { t } = useI18n();
 const epLocale = computed(() => ({ zh: zhCn, en: enLocale, ja: jaLocale, ko: koLocale })[ui.resolvedLocale]);
 const appMode = computed(() => configStore.config.appMode);
 // Gerber 导入完成态:治具模式看板框轮廓,钢网模式看焊盘(用于步骤圆点 1 → ✓)
+const gerberImport = ref<InstanceType<typeof GerberImport> | null>(null);
 const gerberDone = computed(() =>
   appMode.value === "stencil"
     ? configStore.config.stencilPadsTop.length > 0 || configStore.config.stencilPadsBottom.length > 0
@@ -74,6 +76,7 @@ const appWindow = (() => {
     } as unknown as ReturnType<typeof getCurrentWindow>;
   }
 })();
+const nativeWindowsFrame = isTauri() && navigator.platform.startsWith('Win');
 const isMaximized = ref(false);
 let appDisposed = false;
 let unlistenMaximize: UnlistenFn | null = null;
@@ -140,6 +143,8 @@ const sidebarShell = ref<HTMLElement | null>(null);
 const parametersSidebar = ref<HTMLElement | null>(null);
 const advancedOpen = ref<Record<AppMode, boolean>>({ jig: false, stencil: false });
 useSidebarModeScroll(appMode, parametersSidebar);
+const workbench = ref<HTMLElement | null>(null);
+const { settleAt } = useWorkspaceModeMotion(appMode, workbench);
 const configFormRef = ref<InstanceType<typeof ConfigForm> | null>(null);
 let importGuideSequence = 0;
 const viewportWidth = ref(window.innerWidth);
@@ -147,6 +152,23 @@ const visibleSidebarWidth = computed(() => Math.max(SIDEBAR_MIN,
   Math.min(sidebarWidth.value, SIDEBAR_MAX, viewportWidth.value - 440)));
 // 拖拽过程中禁用 transition 保证跟手,松手后再启用,产生"惯性到位"效果
 const sidebarAnimating = ref(true);
+
+async function waitForSidebarLayout() {
+  await nextTick();
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  const shell = sidebarShell.value;
+  if (!shell) return;
+  // Wait only on the surfaces that move the destination. Help diagrams can
+  // intentionally stay paused offscreen, so their finished promises may never resolve.
+  const surfaces = [shell, ...shell.querySelectorAll<HTMLElement>(".motion-collapse, .mode-card, [data-mode-motion]")];
+  const layoutAnimations = surfaces.flatMap((element) => element.getAnimations()).filter((animation) => {
+    const effect = animation.effect;
+    if (animation.playState !== "running" || !(effect instanceof KeyframeEffect) || !Number.isFinite(effect.getComputedTiming().endTime)) return false;
+    return effect.getKeyframes().some((frame) =>
+      "height" in frame || "width" in frame || "transform" in frame || "translate" in frame);
+  });
+  await Promise.allSettled(layoutAnimations.map((animation) => animation.finished));
+}
 
 // 每个卡片的高度
 const CARD_MIN = 140;
@@ -190,11 +212,7 @@ async function startTour() {
   sidebarHidden.value = false;
   collapsed.value = { ...collapsed.value, gerber: false, config: false, stencil: false };
   autoHeights.value = { ...autoHeights.value, gerber: true, config: true, stencil: true };
-  await nextTick();
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  await Promise.allSettled((sidebarShell.value?.getAnimations({ subtree: true }) ?? [])
-    .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
-    .map((animation) => animation.finished));
+  await waitForSidebarLayout();
   tourPreparing = false;
   if (!appDisposed) tourOpen.value = true;
 }
@@ -433,7 +451,9 @@ async function onGerberLoaded(
   await revealStencilSizeForReview();
 }
 
-async function revealStencilSizeForReview() {
+async function revealStencilSizeForReview(moveFocus = false) {
+  const origin = document.activeElement;
+  const mayFocus = () => moveFocus && (document.activeElement === origin || document.activeElement === document.body);
   const sequence = ++importGuideSequence;
   if (appMode.value !== "jig") return;
   sidebarAnimating.value = true;
@@ -441,15 +461,9 @@ async function revealStencilSizeForReview() {
   collapsed.value.config = false;
   autoHeights.value.config = true;
   saveSettings();
-  await nextTick();
-  // Wait for the sidebar/card to open before measuring the target position.
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  const animations = sidebarShell.value?.getAnimations({ subtree: true }) ?? [];
-  await Promise.allSettled(animations
-    .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
-    .map((animation) => animation.finished));
+  await waitForSidebarLayout();
   if (sequence !== importGuideSequence || appMode.value !== "jig" || sidebarHidden.value || collapsed.value.config) return;
-  await configFormRef.value?.revealStencilSize(true);
+  await configFormRef.value?.revealStencilSize(true, mayFocus);
 }
 
 async function revealBoardOutlineForReview() {
@@ -505,7 +519,7 @@ onBeforeUnmount(() => {
 
 <template>
   <el-config-provider :locale="epLocale">
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'native-windows-frame': nativeWindowsFrame }">
     <header class="app-header" data-tauri-drag-region @dblclick="onHeaderDblClick">
       <div class="header-brand" data-tauri-drag-region>
         <BrandLogo />
@@ -526,7 +540,6 @@ onBeforeUnmount(() => {
       <div class="window-controls">
         <button
           class="win-btn"
-          v-app-tooltip="{ content: t('win.minimize'), placement: 'bottom' }"
           :aria-label="t('win.minimize')"
           @click="appWindow.minimize()"
         >
@@ -536,7 +549,6 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="win-btn"
-          v-app-tooltip="{ content: isMaximized ? t('win.restore') : t('win.maximize'), placement: 'bottom' }"
           :aria-label="isMaximized ? t('win.restore') : t('win.maximize')"
           @click="appWindow.toggleMaximize()"
         >
@@ -550,7 +562,6 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="win-btn win-close"
-          v-app-tooltip="{ content: t('win.close'), placement: 'bottom' }"
           :aria-label="t('win.close')"
           @click="appWindow.close()"
         >
@@ -561,7 +572,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <main class="app-main" :class="{ 'is-sidebar-hidden': sidebarHidden }"
+    <main ref="workbench" class="app-main" @pointerdown.capture="settleAt" :class="{ 'is-sidebar-hidden': sidebarHidden }"
       :style="{ '--preview-inset': (sidebarHidden ? 0 : visibleSidebarWidth + 5) + 'px', '--slot-header-height': CARD_COLLAPSED + 'px' }">
       <div ref="sidebarShell" class="sidebar-shell" :class="{ 'is-animating': sidebarAnimating, 'is-hidden': sidebarHidden }"
         :style="{ width: (visibleSidebarWidth + 5) + 'px' }"
@@ -580,7 +591,7 @@ onBeforeUnmount(() => {
             <div class="slot-meta">
               <span
                 class="status-badge"
-                :class="configStore.pythonDetected ? 'is-ok' : configStore.pythonPath && !configStore.pythonError ? 'is-warn' : 'is-err'"
+                :class="configStore.engineLoading ? '' : configStore.pythonDetected ? 'is-ok' : configStore.pythonPath && !configStore.pythonError ? 'is-warn' : 'is-err'"
                 :title="t(engineBadgeKey)"
               >
                 {{ t(engineBadgeKey) }}
@@ -604,7 +615,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Gerber Import (两种模式共用) -->
-        <div id="slot-gerber" class="card-slot">
+        <div id="slot-gerber" data-mode-motion="source" class="card-slot">
           <button class="slot-header" :aria-expanded="!collapsed.gerber" aria-controls="body-gerber" @click="toggleCollapse('gerber')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="1" :class="{ 'is-done': gerberDone }">{{ gerberDone ? '✓' : '1' }}</span>
@@ -616,7 +627,7 @@ onBeforeUnmount(() => {
           </button>
           <MotionCollapse id="body-gerber" :open="!collapsed.gerber" :height="slotBodyHeight('gerber')">
           <div class="slot-body">
-            <GerberImport :mode="appMode" @gerber-loaded="onGerberLoaded" />
+            <GerberImport ref="gerberImport" :mode="appMode" @gerber-loaded="onGerberLoaded" @panel-scope-changed="revealStencilSizeForReview" />
           </div>
           <div
             class="drag-handle"
@@ -631,7 +642,7 @@ onBeforeUnmount(() => {
         <template v-if="appMode === 'jig'">
 
         <!-- Config Form -->
-        <div id="slot-config" class="card-slot mode-card">
+        <div id="slot-config" data-mode-motion="form" class="card-slot mode-card">
           <button class="slot-header" :aria-expanded="!collapsed.config" aria-controls="body-config" @click="toggleCollapse('config')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="2">2</span>
@@ -655,7 +666,7 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Screw Diagram -->
-        <div id="slot-screw" class="card-slot mode-card">
+        <div id="slot-screw" data-mode-motion="screws" class="card-slot mode-card">
           <button class="slot-header" :aria-expanded="!collapsed.screw" aria-controls="body-screw" @click="toggleCollapse('screw')">
             <div class="slot-label">
               <span class="slot-step-dot" data-step="3">3</span>
@@ -681,10 +692,10 @@ onBeforeUnmount(() => {
 
         <!-- Stencil Card (stencil mode) -->
         <template v-if="appMode === 'stencil'">
-        <div id="slot-stencil" class="card-slot mode-card">
+        <div id="slot-stencil" data-mode-motion="form" class="card-slot mode-card">
           <button class="slot-header" :aria-expanded="!collapsed.stencil" aria-controls="body-stencil" @click="toggleCollapse('stencil')">
             <div class="slot-label">
-              <span class="slot-step-dot" data-step="1">1</span>
+              <span class="slot-step-dot" data-step="2">2</span>
               <span class="slot-title" :title="t('cards.stencil')">{{ t('cards.stencil') }}</span>
             </div>
             <svg class="chevron" :class="{ 'is-collapsed': collapsed.stencil }" viewBox="0 0 16 16" width="16" height="16">
@@ -724,7 +735,9 @@ onBeforeUnmount(() => {
       </button>
 
       <section class="app-preview">
-        <ModelPreview :class="{ 'is-layout-animating': sidebarAnimating }" @review-stencil-size="revealStencilSizeForReview" @review-board-outline="revealBoardOutlineForReview" />
+        <ModelPreview :choosing-panel="gerberImport?.choosingPanel" :import-error="gerberImport?.error"
+          @pick-gerber="gerberImport?.pickFile()" @drop-gerber="gerberImport?.processFile($event)"
+          :class="{ 'is-layout-animating': sidebarAnimating }" @review-stencil-size="revealStencilSizeForReview(true)" @review-board-outline="revealBoardOutlineForReview" />
       </section>
     </main>
     <OnboardingTour v-if="tourOpen" :mode="appMode" @close="finishTour" />
@@ -956,14 +969,24 @@ onBeforeUnmount(() => {
   transition: border-color var(--motion-fast) var(--ease-out), box-shadow 200ms var(--ease-out);
 }
 .card-slot:hover { border-color: color-mix(in srgb, var(--text-tertiary) 15%, var(--surface-line)); }
-.card-slot:focus-within { border-color: color-mix(in srgb, var(--bg-brand) 24%, var(--surface-line)); }
-.card-slot:focus-within > .slot-header { background: color-mix(in srgb, var(--control-selection-surface) 36%, var(--surface-raised)); }
-.mode-card { animation: panel-arrive 300ms var(--ease-out) both; }
+/* A collapsed header is the entire card; let that one surface draw its ring. */
+.card-slot:has(> .slot-header[aria-expanded="false"]:focus-visible) {
+  border-color: var(--interaction-border);
+  outline: 2px solid var(--interaction-border);
+  outline-offset: -1px;
+}
+.card-slot:has(> .slot-header[aria-expanded="false"]:focus-visible) > .slot-header { outline: none; }
+.app-main:not([data-mode-switched]) .mode-card { animation: panel-arrive 300ms var(--ease-out) both; }
 #slot-screw.mode-card { animation-delay: 35ms; }
 @keyframes panel-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* Slot Header */
 .slot-header {
+  /* The button sits inside the card's 1px border. Match its inner curve so
+     the keyboard outline stays visible instead of being clipped at the corners. */
+  --header-radius: calc(var(--radius-panel) - 1px);
+  border-radius: var(--header-radius) var(--header-radius) 0 0;
+  corner-shape: inherit;
   position: relative;
   width: 100%;
   border: none;
@@ -983,12 +1006,17 @@ onBeforeUnmount(() => {
   flex: 0 0 auto;
 }
 
+.slot-header[aria-expanded="false"] { border-radius: var(--header-radius); }
+.slot-header:focus-visible {
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--control-selection-surface) 36%, var(--surface-raised));
+}
 .slot-header:hover {
   color: var(--text-brand);
   background: color-mix(in srgb, var(--surface-well) 55%, var(--surface-raised));
 }
 .slot-header::after { content: ''; position: absolute; left: 16px; right: 16px; bottom: 0; height: 1px; background: var(--surface-line); opacity: .45; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-out); }
-.slot-header[aria-expanded="false"]::after { opacity: 0; }
+.slot-header[aria-expanded="false"]::after, .slot-header:focus-visible::after { opacity: 0; }
 .slot-header[aria-expanded="false"] .slot-step-dot:not(.is-done) { background: var(--surface-well); color: var(--text-tertiary); }
 .slot-header:hover .slot-title { color: var(--text-brand); }
 .slot-header:is(:hover, :focus-visible) .chevron { background: var(--control-selection-surface); color: var(--interaction-ink); }

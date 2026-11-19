@@ -23,6 +23,36 @@ const BOARD = [
   "X0Y0D01*",
 ].join("\n");
 
+describe('panel arc bounds', () => {
+  it.each([
+    ['CW', 'X0Y50000D02*', 'G02X50000Y0I0J-50000D01*', [[10, 0], [10, 10], [0, 10], [0, 5]]],
+    ['CCW', 'X50000Y0D02*', 'G03X0Y50000I-50000J0D01*', [[0, 10], [10, 10], [10, 0], [5, 0]]],
+  ] as const)('keeps a %s concave corner inside the actual 30 × 10 panel', (_dir, start, arc, edges) => {
+    const left = [start, arc, 'G01*', ...edges.map(([x, y]) => `X${x * 10000}Y${y * 10000}D01*`)];
+    const right = draw([[20, 0], [30, 0], [30, 10], [20, 10]]);
+    const panel = extractOutline(HEADER + left.join('\n') + '\n' + right + 'M02*');
+    expect(panel.isPanel).toBe(true);
+    expect(makePanelVariant(panel)).toMatchObject({ width: 30, height: 10, center: { x: 15, y: 5 } });
+    expect(panel.boards?.map(b => [b.bbox.maxX - b.bbox.minX, b.bbox.maxY - b.bbox.minY]))
+      .toEqual([[10, 10], [10, 10]]);
+  });
+
+  it.each([['G03', 45, 16], ['G02', 43, 17]] as const)(
+    'includes only crossed extrema of an open tooling arc (%s)', (direction, maxX, maxY) => {
+      // Same endpoints: CCW crosses 0°, CW takes the long way through 180°.
+      const boards = `%SRX2Y1I12.0J0*%\n${BOARD}\n%SR*%\n`;
+      const edge = `X430000Y80000D02*\n${direction}X430000Y160000I-30000J40000D01*`;
+      const panel = extractOutline(HEADER + boards + edge + '\nM02*');
+      expect(panel.bbox).toMatchObject({ minX: 0, minY: 0, maxX, maxY });
+    });
+
+  it('retains full circles with omitted endpoint coordinates in a repeated panel', () => {
+    const panel = extractOutline(HEADER + '%SRX2Y1I20.0J0*%\nX60000Y80000D02*\nG02I-30000J-40000D01*\n%SR*%\nM02*');
+    expect(panel.arcsLinearized).toBe(2);
+    expect(panel.bbox).toMatchObject({ minX: -2, minY: -1, maxX: 28, maxY: 9 });
+  });
+});
+
 describe("%SR 步进重复", () => {
   it("I/J 写法展开 2×2 阵列,整体板框 = 阵列外接范围", () => {
     const g =
@@ -122,6 +152,46 @@ describe("%SR 步进重复", () => {
     expect(result.isPanel).toBe(false);
     expect(result.boards).toBeUndefined();
     expect(result.holes).toHaveLength(2);
+  });
+
+  it.each([false, true])('does not promote enclosed slots to boards when their perimeter cannot close (step repeat = %s)', (repeat) => {
+    const incomplete = BOARD.replace('X0Y0D01*', 'X0Y10000D01*');
+    const slots = draw([[2, 2], [4, 2], [4, 6], [2, 6]]) + draw([[6, 2], [8, 2], [8, 6], [6, 6]]);
+    const drawing = incomplete + '\n' + slots;
+    const input = repeat ? '%SRX2Y1I12.0J0*%\n' + drawing + '%SR*%\n' : drawing;
+    const outline = extractOutline(HEADER + input);
+    expect(outline.isPanel).toBe(false);
+    expect(outline.points).toHaveLength(0);
+    expect(outline.boards).toBeUndefined();
+  });
+
+  it('keeps the full panel extent when a disjoint incomplete board has a closed cutout', () => {
+    const incomplete = 'X200000Y0D02*\nX500000Y0D01*\nX500000Y200000D01*\nX200000Y200000D01*\n';
+    const slot = draw([[30, 8], [34, 8], [34, 12], [30, 12]]);
+    const text = HEADER + BOARD + '\n' + incomplete + slot;
+    const panel = extractOutline(text);
+    const single = extractOutline(text, { panel: false });
+    expect(panel.isPanel).toBe(true);
+    expect(panel.bbox).toMatchObject({ minX: 0, minY: 0, maxX: 50, maxY: 20 });
+    expect(panel.boards).toBeUndefined();
+    expect(single.bbox).toMatchObject({ minX: 0, minY: 0, maxX: 10, maxY: 8 });
+    expect(single.holes).toHaveLength(0);
+  });
+
+  it('keeps complete repeated boards inside an unrelated open tooling frame', () => {
+    const tooling = 'X-10000Y-10000D02*\nX230000Y-10000D01*\nX230000Y90000D01*\nX-10000Y90000D01*\n';
+    const drawing = HEADER + tooling + '%SRX2Y1I12.0J0*%\n' + BOARD + '\n%SR*%\n';
+    const outline = extractOutline(drawing);
+    expect(outline.boards?.map(board => board.bbox.minX)).toEqual([0, 12]);
+  });
+
+  it('joins complementary segments from repeated blocks on the same grid, ignoring spacing on an unused axis', () => {
+    const repeat = '%SRX2Y1I10.1J0*%\n';
+    const sameGrid = '%SRX2Y1I10.1J5.0*%\n';
+    const top = 'X0Y0D02*\nX100000Y0D01*\nX100000Y80000D01*\n%SR*%\n';
+    const bottom = 'X100000Y80000D02*\nX0Y80000D01*\nX0Y0D01*\n%SR*%\n';
+    const outline = extractOutline(HEADER + repeat + top + sameGrid + bottom);
+    expect(outline.boards?.map(board => [board.bbox.minX, board.bbox.maxX])).toEqual([[0, 10], [10.1, 20.1]]);
   });
 
   it("SR 工艺边框内的子板保留内孔,不会选中整版边框", () => {

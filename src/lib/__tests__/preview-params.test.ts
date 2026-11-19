@@ -5,7 +5,7 @@ import { DEFAULT, useConfigStore, type AppConfig } from '../../stores/config';
 import type { ComponentReliefRegion } from '../component-relief';
 import type { PadPolygon } from '../gerber/pads';
 import { createPreviewParameterCache, watchPreviewGeometryChanges } from '../preview-params';
-import { scadPartHash } from '../model-params';
+import { modelParamsHash, previewPartParams, scadPartHash } from '../model-params';
 
 const region = (depth?: number, through = false): ComponentReliefRegion => ({
   id: 'chip', shape: 'rect', x: 0, y: 0, width: 10, height: 8, depth, through,
@@ -39,7 +39,34 @@ describe('preview parameter serialization cache', () => {
     c.stencilThickness += .1;
     expect(cache.hash()).not.toBe(initialHash);
     expect(cache.partHash('stencil_top')).not.toBe(initialPart);
+    expect(cache.params().stencil_pads_top).toBe(params.stencil_pads_top);
+    expect(vertexReads).toBe(reads);
+    const beforeVertexEdit = cache.partHash('stencil_top');
+    c.stencilPadsTop[0].parts[0].points[1][0] = 5;
+    expect(cache.partHash('stencil_top')).not.toBe(beforeVertexEdit);
     expect(vertexReads).toBeGreaterThan(reads);
+  });
+
+  it('never transmits unused faces to the preview worker and keeps exact snapshot keys', () => {
+    const c = config();
+    const pad = (x: number): PadPolygon => ({ type: 'rect', cx: 0, cy: 0, polarity: 'D',
+      parts: [{ polarity: 'D', points: [[x, 0], [1, 1], [0, 1]] }] });
+    c.stencilPadsTop = [pad(1)]; c.stencilPadsBottom = [pad(2)];
+    const cache = createPreviewParameterCache(() => c);
+    const captured = JSON.parse(JSON.stringify(cache.params()));
+    expect(cache.hash()).toBe(modelParamsHash(c));
+    for (const part of ['base', 'cover', 'insert', 'stencil_top', 'stencil_bottom']) {
+      const payload = previewPartParams(cache.params(), part);
+      expect(payload.stencil_pads_top).toHaveLength(part === 'stencil_top' ? 1 : 0);
+      expect(payload.stencil_pads_bottom).toHaveLength(part === 'stencil_bottom' ? 1 : 0);
+      expect(scadPartHash(payload, part)).toBe(cache.partHash(part, captured));
+      expect(cache.partHash(part)).toBe(cache.partHash(part, captured));
+    }
+    const oldTop = cache.partHash('stencil_top'), oldBottom = cache.partHash('stencil_bottom');
+    c.stencilPadsTop = [pad(3)]; // same count, different imported shape
+    expect(cache.partHash('stencil_bottom')).toBe(oldBottom);
+    expect(cache.partHash('stencil_top')).not.toBe(oldTop);
+    expect(cache.partHash('stencil_top', captured)).toBe(oldTop);
   });
 
   it('retains captured export keys and invalidates live keys for in-place opening changes', () => {

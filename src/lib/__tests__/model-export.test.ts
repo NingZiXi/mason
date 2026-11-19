@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
-import { exportModels, ModelExportError, type ModelExportPart } from '../model-export';
+import { modelExportPlan, exportModels, ModelExportError, type ModelExportPart } from '../model-export';
 
 const parts: ModelExportPart[] = [
   { name: 'base', rust: 'base', filename: 'jig_base.stl', bytes: new ArrayBuffer(12) },
   { name: 'insert', rust: 'pcb_insert', filename: 'jig_pcb_insert.stl' },
   { name: 'cover', rust: 'top_cover', filename: 'jig_top_cover.stl' },
 ];
+
+describe('export file scope', () => {
+  it('always exports the complete jig, even when stencil data exists on only one side', () => {
+    expect(modelExportPlan('jig', 'step', false, true).map(p => p.filename)).toEqual([
+      'jig_base.step', 'jig_pcb_insert.step', 'jig_top_cover.step',
+    ]);
+  });
+
+  it.each([
+    [true, false, ['stencil_top.stl']], [false, true, ['stencil_bottom.stl']],
+    [true, true, ['stencil_top.stl', 'stencil_bottom.stl']], [false, false, ['stencil_top.stl']],
+  ] as const)('uses the available stencil faces (top=%s, bottom=%s)', (top, bottom, files) => {
+    expect(modelExportPlan('stencil', 'stl', top, bottom).map(p => p.filename)).toEqual(files);
+  });
+});
 
 function setup(behavior?: (command: string, args?: Record<string, unknown>) => unknown) {
   const invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
@@ -28,6 +43,29 @@ describe('model export transactions', () => {
     ]);
     expect(invoke.mock.calls[1][1]).toMatchObject({ path: 'C:\\export\\.mason-export-ours.tmp\\jig_base.stl', bytes: parts[0].bytes });
     expect(invoke.mock.calls[2][1]).toMatchObject({ outputPath: 'C:\\export\\.mason-export-ours.tmp\\jig_pcb_insert.stl' });
+  });
+
+  it('keeps the part number on its in-flight write and separates finalization from success', async () => {
+    let releaseWrite!: () => void, releaseCommit!: () => void;
+    const { options } = setup(cmd => {
+      if (cmd === 'write_file_bytes') return new Promise<void>(resolve => { releaseWrite = resolve; });
+      if (cmd === 'commit_model_export') return new Promise<string>(resolve => { releaseCommit = () => resolve('output'); });
+    });
+    const onProgress = vi.fn();
+    const done = vi.fn();
+    const result = exportModels({ ...options, onProgress }).then(done);
+    await vi.waitFor(() => expect(releaseWrite).toBeTypeOf('function'));
+    expect(onProgress.mock.calls).toEqual([[{ phase: 'write', part: 'base', current: 1, total: 3 }]]);
+    releaseWrite();
+    await vi.waitFor(() => expect(releaseCommit).toBeTypeOf('function'));
+    expect(onProgress.mock.calls.slice(1)).toEqual([
+      [{ phase: 'write', part: 'insert', current: 2, total: 3 }],
+      [{ phase: 'write', part: 'cover', current: 3, total: 3 }],
+      [{ phase: 'commit' }],
+    ]);
+    expect(done).not.toHaveBeenCalled();
+    releaseCommit(); await result;
+    expect(done).toHaveBeenCalledWith('output');
   });
 
   it('aborts a partially written export and reports the failed part and completed count', async () => {

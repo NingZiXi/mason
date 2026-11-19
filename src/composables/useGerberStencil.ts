@@ -14,10 +14,10 @@
  */
 import { ref, computed, shallowRef } from "vue";
 import { GerberImportError, formatImportError } from '../lib/gerber/import-error';
-import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
+import type { extractOutlineScopes, GerberOutline } from "../lib/gerber/parser";
+import { openGerberArchive, type GerberArchive } from "../lib/gerber/import-archive";
 import { extractPads, type PadPolygon } from "../lib/gerber/pads";
-import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
-import { detectOutlineFiles } from "../lib/gerber/outline-detect";
+import { makePanelVariants, type PanelVariant } from "../lib/gerber/panel";
 import { detectPasteFiles, detectPasteSide, pickPasteBySide } from "../lib/gerber/paste-detect";
 import { applyFlyingProbeRoles } from "../lib/gerber/flying-probe";
 import { isArchiveContentFile } from '../lib/gerber/archive-files';
@@ -65,7 +65,7 @@ export function useGerberStencil() {
   const hasResult = computed(() => result.value !== null);
   const padCount = computed(() => result.value?.padCount ?? 0);
 
-  async function processFile(file: File): Promise<GerberStencilResult | null> {
+  async function processFile(file: File, archive?: GerberArchive): Promise<GerberStencilResult | null> {
     const token = ++revision;
     loading.value = true;
     failure.value = null;
@@ -75,7 +75,7 @@ export function useGerberStencil() {
       const lower = file.name.toLowerCase();
       let parsed: GerberStencilResult;
       if (lower.endsWith(".zip")) {
-        parsed = await processZip(file);
+        parsed = await processZip(archive ?? openGerberArchive(file));
       } else if (
         lower.endsWith(".gtp") ||
         lower.endsWith(".gbp") ||
@@ -98,12 +98,9 @@ export function useGerberStencil() {
     }
   }
 
-  async function processZip(file: File): Promise<GerberStencilResult> {
-    const { default: JSZip } = await import("jszip");
-    const zip = await JSZip.loadAsync(file);
-    const filenames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
-
-    const outlineCands = detectOutlineFiles(filenames);
+  async function processZip(archive: GerberArchive): Promise<GerberStencilResult> {
+    const shared = await archive;
+    const { filenames, candidates: outlineCands } = shared;
     const pasteCands = detectPasteFiles(filenames);
 
     if (pasteCands.length === 0) {
@@ -118,22 +115,20 @@ export function useGerberStencil() {
     // 板框可选;没有板框时用锡膏层 bbox 作为卡槽形状
     const outlineFile = outlineCands[0]?.filename ?? null;
 
-    const topText = top ? await zip.files[top.filename].async("string") : null;
-    const bottomText = bottom ? await zip.files[bottom.filename].async("string") : null;
-    const outlineText = outlineFile
-      ? await zip.files[outlineFile].async("string")
-      : null;
+    const [topText, bottomText, scopes] = await Promise.all([
+      top ? shared.read(top.filename) : null, bottom ? shared.read(bottom.filename) : null, shared.outline(),
+    ]);
     const probeFile = filenames.find(name => isArchiveContentFile(name) && /(^|[/\\])FlyingProbeTesting\.json$/i.test(name));
     let probeData: unknown;
     if (probeFile) {
-      try { probeData = JSON.parse(await zip.files[probeFile].async("string")); }
+      try { probeData = JSON.parse(await shared.read(probeFile)); }
       catch { console.warn("[gerber] ignored invalid FlyingProbeTesting.json"); }
     }
 
     return finalize(
       topText,
       bottomText,
-      outlineText,
+      scopes,
       top?.filename ?? null,
       bottom?.filename ?? null,
       outlineFile ?? "(paste layer bounds)",
@@ -158,7 +153,7 @@ export function useGerberStencil() {
   function finalize(
     topText: string | null,
     bottomText: string | null,
-    outlineText: string | null,
+    scopes: ReturnType<typeof extractOutlineScopes> | null,
     topPasteFile: string | null,
     bottomPasteFile: string | null,
     outlineFile: string,
@@ -176,43 +171,13 @@ export function useGerberStencil() {
     const allPads = [...(topResult?.pads ?? []), ...(bottomResult?.pads ?? [])];
 
     // 板框:优先用 outline 层,否则用 pads 的 bbox 生成矩形
-    let outline: GerberOutline;
-    let outlineSource: GerberStencilResult['outlineSource'] = 'gerber';
-    let outlineFallbackReason: GerberStencilResult['outlineFallbackReason'];
-    if (outlineText) {
-      outline = extractOutline(outlineText, { panel: true });
-      if (outline.points.length < 3) {
-        // 板框解析失败,回退到 pads bbox
-        outline = bboxToOutline(allPads);
-        outlineSource = 'pads-bounds';
-        outlineFallbackReason = 'invalid';
-      }
-    } else {
-      outline = bboxToOutline(allPads);
-      outlineSource = 'pads-bounds';
-      outlineFallbackReason = outlineFile === '(paste layer bounds)' ? 'missing' : 'invalid';
-    }
+    const valid = scopes && scopes.panel.points.length >= 3 ? scopes : null;
+    const outline = valid?.panel ?? bboxToOutline(allPads);
+    const singleOutline = valid?.single ?? outline;
+    const outlineSource = valid ? 'gerber' : 'pads-bounds';
+    const outlineFallbackReason = valid ? undefined : scopes ? 'invalid' : 'missing';
 
-    // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同
-    const singleOutline =
-      outline.isPanel && outlineText
-        ? extractOutline(outlineText, { panel: false })
-        : outline;
-
-    const variants = {
-      panel: makePanelVariant(outline, topResult?.pads ?? [], bottomResult?.pads ?? []),
-      single: makePanelVariant(
-        singleOutline,
-        topResult?.pads ?? [],
-        bottomResult?.pads ?? []
-      ),
-      boards: outline.boards?.map((board, index) =>
-        makePanelVariant(board, topResult?.pads ?? [], bottomResult?.pads ?? [], {
-          id: `board-${index + 1}`,
-          label: `#${index + 1}`,
-        })
-      ),
-    };
+    const variants = makePanelVariants({ panel: outline, single: singleOutline }, topResult?.pads ?? [], bottomResult?.pads ?? []);
     const applied = variants.panel;
 
     return {

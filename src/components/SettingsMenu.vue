@@ -120,7 +120,7 @@ function onSettingsClosed() {
 </script>
 
 <template>
-  <button class="settings-btn" v-app-tooltip="{ content: updater.update ? t('updates.title') : t('settings.button'), placement: 'bottom' }" :aria-label="t('settings.button')" aria-haspopup="dialog" :aria-expanded="showSettings" @click="showSettings = true">
+  <button class="settings-btn" :aria-label="t('settings.button')" aria-haspopup="dialog" :aria-expanded="showSettings" @click="showSettings = true">
     <span v-if="updater.update" class="update-dot" />
     <svg viewBox="0 0 24 24" width="15" height="15">
       <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2" />

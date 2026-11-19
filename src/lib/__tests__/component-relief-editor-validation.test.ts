@@ -38,6 +38,9 @@ const resolveImport = (name: string) => {
   if (name.endsWith('/history-shortcuts')) return historyShortcuts;
   if (name.endsWith('/directives/app-tooltip')) return { vAppTooltip: {} };
   if (name.endsWith('/SlidingIndicator.vue')) return { default: { render: () => null } };
+  if (name.endsWith('/InlineHelp.vue')) return { default: defineComponent({
+    setup: (_props, { slots }) => () => h('div', [slots.default?.(), slots.trailing?.()]),
+  }) };
   throw new Error(`Unexpected editor dependency: ${name}`);
 };
 new Function('require', 'exports', 'module', javascript)(resolveImport, compiled.exports, compiled);

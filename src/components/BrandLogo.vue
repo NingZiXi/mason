@@ -20,19 +20,11 @@ let clickCount = 0;
 let lastClickAt = 0;
 const route = 'M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50';
 
-function registerClick() {
-  if (ui.skinCelebrationActive) {
-    clickCount = 0;
-    lastClickAt = 0;
-    return;
-  }
-  const now = performance.now();
-  clickCount = now - lastClickAt > 2400 ? 1 : clickCount + 1;
-  lastClickAt = now;
-  if (clickCount === 10) {
-    clickCount = 0;
-    if (ui.beginSkinCelebration()) burst();
-  }
+let finishingPulse = false;
+
+function finishCharge() {
+  finishingPulse = false;
+  if (ui.beginSkinCelebration()) burst();
 }
 
 function stopBurst() {
@@ -48,7 +40,7 @@ function burst() {
   const root = fireworks.value, button = logo.value;
   if (!root || !button || typeof root.animate !== 'function') return;
   stopBurst();
-  const rect = button.getBoundingClientRect();
+  const rect = (endNode.value ?? button).getBoundingClientRect();
   const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
   // The real Logo is the launch point, independent of header clipping or scroll.
   root.style.left = `${x}px`;
@@ -117,19 +109,30 @@ function play(element: Element, frames: Keyframe[], duration: number, delay = 0,
 
 function illuminate() {
   if (!symbol.value || !pulses.value || !startNode.value || !endNode.value) return;
-  registerClick();
+  if (finishingPulse || ui.skinCelebrationActive) return;
+  const now = performance.now();
+  clickCount = now - lastClickAt > 2400 ? 1 : clickCount + 1;
+  lastClickAt = now;
+  const charge = Math.max(0, (clickCount - 3) / 7);
+  const finale = clickCount === 10;
+  if (finale) { finishingPulse = true; clickCount = 0; }
+  if (typeof symbol.value.animate !== 'function') {
+    if (finale) finishCharge();
+    return;
+  }
+  const pulseTime = finale ? 225 : 690 - 315 * charge;
 
   // Every click responds from the current pose. In-flight signals keep
   // travelling instead of blocking input or jumping back to the start.
   play(symbol.value, [
     { transform: getComputedStyle(symbol.value).transform },
-    { transform: 'scale(.94)', offset: .2 },
-    { transform: 'scale(1.025)', offset: .62 },
+    { transform: `scale(${.94 + charge * .04},${.94 - charge * .055})`, offset: .2 },
+    { transform: `scale(${1.025 - charge * .035},${1.025 + charge * .045})`, offset: .62 },
     { transform: 'none' },
-  ], 230, 0, 'cubic-bezier(.22, .8, .3, 1)');
+  ], 230 - charge * 60, 0, 'cubic-bezier(.22, .8, .3, 1)');
   play(startNode.value, [
     { transform: getComputedStyle(startNode.value).transform },
-    { transform: 'scale(1.24)', offset: .35 }, { transform: 'none' },
+    { transform: `scale(${1.24 + charge * .22})`, offset: .35 }, { transform: 'none' },
   ], 170, 0, 'cubic-bezier(.22, .8, .3, 1)');
 
   // Reuse a bounded pool. Rapid clicks recycle only the oldest pulse,
@@ -146,7 +149,7 @@ function illuminate() {
     { opacity: .8, offset: .06 },
     { opacity: .8, offset: .9 },
     { strokeDashoffset: '-86', opacity: 0 },
-  ], 760);
+  ], pulseTime);
 
   // The head follows the same polyline at constant speed. These finite
   // keyframes need no timer or permanent animation loop.
@@ -157,7 +160,8 @@ function illuminate() {
     return { transform: `translate(${x}px, ${y}px)`, opacity: index === 0 || index === vertices.length - 1 ? 0 : 1,
       offset: distance / 156 };
   });
-  play(signal, frames, 760, 0, 'linear', () => {
+  play(signal, frames, pulseTime, 0, 'linear', () => {
+    if (finale) finishCharge();
     const node = endNode.value;
     if (!node) return;
     play(node, [

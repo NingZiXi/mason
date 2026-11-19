@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { InputNumberInstance } from "element-plus";
 import { useConfigStore } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
+import { focusParameterControl } from "../lib/focus-parameter-control";
 import InlineHelp from "./InlineHelp.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
-import { vAppTooltip } from '../directives/app-tooltip';
+import PryNotchPicker from "./PryNotchPicker.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -19,18 +19,31 @@ const THICKNESS_PRESETS = [
   { label: "stencil.presetStandard", value: 0.2 },
   { label: "stencil.presetFdm", value: 0.3 },
 ];
-const thicknessInput = ref<InputNumberInstance>();
-const customThicknessFocused = ref(false);
-const customThicknessActive = computed(() => customThicknessFocused.value ||
-  !THICKNESS_PRESETS.some((preset) => Math.abs(c.value.stencilThickness - preset.value) < 0.001));
+const manualThickness = ref<number>();
+const selectedThickness = computed(() => {
+  const value = c.value.stencilThickness;
+  if (manualThickness.value === value) return undefined;
+  return THICKNESS_PRESETS.find(preset => Math.abs(value - preset.value) < 0.001)?.value;
+});
+
+// Undo and applied configurations can replace the thickness independently of this control.
+watch(() => c.value.stencilThickness, value => {
+  if (value !== manualThickness.value) manualThickness.value = undefined;
+});
 
 function selectThickness(value: number) {
-  customThicknessFocused.value = false;
+  manualThickness.value = undefined;
   c.value.stencilThickness = value;
 }
 
-function editCustomThickness() {
-  thicknessInput.value?.focus();
+type NumberKey =
+  | 'pcbThickness' | 'stencilThickness' | 'padShrink' | 'stencilFrameWidth' | 'stencilCornerRadius'
+  | 'pocketClearance' | 'stencilStaggerGap' | 'stencilStaggerOffset' | 'stencilTestPointMaxDia'
+  | 'stencilTestPointIsolation' | 'stencilGridSize' | 'stencilGridBar';
+function updateNumber(key: NumberKey, value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === c.value[key]) return;
+  if (key === 'stencilThickness') manualThickness.value = value;
+  c.value[key] = value;
 }
 
 const thicknessHint = computed(() => {
@@ -44,19 +57,11 @@ const totalThickness = computed(() =>
   (c.value.pcbThickness + c.value.stencilThickness).toFixed(2)
 );
 
+const percentText = (value: number) => `${value}%`;
+
 const topPadCount = computed(() => c.value.stencilPadsTop.length);
 const bottomPadCount = computed(() => c.value.stencilPadsBottom.length);
 const isDoubleSided = computed(() => topPadCount.value > 0 && bottomPadCount.value > 0);
-
-// 取放缺口:四向点亮开关(与夹具共用配置字段;钢网侧为平底梯形形状)
-type NotchSide = 'up' | 'down' | 'left' | 'right';
-const NOTCH_SIDES: NotchSide[] = ['up', 'down', 'left', 'right'];
-function toggleNotchSide(s: NotchSide) {
-  const cur = c.value.pryNotchSides;
-  c.value.pryNotchSides = cur.includes(s)
-    ? cur.filter((x) => x !== s)
-    : [...cur, s];
-}
 
 // 高级参数默认折叠:常规流程(Gerber → 导出)用默认值即可
 const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
@@ -72,9 +77,11 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 
     <!-- PCB 板厚(基础参数,影响卡槽深度与总厚度) -->
     <div class="field">
-      <label class="field-label">{{ t('config.pcbThickness') }}</label>
-      <el-input-number
-        v-model="c.pcbThickness"
+      <label for="stencil-pcb-thickness" class="field-label">{{ t('config.pcbThickness') }}</label>
+      <el-input-number id="stencil-pcb-thickness"
+        :model-value="c.pcbThickness"
+        :value-on-clear="c.pcbThickness"
+        @update:model-value="updateNumber('pcbThickness', $event)"
         :min="0.4"
         :max="3.2"
         :step="0.2"
@@ -116,165 +123,97 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 
     <!-- 钢网层厚度 -->
     <div class="field">
-      <label class="field-label">{{ t('stencil.thickness') }}</label>
-      <div class="preset-row">
+      <label for="stencil-thickness" class="field-label">{{ t('stencil.thickness') }}</label>
+      <div class="preset-row" role="group" :aria-label="t('stencil.thickness')">
         <button
           v-for="p in THICKNESS_PRESETS"
           :key="p.label"
           class="preset-btn"
-          :class="{ active: !customThicknessActive && Math.abs(c.stencilThickness - p.value) < 0.001 }"
-          :aria-pressed="!customThicknessActive && Math.abs(c.stencilThickness - p.value) < 0.001"
+          :class="{ active: selectedThickness === p.value }"
+          :aria-pressed="selectedThickness === p.value"
           @click="selectThickness(p.value)"
         >
           <span class="preset-name">{{ t(p.label) }}</span>
           <span class="preset-val"><span>{{ p.value }}</span><small>mm</small></span>
         </button>
-        <button
-          class="preset-btn"
-          :class="{ active: customThicknessActive }"
-          :aria-pressed="customThicknessActive"
-          @click="editCustomThickness"
-        >
-          <span class="preset-name">{{ t('stencil.presetCustom') }}</span>
-        </button>
       </div>
       <el-input-number
-        ref="thicknessInput"
-        v-model="c.stencilThickness"
+        id="stencil-thickness"
+        :model-value="c.stencilThickness"
+        :value-on-clear="c.stencilThickness"
         :min="0.05"
         :max="1.0"
         :step="0.05"
         :precision="2"
         size="small"
         style="width: 100%; margin-top: 8px"
-        @focus="customThicknessFocused = true"
-        @blur="customThicknessFocused = false"
+        @update:model-value="updateNumber('stencilThickness', $event)"
       />
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ thicknessHint }}</span>
-      </div>
-      <div class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('stencil.totalThickness') }} = {{ c.pcbThickness }} + {{ c.stencilThickness }} = <strong class="thickness-total"><span>{{ totalThickness }}</span><small>mm</small></strong></span>
+      <div class="thickness-summary">
+        <div class="thickness-readout">
+          <span class="thickness-metric">
+            <span>{{ t('stencil.totalThickness') }}</span>
+            <strong class="summary-number">{{ totalThickness }} <small>mm</small></strong>
+          </span>
+          <span class="thickness-breakdown">({{ c.pcbThickness }} + {{ c.stencilThickness }})</span>
+        </div>
+        <p class="summary-note">{{ thicknessHint }}</p>
       </div>
     </div>
 
     <!-- 焊盘缩小 -->
     <div class="field">
-      <label class="field-label">{{ t('stencil.padShrink') }}</label>
-      <div class="slider-row">
-        <el-slider
-          v-model="c.padShrink"
-          :min="0"
-          :max="50"
-          :step="1"
-          show-input
-          :format-tooltip="(v: number) => v + '%'"
-        />
-      </div>
-    </div>
-
-    <!-- 钢网信息卡片(合并提示) -->
-    <div class="field">
-      <div class="info-card">
-        <div class="info-row">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('stencil.padShrinkHint') }}</span>
-        </div>
-        <div class="info-row">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('stencil.padCountTop', { n: topPadCount }) }}</span>
-        </div>
-        <div v-if="bottomPadCount > 0" class="info-row">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon ok">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('stencil.padCountBottom', { n: bottomPadCount }) }}</span>
-        </div>
-        <div v-if="isDoubleSided" class="info-row">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M8 5v6M5 8h6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+      <InlineHelp id="stencil-pad-shrink-help" topic="padShrink" :label="t('stencil.padShrink')">
+        <label for="stencil-pad-shrink" class="field-label" @click.prevent="focusParameterControl">{{ t('stencil.padShrink') }}</label>
+        <template #control>
+          <div class="pad-shrink-controls">
+            <el-slider id="stencil-pad-shrink" :aria-label="t('stencil.padShrink')"
+              v-model="c.padShrink"
+              :min="0"
+              :max="50"
+              :step="1"
+              :format-tooltip="percentText"
+              :format-value-text="percentText"
+            />
+            <el-input-number class="pad-shrink-input" :aria-label="`${t('stencil.padShrink')} (%)`"
+              :model-value="c.padShrink" :value-on-clear="c.padShrink"
+              :min="0" :max="50" :step="1" :precision="0" size="small"
+              @update:model-value="updateNumber('padShrink', $event)">
+              <template #suffix><span class="pad-shrink-unit" aria-hidden="true">%</span></template>
+            </el-input-number>
+          </div>
+        </template>
+      </InlineHelp>
+      <div v-if="topPadCount || bottomPadCount" class="pad-summary">
+        <dl class="pad-counts">
+          <div v-if="topPadCount" class="pad-count">
+            <dt>{{ t('stencil.padCountTop') }}</dt>
+            <dd class="summary-number">{{ topPadCount }}</dd>
+          </div>
+          <div v-if="bottomPadCount" class="pad-count">
+            <dt>{{ t('stencil.padCountBottom') }}</dt>
+            <dd class="summary-number">{{ bottomPadCount }}</dd>
+          </div>
+        </dl>
+        <p v-if="isDoubleSided" class="summary-note flip-note">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 5h10.75m-2.5-2.5L13.25 5l-2.5 2.5M13.5 11H2.75m2.5-2.5L2.75 11l2.5 2.5" />
           </svg>
           <span>{{ t('stencil.doubleSidedHint') }}</span>
-        </div>
+        </p>
       </div>
     </div>
 
     <!-- 取放口(平底梯形:两侧斜坡过渡,底部贴齐 PCB 边缘) -->
-    <div class="section-label">{{ t('config.pryNotch') }}</div>
-    <div class="field">
-      <div class="notch-picker">
-        <button
-          v-for="s in NOTCH_SIDES"
-          :key="s"
-          class="notch-btn"
-          :class="[`notch-${s}`, { active: c.pryNotchSides.includes(s) }]"
-          v-app-tooltip="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
-          :aria-label="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
-          :aria-pressed="c.pryNotchSides.includes(s)"
-          @click="toggleNotchSide(s)"
-        >
-          <svg viewBox="0 0 16 16" width="12" height="12">
-            <path
-              v-if="s === 'up'" d="M8 3l4 5H4z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-            <path
-              v-else-if="s === 'down'" d="M8 13l4-5H4z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-            <path
-              v-else-if="s === 'left'" d="M3 8l5-4v8z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-            <path
-              v-else d="M13 8l-5-4v8z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-          </svg>
-        </button>
-        <div class="notch-center">
-          <svg viewBox="0 0 16 16" width="16" height="16">
-            <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          </svg>
-        </div>
-      </div>
-    </div>
-    <div class="field">
-      <label class="field-label">
-        {{ t('config.pryNotchSize') }}
-        <span class="field-value">{{ Math.round(c.pryNotchScale * 100) }}%</span>
-      </label>
-      <el-slider
-        v-model="c.pryNotchScale"
-        :min="0.5"
-        :max="1.5"
-        :step="0.05"
-        :disabled="c.pryNotchSides.length === 0"
-      />
-    </div>
+    <InlineHelp id="stencil-pry-notch-help" topic="pryNotch" class="notch-help" :label="t('config.pryNotch')">
+      <span class="notch-heading">{{ t('config.pryNotch') }}</span>
+      <template #control>
+        <PryNotchPicker variant="stencil" />
+      </template>
+    </InlineHelp>
 
     <!-- 高级参数(默认折叠) -->
-    <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+    <button class="advanced-toggle" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">
       <span>{{ t('stencil.advanced') }}</span>
       <svg class="chevron" :class="{ 'is-open': showAdvanced }" viewBox="0 0 16 16" width="14" height="14">
         <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -284,9 +223,10 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
     <MotionCollapse :open="showAdvanced"><div class="advanced-body">
       <div class="field-row">
         <div class="field">
-          <label class="field-label">{{ t('stencil.frameWidth') }}</label>
-          <el-input-number
-            v-model="c.stencilFrameWidth"
+          <label for="stencil-frame-width" class="field-label">{{ t('stencil.frameWidth') }}</label>
+          <el-input-number id="stencil-frame-width"
+            :model-value="c.stencilFrameWidth" :value-on-clear="c.stencilFrameWidth"
+            @update:model-value="updateNumber('stencilFrameWidth', $event)"
             :min="3"
             :max="30"
             :step="0.5"
@@ -296,9 +236,10 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
           />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('stencil.cornerRadius') }}</label>
-          <el-input-number
-            v-model="c.stencilCornerRadius"
+          <label for="stencil-corner-radius" class="field-label">{{ t('stencil.cornerRadius') }}</label>
+          <el-input-number id="stencil-corner-radius"
+            :model-value="c.stencilCornerRadius" :value-on-clear="c.stencilCornerRadius"
+            @update:model-value="updateNumber('stencilCornerRadius', $event)"
             :min="0"
             :max="20"
             :step="0.5"
@@ -307,18 +248,23 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
             style="width: 100%"
           />
         </div>
-        <div class="field">
-          <InlineHelp id="stencil-pocketClearanceHint" :label="t('stencil.pocketClearance')" :text="t('stencil.pocketClearanceHint')"><span class="field-label">{{ t('stencil.pocketClearance') }}</span></InlineHelp>
-          <el-input-number
-            v-model="c.pocketClearance"
-            :min="0"
-            :max="2"
-            :step="0.05"
-            :precision="2"
-            size="small"
-            style="width: 100%"
-          />
-        </div>
+      </div>
+      <div class="field">
+        <InlineHelp id="stencil-pocketClearanceHint" topic="pocket" :label="t('stencil.pocketClearance')" :text="t('stencil.pocketClearanceHint')">
+          <label for="stencil-pocket-clearance" class="field-label">{{ t('stencil.pocketClearance') }}</label>
+          <template #control>
+            <el-input-number id="stencil-pocket-clearance"
+              :model-value="c.pocketClearance" :value-on-clear="c.pocketClearance"
+              @update:model-value="updateNumber('pocketClearance', $event)"
+              :min="0"
+              :max="2"
+              :step="0.05"
+              :precision="2"
+              size="small"
+              style="width: 100%"
+            />
+          </template>
+        </InlineHelp>
       </div>
 
       <!-- 焊盘后处理 -->
@@ -326,13 +272,14 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 
       <!-- 密脚错排 -->
       <div class="field">
-        <InlineHelp id="stencil-staggerHint" :label="t('stencil.stagger')" :text="t('stencil.staggerHint')"><el-checkbox v-model="c.stencilStagger">{{ t('stencil.stagger') }}</el-checkbox></InlineHelp>
+        <InlineHelp id="stencil-staggerHint" topic="stagger" :label="t('stencil.stagger')"><el-checkbox v-model="c.stencilStagger">{{ t('stencil.stagger') }}</el-checkbox></InlineHelp>
         <MotionCollapse :open="c.stencilStagger">
           <div class="field-row">
             <div class="field">
-              <label class="field-label">{{ t('stencil.staggerGap') }}</label>
-              <el-input-number
-                v-model="c.stencilStaggerGap"
+              <label for="stencil-stagger-gap" class="field-label">{{ t('stencil.staggerGap') }}</label>
+              <el-input-number id="stencil-stagger-gap"
+                :model-value="c.stencilStaggerGap" :value-on-clear="c.stencilStaggerGap"
+                @update:model-value="updateNumber('stencilStaggerGap', $event)"
                 :min="0.3"
                 :max="2"
                 :step="0.05"
@@ -342,9 +289,10 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
               />
             </div>
             <div class="field">
-              <label class="field-label">{{ t('stencil.staggerOffset') }}</label>
-              <el-input-number
-                v-model="c.stencilStaggerOffset"
+              <label for="stencil-stagger-offset" class="field-label">{{ t('stencil.staggerOffset') }}</label>
+              <el-input-number id="stencil-stagger-offset"
+                :model-value="c.stencilStaggerOffset" :value-on-clear="c.stencilStaggerOffset"
+                @update:model-value="updateNumber('stencilStaggerOffset', $event)"
                 :min="0.05"
                 :max="0.5"
                 :step="0.05"
@@ -359,53 +307,61 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 
       <!-- 测试点过滤 -->
       <div class="field">
-        <el-checkbox v-model="c.stencilFilterTestPoints">{{ t('stencil.filterTestPoints') }}</el-checkbox>
-        <MotionCollapse :open="c.stencilFilterTestPoints">
-          <div class="field-row">
-            <div class="field">
-              <label class="field-label">{{ t('stencil.testPointMaxDia') }}</label>
-              <el-input-number
-                v-model="c.stencilTestPointMaxDia"
-                :min="0.5"
-                :max="3"
-                :step="0.1"
-                :precision="1"
-                size="small"
-                style="width: 100%"
-              />
-            </div>
-            <div class="field">
-              <label class="field-label">{{ t('stencil.testPointIsolation') }}</label>
-              <el-input-number
-                v-model="c.stencilTestPointIsolation"
-                :min="0.5"
-                :max="5"
-                :step="0.1"
-                :precision="1"
-                size="small"
-                style="width: 100%"
-              />
-            </div>
-          </div>
-        </MotionCollapse>
-        <div class="auto-hint">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('stencil.filterTestPointsHint') }}</span>
-        </div>
+        <InlineHelp id="stencil-test-point-filter-help" topic="testPointFilter"
+          :label="t('stencil.filterTestPoints')" :text="t('stencil.filterTestPointsHint')">
+          <el-checkbox v-model="c.stencilFilterTestPoints">{{ t('stencil.filterTestPoints') }}</el-checkbox>
+          <template #control>
+            <MotionCollapse :open="c.stencilFilterTestPoints">
+              <div class="field-row">
+                <div class="field">
+                  <label for="stencil-test-point-max-dia" class="field-label">{{ t('stencil.testPointMaxDia') }}</label>
+                  <el-input-number id="stencil-test-point-max-dia"
+                    :model-value="c.stencilTestPointMaxDia" :value-on-clear="c.stencilTestPointMaxDia"
+                    @update:model-value="updateNumber('stencilTestPointMaxDia', $event)"
+                    :min="0.5"
+                    :max="3"
+                    :step="0.1"
+                    :precision="1"
+                    size="small"
+                    style="width: 100%"
+                  />
+                </div>
+                <div class="field">
+                  <label for="stencil-test-point-isolation" class="field-label">{{ t('stencil.testPointIsolation') }}</label>
+                  <el-input-number id="stencil-test-point-isolation"
+                    :model-value="c.stencilTestPointIsolation" :value-on-clear="c.stencilTestPointIsolation"
+                    @update:model-value="updateNumber('stencilTestPointIsolation', $event)"
+                    :min="0.5"
+                    :max="5"
+                    :step="0.1"
+                    :precision="1"
+                    size="small"
+                    style="width: 100%"
+                  />
+                </div>
+              </div>
+              <div class="auto-hint">
+                <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
+                  <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+                  <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span>{{ t('stencil.filterTestPointsReview') }}</span>
+              </div>
+            </MotionCollapse>
+          </template>
+        </InlineHelp>
       </div>
 
       <!-- 大孔开网格 -->
       <div class="field">
-        <InlineHelp id="stencil-gridHint" :label="t('stencil.grid')" :text="t('stencil.gridHint')"><el-checkbox v-model="c.stencilGrid">{{ t('stencil.grid') }}</el-checkbox></InlineHelp>
+        <InlineHelp id="stencil-gridHint" topic="grid" :label="t('stencil.grid')"><el-checkbox v-model="c.stencilGrid">{{ t('stencil.grid') }}</el-checkbox></InlineHelp>
         <MotionCollapse :open="c.stencilGrid">
           <div class="field-row">
             <div class="field">
-              <label class="field-label">{{ t('stencil.gridSize') }}</label>
-              <el-input-number
-                v-model="c.stencilGridSize"
+              <label for="stencil-grid-size" class="field-label">{{ t('stencil.gridSize') }}</label>
+              <el-input-number id="stencil-grid-size"
+                :model-value="c.stencilGridSize" :value-on-clear="c.stencilGridSize"
+                @update:model-value="updateNumber('stencilGridSize', $event)"
                 :min="1"
                 :max="10"
                 :step="0.5"
@@ -415,9 +371,10 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
               />
             </div>
             <div class="field">
-              <label class="field-label">{{ t('stencil.gridBar') }}</label>
-              <el-input-number
-                v-model="c.stencilGridBar"
+              <label for="stencil-grid-bar" class="field-label">{{ t('stencil.gridBar') }}</label>
+              <el-input-number id="stencil-grid-bar"
+                :model-value="c.stencilGridBar" :value-on-clear="c.stencilGridBar"
+                @update:model-value="updateNumber('stencilGridBar', $event)"
                 :min="0.3"
                 :max="2"
                 :step="0.1"
@@ -436,15 +393,18 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 <style scoped>
 .stencil-form { padding: 16px; }
 
-.section-label {
+.section-label, .notch-heading {
   font-size: var(--heading-2xs-font-size);
   line-height: var(--body-md-line-height);
   font-weight: var(--font-weight-strong);
   color: var(--text-secondary);
   letter-spacing: 0;
-  margin: 20px 0 12px 0;
 }
+.section-label { margin: 20px 0 12px; }
 .section-label:first-child { margin-top: 0; }
+.notch-help { margin-top: 20px; }
+.notch-help :deep(.help-heading) { margin-bottom: 6px; }
+.notch-help :deep(.help-heading)::after { content: ''; flex: 1; height: 1px; background: var(--surface-line); }
 
 .field-row { display: flex; gap: 12px; }
 .field-row > .field { flex: 1; }
@@ -473,45 +433,59 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
   line-height: 18px;
   overflow-wrap: anywhere;
 }
-.auto-hint > span, .info-row > span { min-width: 0; }
-/* 合并信息卡片:多条提示共享一个背景框,行间细线分隔 */
-.info-card {
-  display: flex;
-  flex-direction: column;
-  margin: 8px 0 0 0;
-  padding: 0 12px;
-  background: var(--bg-brand-popup);
-  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
-}
-.info-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-}
-.info-row + .info-row {
-  border-top: 1px solid var(--el-border-color-light, rgba(115, 115, 115, 0.12));
-}
-.auto-hint .hint-icon,
-.info-row .hint-icon {
+.auto-hint > span { min-width: 0; }
+.auto-hint .hint-icon {
   color: var(--interaction-ink);
   flex-shrink: 0;
   margin-top: 2px;
 }
-.auto-hint .hint-icon.ok,
-.info-row .hint-icon.ok { color: var(--brand-500); }
-.auto-hint strong {
-  color: var(--text-brand);
-  font-weight: var(--font-weight-strong);
+
+.thickness-summary,
+.pad-summary {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: var(--body-md-font-size);
+  line-height: var(--body-md-line-height);
+  overflow-wrap: anywhere;
+}
+.thickness-readout,
+.thickness-metric,
+.pad-counts,
+.pad-count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+.thickness-readout {
+  justify-content: space-between;
+  column-gap: 12px;
+}
+.summary-number,
+.thickness-breakdown {
   font-family: var(--font-family-metric);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.thickness-total { display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap; }
-.thickness-total small { font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); color: var(--text-secondary); }
+.summary-number {
+  color: var(--text-default);
+  font-weight: var(--font-weight-strong);
+}
+.summary-number small,
+.thickness-breakdown,
+.summary-note {
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-default);
+  line-height: var(--body-sm-line-height);
+}
+.summary-number small { color: var(--text-secondary); }
+.thickness-breakdown { color: var(--text-tertiary); }
+.summary-note { margin: 3px 0 0; }
+.pad-summary { padding-top: 7px; border-top: 1px solid var(--surface-line); }
+.pad-counts { margin: 0; column-gap: 18px; }
+.pad-count dd { margin: 0; }
+.flip-note { display: flex; align-items: flex-start; gap: 6px; }
+.flip-note svg { flex: none; margin-top: 1px; color: var(--text-brand); }
 
 /* 钢网层厚度预设按钮 */
 .preset-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -539,7 +513,17 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 .preset-val { display: inline-flex; align-items: baseline; gap: 3px; font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .preset-val small { font-size: inherit; color: var(--text-tertiary); }
 
-.slider-row { padding: 0 4px; }
+.pad-shrink-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding-inline-start: 10px;
+}
+.pad-shrink-input { width: 104px; }
+.pad-shrink-input :deep(.el-input__inner) { text-align: end; }
+.pad-shrink-input :deep(.el-input__suffix-inner > :first-child) { margin-inline-start: 2px; }
+.pad-shrink-unit { color: var(--text-secondary); font-size: var(--body-sm-font-size); }
 
 /* 外框形状切换(跟随板形 / 矩形) */
 .shape-row { --selection-background: var(--control-selection-surface); --selection-border: var(--bg-brand); --selection-shadow: none; --selection-radius: var(--radius-control); position: relative; isolation: isolate; display: flex; gap: 6px; }
@@ -567,56 +551,6 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
   background: transparent;
   border-color: transparent;
   color: var(--text-brand);
-}
-
-/* 取放口方向选择器(与 ConfigForm 同款视觉) */
-.notch-picker {
-  position: relative;
-  width: 116px;
-  height: 116px;
-  margin: 4px auto;
-}
-.notch-btn {
-  position: absolute;
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
-  background: var(--bg-secondary, transparent);
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: var(--control-transition);
-}
-.notch-btn:hover {
-  border-color: var(--border-neutral-l3);
-  color: var(--text-secondary);
-}
-.notch-btn.active {
-  border-color: var(--interaction-border);
-  background: var(--control-selection-surface);
-  color: var(--text-brand);
-}
-.notch-btn.notch-up { top: 0; left: 50%; transform: translateX(-50%); }
-.notch-btn.notch-down { bottom: 0; left: 50%; transform: translateX(-50%); }
-.notch-btn.notch-left { left: 0; top: 50%; transform: translateY(-50%); }
-.notch-btn.notch-right { right: 0; top: 50%; transform: translateY(-50%); }
-.notch-center {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: var(--text-tertiary);
-  opacity: 0.6;
-}
-
-.field-value {
-  float: right;
-  color: var(--text-tertiary);
-  font-weight: var(--font-weight-default);
-  font-variant-numeric: tabular-nums;
 }
 
 /* 高级参数折叠(与 ConfigForm 同款) */

@@ -43,6 +43,54 @@ describe('stitching Gerber outline strokes', () => {
     expect(o.boards?.map(b => [b.bbox.minX, b.bbox.maxX, b.holes.length])).toEqual([[0, 10, 1], [10.012, 18, 0]]);
   });
 
+  it.each([0.02, 0.06])('leaves a %s mm gap open when two continuations are geometrically plausible', (gap) => {
+    const edge = line([0, 0], [10, 0]);
+    const perimeter = line([10 + gap, 0], [12, 0], [12, 8], [0, 8], [0, 0]);
+    const branch = line([10.1, 0.04], [10.1, 1]);
+    expect(extractOutline(header + edge + perimeter).points).not.toHaveLength(0);
+    expect(extractOutline(header + edge + perimeter + branch).points).toHaveLength(0);
+    expect(extractOutline(header + branch + perimeter + edge).points).toHaveLength(0);
+  });
+
+  it('rejects a uniquely joinable outline with a nonzero area and crossing edges', () => {
+    const crossing = line([0, 0], [12, 10], [0, 10], [8, 0], [0.08, 0]);
+    expect(extractOutline(header + crossing).points).toHaveLength(0);
+  });
+
+  it('keeps an exact slot when a repairable cutout would cross it', () => {
+    const outer = [[0, 0], [20, 0], [20, 20], [0, 20], [0, 0]] satisfies Point[];
+    const slot = [[8, 8], [12, 8], [12, 12], [8, 12], [8, 8]] satisfies Point[];
+    const crossing = line([10, 6], [14, 6], [14, 10], [10, 10], [10, 6.08]);
+    expect(extractOutline(header + line(...outer) + crossing).holes).toHaveLength(1);
+    const result = extractOutline(header + line(...outer) + line(...slot) + crossing);
+    expect(result.points).toEqual(outer);
+    expect(result.holes).toEqual([slot]);
+    expect(result.isPanel).toBe(false);
+  });
+
+  it('ignores repeated coordinates at an endpoint that must move', () => {
+    const edge = line([0, 0], [10, 0], [10, 8], [0, 8], [0, 8]);
+    const side = line([0, 8.1], [0, 8.1], [0, 0]);
+    expect(extractOutline(header + edge + side).points).toEqual([[0, 0], [10, 0], [10, 8], [0, 8], [0, 0]]);
+  });
+
+  it('rejects a new crossing with an open stroke and keeps existing intersections', () => {
+    const edge = line([0, 0], [10, 0]);
+    const rest = line([10, 0.2], [10, 8], [0, 8], [0, 0]);
+    const crossingAt = (y: number) => line([9.5, y], [12, y]);
+    const rectangle = [[0, 0], [10, 0], [10, 8], [0, 8], [0, 0]] satisfies Point[];
+    expect(extractOutline(header + edge + rest + crossingAt(0.1)).points).toHaveLength(0);
+    expect(extractOutline(header + edge + rest + crossingAt(0.3)).points).toEqual(rectangle);
+    expect(extractOutline(header + line(...rectangle) + crossingAt(0.1)).points).toEqual(rectangle);
+  });
+
+  it('repairs each step-repeat copy without competing with the adjacent copy', () => {
+    const profile = line([0, 0], [10, 0]) + line([10, 0.08], [10, 8], [0, 8], [0, 0.08]);
+    const result = extractOutline(header + '%SRX2Y1I10.1J0*%\n' + profile + '%SR*%\n');
+    expect(result.isPanel).toBe(true);
+    expect(result.boards?.map(board => [board.bbox.minX, board.bbox.maxX])).toEqual([[0, 10], [10.1, 20.1]]);
+  });
+
   it('does not turn an open path into a board or an internal cutout', () => {
     const open = line([1, 1], [9, 1], [9, 9], [1, 9]);
     expect(extractOutline(header + open).points).toHaveLength(0);

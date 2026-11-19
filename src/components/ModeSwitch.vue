@@ -1,82 +1,18 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ModeIcon from './ModeIcon.vue';
+import LiquidSegmentTrack from './LiquidSegmentTrack.vue';
 
 type Mode = 'jig' | 'stencil';
-type Bounds = { left: number; top: number; width: number; height: number };
 const props = defineProps<{ mode: Mode }>();
 const emit = defineEmits<{ change: [mode: Mode] }>();
 const { t } = useI18n();
-const root = ref<HTMLElement | null>(null);
-const thumb = ref<HTMLElement | null>(null);
-const visible = ref(false);
+const iconGroup = ref<HTMLElement[]>([]);
 const icons = new Map<HTMLElement, Animation>();
-let thumbAnimation: Animation | null = null;
-let bounds: Bounds | undefined;
-let resize: ResizeObserver | undefined;
-let layoutFrame = 0;
-let disposed = false;
-
-function selectedBounds(): Bounds | undefined {
-  const selected = root.value?.querySelector<HTMLButtonElement>('.mode-btn.active');
-  if (!selected?.offsetWidth) return;
-  return { left: selected.offsetLeft, top: selected.offsetTop,
-    width: selected.offsetWidth, height: selected.offsetHeight };
-}
-
-function positionThumb(next: Bounds, animate = false, interrupted = false) {
-  const element = thumb.value;
-  if (!element) return;
-  const current = getComputedStyle(element);
-  const startLeft = parseFloat(current.left) || 0;
-  const startWidth = parseFloat(current.width) || next.width;
-  thumbAnimation?.cancel();
-  thumbAnimation = null;
-  Object.assign(element.style, { left: `${next.left}px`, top: `${next.top}px`,
-    width: `${next.width}px`, height: `${next.height}px` });
-  bounds = next;
-  visible.value = true;
-  if (!animate) return;
-
-  const finish = { left: `${next.left}px`, width: `${next.width}px` };
-  const frames: Keyframe[] = [];
-  const duration = interrupted ? 200 : 380;
-  if (interrupted) {
-    frames.push({ left: `${startLeft}px`, width: `${startWidth}px` }, finish);
-  } else {
-    // Design reference: video-shotcraft's segmented-thumb-hero. The leading
-    // edge travels first, then the trailing edge catches up before settling.
-    // Animate bounds so the pill's semicircular ends remain circular.
-    const buttons = [...(root.value?.querySelectorAll<HTMLElement>('.mode-btn') ?? [])];
-    const minLeft = Math.min(...buttons.map(button => button.offsetLeft));
-    const maxRight = Math.max(...buttons.map(button => button.offsetLeft + button.offsetWidth));
-    const distance = next.left - startLeft;
-    for (let index = 0; index <= 16; index++) {
-      const time = index / 16;
-      const travel = 1 - (1 - time) ** 3;
-      const width = startWidth + (next.width - startWidth) * travel;
-      const stretch = Math.min(Math.abs(distance), width) * .1 * Math.sin(Math.PI * time);
-      const center = startLeft + startWidth / 2
-        + (next.left + next.width / 2 - startLeft - startWidth / 2) * travel;
-      const left = Math.max(minLeft, center - (width + stretch) / 2);
-      const right = Math.min(maxRight, center + (width + stretch) / 2);
-      frames.push({ left: `${left}px`, width: `${right - left}px`, offset: time * 260 / duration });
-    }
-    frames.push({ left: `${next.left + Math.sign(distance) * Math.min(1, Math.abs(distance) * .01)}px`,
-      width: finish.width, offset: .81 }, { ...finish, offset: 1 });
-  }
-  const animation = element.animate(frames, { duration, fill: 'both',
-    easing: interrupted ? 'cubic-bezier(.22, 1, .36, 1)' : 'linear' });
-  thumbAnimation = animation;
-  animation.onfinish = () => {
-    if (thumbAnimation === animation) thumbAnimation = null;
-    animation.cancel();
-  };
-}
 
 function animateIcons(previous: Mode, interrupted: boolean) {
-  root.value?.querySelectorAll<HTMLElement>('.mode-symbol').forEach(element => {
+  iconGroup.value.forEach(element => {
     const running = icons.get(element);
     const style = running ? getComputedStyle(element) : null;
     const wasActive = element.dataset.mode === previous;
@@ -108,66 +44,37 @@ function animateIcons(previous: Mode, interrupted: boolean) {
 }
 
 watch(() => props.mode, (_, previous) => {
-  const next = selectedBounds();
-  if (!next) return;
-  const interrupted = !!thumbAnimation || icons.size > 0;
-  positionThumb(next, !!bounds, interrupted);
-  animateIcons(previous, interrupted);
+  animateIcons(previous, icons.size > 0);
 }, { flush: 'post' });
 
-function scheduleLayout() {
-  if (disposed || layoutFrame) return;
-  layoutFrame = requestAnimationFrame(() => {
-    layoutFrame = 0;
-    const next = selectedBounds();
-    if (next && (!bounds || Object.keys(next).some(key => next[key as keyof Bounds] !== bounds![key as keyof Bounds]))) {
-      positionThumb(next, !!bounds, true);
-    }
-  });
-}
-
-onMounted(() => {
-  const next = selectedBounds();
-  if (next) positionThumb(next);
-  resize = new ResizeObserver(scheduleLayout);
-  if (root.value) {
-    resize.observe(root.value);
-    root.value.querySelectorAll('.mode-btn').forEach(button => resize!.observe(button));
-  }
-  void document.fonts?.ready.then(scheduleLayout);
-});
-
 onBeforeUnmount(() => {
-  disposed = true;
-  resize?.disconnect();
-  cancelAnimationFrame(layoutFrame);
-  thumbAnimation?.cancel();
   for (const animation of icons.values()) animation.cancel();
   icons.clear();
 });
 </script>
 
 <template>
-  <div ref="root" class="mode-switch" role="group" :aria-label="`${t('mode.jig')} / ${t('mode.stencil')}`">
-    <span ref="thumb" class="mode-thumb mode-indicator" :class="{ 'is-visible': visible }" aria-hidden="true" />
+  <LiquidSegmentTrack class="mode-switch" :aria-label="`${t('mode.jig')} / ${t('mode.stencil')}`">
     <button v-for="kind in (['jig', 'stencil'] as const)" :key="kind" type="button"
       class="mode-btn" :class="{ active: mode === kind }" :aria-pressed="mode === kind"
       @click="mode !== kind && emit('change', kind)">
       <!-- Reserve both modes' full content width so icon reflow never resizes the rail. -->
       <span class="mode-sizer" aria-hidden="true"><span />{{ t(`mode.${kind}`) }}</span>
       <span class="mode-content">
-        <span class="mode-symbol" :data-mode="kind" aria-hidden="true">
+        <span ref="iconGroup" class="mode-symbol" :data-mode="kind" aria-hidden="true">
           <ModeIcon :kind="kind" :active="mode === kind" :delay="260" />
         </span>
         <span class="mode-label">{{ t(`mode.${kind}`) }}</span>
       </span>
     </button>
-  </div>
+  </LiquidSegmentTrack>
 </template>
 
 <style scoped>
 .mode-switch {
   --corner-shape: round;
+  --selection-background: var(--surface-selected);
+  --selection-shadow: none;
   isolation: isolate;
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -178,20 +85,6 @@ onBeforeUnmount(() => {
   background: var(--surface-well);
   box-shadow: none;
 }
-.mode-thumb {
-  position: absolute;
-  left: 0;
-  top: 0;
-  z-index: 0;
-  border: 1px solid var(--surface-line);
-  border-radius: var(--radius-full);
-  corner-shape: round;
-  background: var(--surface-selected);
-  box-shadow: none;
-  opacity: 0;
-  pointer-events: none;
-}
-.mode-thumb.is-visible { opacity: 1; }
 .mode-btn {
   --button-press-scale: .985;
   position: relative;

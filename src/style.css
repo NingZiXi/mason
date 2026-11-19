@@ -98,9 +98,8 @@ input[type='radio']:focus-visible {
   outline-offset: -2px;
 }
 
-/* 无边框窗口描边:Win10 下窗口不再融入桌面;
-   Win11 系统圆角会裁掉四角,不冲突 */
-#app::after {
+/* Windows draws/clips the actual frame. An inset WebView outline would make a second edge. */
+.app-shell:not(.native-windows-frame)::after {
   content: '';
   position: fixed;
   inset: 0;
@@ -152,15 +151,20 @@ input[type='radio']:focus-visible {
   box-shadow: inset 0 0 0 1px var(--surface-line);
   transition: box-shadow var(--motion-fast) var(--ease-out), background-color var(--motion-fast) var(--ease-out);
 }
-.app-sidebar .el-input__wrapper.is-focus, .app-sidebar .el-select__wrapper.is-focused {
-  background: var(--surface-raised);
-  box-shadow: inset 0 0 0 1px var(--interaction-border), 0 0 0 3px var(--control-selection-surface);
-}
 .app-sidebar .el-input__inner { font-variant-numeric: tabular-nums; }
 .app-sidebar :is(.config-form, .stencil-form) .field > .field-label { transition: color var(--motion-fast) var(--ease-out); }
 .app-sidebar :is(.config-form, .stencil-form) .field:focus-within > .field-label { color: var(--interaction-ink); }
 .app-sidebar .el-input__wrapper:hover, .app-sidebar .el-select__wrapper:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-brand) 32%, var(--surface-line)); }
-.app-sidebar .el-input__wrapper.is-focus:hover, .app-sidebar .el-select__wrapper.is-focused:hover { box-shadow: inset 0 0 0 1px var(--interaction-border), 0 0 0 3px var(--control-selection-surface); }
+/* The wrapper owns the rounded field boundary; keep a single stroke on focus, including hover. */
+.app-sidebar :is(.el-input__wrapper.is-focus, .el-select__wrapper.is-focused) {
+  background: var(--surface-raised);
+  box-shadow: none;
+  outline: 2px solid var(--interaction-border);
+  outline-offset: -2px;
+}
+.app-sidebar :is(.preset-btn, .shape-btn, .notch-btn, .advanced-toggle):focus-visible {
+  outline-offset: -1px;
+}
 .app-sidebar .section-label { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: var(--heading-2xs-font-size); line-height: var(--body-md-line-height); }
 .app-sidebar .section-label::after { content: ''; height: 1px; flex: 1; background: var(--surface-line); }
 .app-sidebar .section-help { margin-bottom: 12px; font-size: var(--heading-2xs-font-size); line-height: var(--body-md-line-height); font-weight: var(--font-weight-strong); color: var(--text-secondary); }
@@ -174,7 +178,12 @@ input[type='radio']:focus-visible {
 .app-sidebar .parameter-section > .section-label::after { display: none; }
 .app-sidebar .el-slider__button { box-shadow: 0 2px 5px rgba(28,46,36,.12); transition: transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out); }
 .app-sidebar .el-slider__button:hover, .app-sidebar .el-slider__button.dragging { box-shadow: 0 0 0 4px var(--control-selection-surface), 0 2px 5px rgba(28,46,36,.12); }
-.app-sidebar .el-slider:focus-within .el-slider__button { box-shadow: 0 0 0 4px var(--control-selection-surface), 0 2px 5px rgba(28,46,36,.12); }
+.app-sidebar .el-slider__button-wrapper:focus-visible .el-slider__button {
+  background: var(--interaction-border);
+  outline: 2px solid var(--interaction-border);
+  outline-offset: -1px;
+  box-shadow: none;
+}
 .app-sidebar .el-input-number__increase, .app-sidebar .el-input-number__decrease {
   background: transparent;
   color: var(--text-tertiary);
@@ -277,6 +286,15 @@ input[type='radio']:focus-visible {
 .preset-name-dialog .el-message-box__errormsg { padding-top: 6px; font-size: 11px; line-height: 17px; }
 .preset-name-dialog .el-message-box__errormsg:empty { display: none; }
 .preset-name-dialog .el-message-box__btns { padding-top: 22px; }
+
+.export-scope { display: grid; gap: 5px; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--surface-line); }
+.export-scope-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 12px; }
+.export-scope-heading strong { color: var(--text-default); font-weight: var(--font-weight-strong); }
+.export-scope-count { white-space: nowrap; }
+.export-scope-parts { display: flex; flex-wrap: wrap; gap: 3px 14px; margin: 0; padding: 0; list-style: none; color: var(--text-default); }
+.export-scope-parts li { display: inline-flex; align-items: center; gap: 5px; }
+.export-scope-parts li::before { content: ''; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--text-tertiary); }
+.export-name-note { margin: 0; }
 
 .preset-switch-dialog .preset-switch-note { color: var(--text-secondary); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
 .preset-switch-choices { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }

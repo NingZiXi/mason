@@ -2,17 +2,21 @@
 import { onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
+import { useHistoryFieldFeedback } from "../composables/useHistoryFieldFeedback";
 import { parameterHistoryShortcut } from "../lib/history-shortcuts";
 import { vAppTooltip } from '../directives/app-tooltip';
 
 const store = useConfigStore();
+useHistoryFieldFeedback(store);
 const { t } = useI18n();
 function onKeydown(event: KeyboardEvent) {
   const action = parameterHistoryShortcut(event);
   if (!action || (action === "undo" ? !store.canUndo : !store.canRedo)) return;
   // Modal dialogs and the onboarding tour own their keyboard interactions.
-  if (Array.from(document.querySelectorAll(".el-overlay-dialog, .el-message-box__wrapper, .el-tour__content"))
-    .some((element) => element.getClientRects().length > 0)) return;
+  if (Array.from(document.querySelectorAll(
+    'dialog[open], [aria-modal="true"], .el-overlay-dialog, .el-message-box__wrapper, .el-tour__content',
+  ))
+    .some((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible")) return;
   event.preventDefault();
   void store[action]();
 }

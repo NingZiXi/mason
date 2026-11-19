@@ -81,6 +81,18 @@ describe('celebration reveal geometry', () => {
     expect(contains(delivered, { x: 299, y: 149 })).toBe(true);
   });
 
+  it('reserves a button under an overlapping roller until its own swatch lands', () => {
+    const roller: RevealJob = { ...base, width: 100, start: 0, duration: 100 };
+    const button: RevealJob = { ...base, kind: 'accent', rect: { left: 170, top: 85, width: 60, height: 30 }, start: 300, duration: 200 };
+    const painted = (time: number, x: number, y: number) => contains(celebrationClipPath([roller, button], time, viewport), { x, y });
+    expect(painted(290, 169, 100)).toBe(true);
+    expect(painted(290, 200, 80)).toBe(true);
+    expect(painted(290, 200, 100)).toBe(false);
+    expect(painted(400, 200, 100)).toBe(true);
+    expect(painted(400, 175, 100)).toBe(false);
+    expect(painted(510, 175, 100)).toBe(true);
+  });
+
   it('waits for a closed frame before revealing its interior from the bottom', () => {
     const job: RevealJob = { ...base, kind: 'edge', width: 3,
       points: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }, { x: 0, y: 100 }, { x: 0, y: 0 }] };

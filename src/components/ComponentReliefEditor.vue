@@ -13,6 +13,7 @@ import { generateAutomaticRelief } from '../lib/component-relief-auto';
 import { reliefPadGuide } from '../lib/relief-pad-guide';
 import { parameterHistoryShortcut } from '../lib/history-shortcuts';
 import { vAppTooltip } from '../directives/app-tooltip';
+import InlineHelp from './InlineHelp.vue';
 import SlidingIndicator from './SlidingIndicator.vue';
 
 const props = defineProps<{
@@ -663,19 +664,26 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
           <p>{{ t('relief.newRegionDepthHint') }}</p>
         </div>
         <div class="automatic-tools">
-          <label class="allowance-control"><span>{{ t('relief.allowance') }}</span>
-            <span class="unit-input"><el-input-number v-model="allowance" :min="0.1" :max="5" :step="0.1" :precision="1" :controls="false" size="small" :aria-label="t('relief.allowance')" /><span>mm</span></span>
-          </label>
-        <button type="button" class="automatic-button" :disabled="limitReached || asyncBusy" :aria-busy="autoValidating"
-          :aria-label="t(autoValidating ? 'relief.autoValidating' : 'relief.autoGenerate')" @click="automaticRelief">
-          <svg v-if="autoValidating" class="validation-spinner" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="M9 2a7 7 0 1 1-7 7" /></svg>
-          <svg v-else viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="m3 13 8-8 3 3-8 8zM12 2v2M16 5h-2M4 3v3M2.5 4.5h3M9 11l-2-2" /></svg>
-          <span class="action-label" aria-hidden="true">
-            <span :class="{ 'is-visible': !autoValidating }">{{ t('relief.autoGenerate') }}</span>
-            <span :class="{ 'is-visible': autoValidating }">{{ t('relief.autoValidating') }}</span>
-          </span>
-        </button>
-        <p>{{ t('relief.autoGenerateHint') }}</p>
+          <InlineHelp id="component-relief-allowance-help" topic="reliefAllowance" class="allowance-help" :label="t('relief.allowance')">
+            <label for="component-relief-allowance" class="allowance-label">{{ t('relief.allowance') }}</label>
+            <template #trailing>
+              <span class="unit-input">
+                <el-input-number id="component-relief-allowance" v-model="allowance" :min="0.1" :max="5" :step="0.1" :precision="1"
+                  :controls="false" size="small" :aria-label="t('relief.allowance')" />
+                <span>mm</span>
+              </span>
+            </template>
+          </InlineHelp>
+          <button type="button" class="automatic-button" :disabled="limitReached || asyncBusy" :aria-busy="autoValidating"
+            :aria-label="t(autoValidating ? 'relief.autoValidating' : 'relief.autoGenerate')" aria-describedby="component-relief-auto-hint" @click="automaticRelief">
+            <svg v-if="autoValidating" class="validation-spinner" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="M9 2a7 7 0 1 1-7 7" /></svg>
+            <svg v-else viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="m3 13 8-8 3 3-8 8zM12 2v2M16 5h-2M4 3v3M2.5 4.5h3M9 11l-2-2" /></svg>
+            <span class="action-label" aria-hidden="true">
+              <span :class="{ 'is-visible': !autoValidating }">{{ t('relief.autoGenerate') }}</span>
+              <span :class="{ 'is-visible': autoValidating }">{{ t('relief.autoValidating') }}</span>
+            </span>
+          </button>
+          <p id="component-relief-auto-hint">{{ t('relief.autoGenerateHint') }}</p>
         </div>
       </div>
       <div class="editor-workspace">
@@ -783,7 +791,9 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
           <div v-if="selectionCount" class="selected-properties">
             <div class="selected-heading"><span>{{ t(selected ? 'relief.selectedRegion' : 'relief.batchProperties', { n: selectedIndex + 1 }) }}</span><small v-if="selected">{{ t(selected.shape === 'circle' ? 'relief.circleTool' : selected.shape === 'polygon' ? 'relief.polygonTool' : 'relief.rectangleTool') }}</small></div>
             <div class="region-cut-mode">
-              <span>{{ t('relief.cutMode') }}</span>
+              <InlineHelp id="relief-cut-help" topic="reliefCut" :label="t('relief.cutMode')">
+                <span class="cut-mode-label">{{ t('relief.cutMode') }}</span>
+              </InlineHelp>
               <div class="cut-mode-switch" role="group" :aria-label="t('relief.cutMode')">
                 <SlidingIndicator />
                 <button type="button" :class="{ active: selectedCutMode === false }" :aria-pressed="selectedCutMode === false" @click="updateSelectedCutMode(false)">{{ t('relief.blind') }}</button>
@@ -809,16 +819,17 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
           </div>
           <p v-else class="property-empty">{{ t('relief.noSelectionHint') }}</p>
           <div class="selection-actions">
-            <button type="button" class="automatic-button merge-button" :disabled="selectionCount < 2 || asyncBusy" :aria-busy="merging"
-              :aria-label="t(merging ? 'relief.merging' : 'relief.mergeSelection')" @click="mergeRelief">
-              <svg v-if="merging" class="validation-spinner" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="M9 2a7 7 0 1 1-7 7" /></svg>
-              <svg v-else viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="M6 2H3a1 1 0 0 0-1 1v3m10-4h3a1 1 0 0 1 1 1v3M2 12v3a1 1 0 0 0 1 1h3m10-4v3a1 1 0 0 1-1 1h-3M5 5h8v8H5z" /></svg>
-              <span class="action-label" aria-hidden="true">
-                <span :class="{ 'is-visible': !merging }">{{ t('relief.mergeSelection') }}</span>
-                <span :class="{ 'is-visible': merging }">{{ t('relief.merging') }}</span>
-              </span>
-            </button>
-            <p>{{ t('relief.mergeSelectionHint') }}</p>
+            <InlineHelp id="relief-merge-help" topic="reliefMerge" class="merge-help" :label="t('relief.mergeSelection')">
+              <button type="button" class="automatic-button merge-button" :disabled="selectionCount < 2 || asyncBusy" :aria-busy="merging"
+                :aria-label="t(merging ? 'relief.merging' : 'relief.mergeSelection')" @click="mergeRelief">
+                <svg v-if="merging" class="validation-spinner" viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="M9 2a7 7 0 1 1-7 7" /></svg>
+                <svg v-else viewBox="0 0 18 18" width="16" height="16" aria-hidden="true"><path d="M6 2H3a1 1 0 0 0-1 1v3m10-4h3a1 1 0 0 1 1 1v3M2 12v3a1 1 0 0 0 1 1h3m10-4v3a1 1 0 0 1-1 1h-3M5 5h8v8H5z" /></svg>
+                <span class="action-label" aria-hidden="true">
+                  <span :class="{ 'is-visible': !merging }">{{ t('relief.mergeSelection') }}</span>
+                  <span :class="{ 'is-visible': merging }">{{ t('relief.merging') }}</span>
+                </span>
+              </button>
+            </InlineHelp>
             <button type="button" class="delete-region" :disabled="!selectionCount" @click="removeSelected">
               <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 4h10M6 4V2h4v2M4 4l.7 9h6.6l.7-9M6.5 6v5M9.5 6v5" /></svg>{{ t('relief.deleteSelected') }}
             </button>
@@ -866,8 +877,11 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
 .unit-input :deep(.el-input__wrapper) { padding: 0 28px 0 10px; min-height: 32px; border-radius: var(--radius-inner); corner-shape: var(--corner-shape); background: var(--surface-raised); }
 .unit-input :deep(.el-input__inner) { text-align: left; font-family: var(--font-family-metric); font-size: 12px; font-variant-numeric: tabular-nums; }
 .new-region-settings > p, .automatic-tools > p { margin: 7px 0 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.65; }
-.automatic-tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0 12px; min-width: 0; }
-.automatic-tools > p { flex-basis: 100%; }
+.automatic-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; align-content: start; gap: 0 12px; min-width: 0; }
+.automatic-tools > p { grid-column: 1 / -1; }
+.allowance-label { color: var(--text-secondary); font-size: 11px; }
+.allowance-help :deep(.help-heading) { min-height: 34px; }
+.allowance-help :deep(.help-trailing) { margin-inline-start: 0; }
 .automatic-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--interaction-border) 24%, transparent); border-radius: var(--radius-control); corner-shape: var(--corner-shape); background: var(--control-selection-surface); color: var(--interaction-ink); font-size: 11px !important; }
 .automatic-button svg { fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
 .automatic-button:hover:enabled { border-color: color-mix(in srgb, var(--interaction-border) 55%, transparent); background: color-mix(in srgb, var(--bg-brand) 15%, var(--surface-raised)); }
@@ -878,7 +892,6 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
 .action-label > .is-visible { opacity: 1; visibility: visible; }
 .validation-spinner { animation: relief-validation-spin 1s linear infinite; }
 @keyframes relief-validation-spin { to { transform: rotate(360deg); } }
-.allowance-control { display: flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 11px; }
 .canvas-feedback { position: absolute; z-index: 2; left: 12px; right: 12px; bottom: 55px; width: fit-content; max-width: calc(100% - 24px); margin-inline: auto; padding: 9px 12px; border: 1px solid var(--surface-line); border-radius: var(--radius-control); corner-shape: var(--corner-shape); background: var(--surface-raised); box-shadow: var(--shadow-control); pointer-events: none; opacity: 0; visibility: hidden; translate: 0 5px; transition: opacity var(--motion-fast) var(--ease-out), translate var(--motion-panel) var(--ease-out), visibility var(--motion-fast); }
 .canvas-feedback.is-visible { opacity: 1; visibility: visible; translate: 0; }
 .generation-result { display: flex; align-items: flex-start; gap: 7px; color: var(--interaction-ink); font-size: 11px; line-height: 1.6; }
@@ -951,7 +964,7 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
 .selected-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 15px 0 12px; font-size: 12px; }
 .selected-heading small { color: var(--text-tertiary); font-size: 10px; }
 .region-cut-mode { display: flex; flex-direction: column; gap: 7px; margin-bottom: 13px; }
-.region-cut-mode > span { color: var(--text-secondary); font-size: 10px; }
+.cut-mode-label { color: var(--text-secondary); font-size: 10px; }
 .cut-mode-switch { --selection-radius: 999px; --selection-background: var(--surface-selected); --selection-shadow: none; position: relative; isolation: isolate; display: flex; gap: 3px; padding: 3px; border: 1px solid var(--surface-line); border-radius: 999px; background: var(--surface-well); }
 .cut-mode-switch > button { position: relative; z-index: 1; flex: 1; min-width: 0; padding: 6px 5px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
 .cut-mode-switch > button.active { color: var(--interaction-ink, var(--bg-brand)); }
@@ -972,7 +985,9 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
 .property-hint { min-height: 34px; margin-bottom: 6px; }
 .property-empty { padding-block: 8px; }
 .selection-actions { display: flex; flex-direction: column; flex-shrink: 0; gap: 10px; margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--surface-line); }
-.selection-actions > p { margin: -3px 0 0; color: var(--text-tertiary); font-size: 10px; line-height: 1.65; }
+.merge-help :deep(.help-label) { flex: 1; }
+.merge-button { width: 100%; }
+.merge-button > svg { flex: none; }
 .selection-actions .delete-region { margin-top: 3px; }
 .delete-region { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 10px; border: 1px solid var(--surface-line); border-radius: var(--radius-inner); background: transparent; color: var(--text-secondary); font-size: 11px !important; }
 .delete-region:hover { background: var(--status-error-surface-l1, var(--surface-well)); color: var(--status-error-default, var(--text-default)); }
@@ -996,6 +1011,8 @@ onBeforeUnmount(() => { disposed = true; clearRegionFeedback(); canvasObserver?.
   .editor-bottom > span:last-child { display: none; }
 }
 @media (max-width: 520px) {
+  .automatic-tools { grid-template-columns: minmax(0, 1fr); }
+  .automatic-tools > .automatic-button { justify-self: start; margin-top: 6px; }
   .editor-toolbar { gap: 8px; }
   .draw-tools button { padding: 6px 8px; }
   .draw-tools svg { display: none; }

@@ -9,12 +9,19 @@ export interface PreviewCameraMotion {
 
 const DURATION_MS = 360;
 const FRAMING_DURATION_MS = 280;
-const DIRECTIONS: Record<PreviewView, readonly [number, number, number]> = {
-  front: [0, 0, 1],
+const DIRECTIONS: Record<PreviewView, Vector3> = {
+  front: new Vector3(0, 0, 1),
   // A small forward component keeps the up vector unambiguous at the pole.
-  top: [0, 1, 0.0001],
-  iso: [120, 80, 150],
+  top: new Vector3(0, 1, 0.0001).normalize(),
+  iso: new Vector3(120, 80, 150).normalize(),
 };
+const VIEW_MATCH_COSINE = Math.cos(MathUtils.degToRad(0.5));
+
+/** Ignore camera distance and small movements while the preset still applies. */
+export function matchesPreviewView(offset: Vector3, view: PreviewView): boolean {
+  const distance = offset.length();
+  return distance > 0 && offset.dot(DIRECTIONS[view]) >= distance * VIEW_MATCH_COSINE;
+}
 
 /** Orbit around the existing target without dollying through the model. */
 export function createPreviewCameraMotion(
@@ -22,7 +29,7 @@ export function createPreviewCameraMotion(
   view: PreviewView,
   startedAt: number,
 ): PreviewCameraMotion {
-  const destination = new Vector3(...DIRECTIONS[view]).normalize().multiplyScalar(fromOffset.length());
+  const destination = DIRECTIONS[view].clone().multiplyScalar(fromOffset.length());
   return createCameraMotion(fromOffset, destination, startedAt, DURATION_MS);
 }
 

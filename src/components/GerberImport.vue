@@ -1,16 +1,17 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { ref, shallowRef, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { listen, type Event as TauriEvent } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { readDroppedGerber } from "../lib/gerber/dropped-file";
 import { useI18n } from "vue-i18n";
 import { useGerberOutline } from "../composables/useGerberOutline";
 import { useGerberStencil } from "../composables/useGerberStencil";
 import { useGerberImportSession, type GerberImportPayload } from "../composables/useGerberImportSession";
 import { useCompletionFeedback } from "../composables/useCompletionFeedback";
-import { getPanelBoards, resolvePanelSelection, type PanelMode, type PanelVariant } from "../lib/gerber/panel";
+import { getPanelBoards, resolvePanelSelection, type PanelMode } from "../lib/gerber/panel";
 import { useConfigStore } from "../stores/config";
 import PanelBoardPicker from "./PanelBoardPicker.vue";
 import ActionStatusIcon from "./ActionStatusIcon.vue";
+import InlineHelp from "./InlineHelp.vue";
 
 const props = withDefaults(defineProps<{
   mode?: "jig" | "stencil";
@@ -24,6 +25,7 @@ const { completed: importCompleted, complete: completeImport, reset: resetImport
 export type { GerberImportPayload } from "../composables/useGerberImportSession";
 
 const emit = defineEmits<{
+  (e: "panelScopeChanged"): void;
   (e: "gerberLoaded", payload: GerberImportPayload & { mode: PanelMode }): void;
 }>();
 
@@ -31,37 +33,26 @@ const outline = useGerberOutline();
 const stencil = useGerberStencil();
 
 const session = useGerberImportSession({ mode: () => props.mode, outline, stencil, submit,
-  onStart: () => { resetImportFeedback(); showPanelDialog.value = false; payload.value = null; } });
+  onStart: () => { resetImportFeedback(); showPanelDialog.value = false; pendingPanel.value = null; } });
 const { loading, error, processFile } = session;
 watch(loading, value => { configStore.gerberImporting = value; }, { flush: 'sync' });
 watch(error, value => { if (value) resetImportFeedback(); }, { flush: 'sync' });
-const candidates = computed(() => (props.mode === "stencil" ? [] : outline.candidates.value));
 
 // ===== 拼版口径选择 =====
-/** 最近一次解析出的结果(用于预览按当前口径渲染) */
-const payload = ref<GerberImportPayload | null>(null);
-/** 当前生效口径:以 store 为唯一来源,设置面板切换后这里同步跟随 */
+// The import card always describes the committed board. Only the picker sees a pending replacement.
+const pendingPanel = shallowRef<GerberImportPayload | null>(null);
 const activeMode = computed(() => configStore.config.panelMode);
 const activeBoardIndex = computed(() => configStore.selectedPanelBoard);
-const availableBoards = computed(() => showPanelDialog.value && payload.value
-  ? getPanelBoards(payload.value.variants) : configStore.panelBoards);
-/** 拼版文件导入时弹窗,让用户先选整版还是单板 */
+const availableBoards = computed(() => pendingPanel.value ? getPanelBoards(pendingPanel.value.variants) : configStore.panelBoards);
+const dialogPanel = computed(() => pendingPanel.value?.variants.panel ?? configStore.panelOverview);
+const dialogGrid = computed(() => pendingPanel.value ? pendingPanel.value.panelGrid : configStore.config.panelGrid);
 const showPanelDialog = ref(false);
 const dialogMode = ref<PanelMode>("panel");
 const dialogBoardIndex = ref(0);
 
 function openPanelDialog() {
-  resetImportFeedback();
-  if (!showPanelDialog.value && configStore.panelOverview && configStore.config.panelAvailable) {
-    payload.value = { filename: configStore.config.gerberFilename ?? '', isPanel: true,
-      sourceFilename: configStore.gerberSourceFilename ?? undefined,
-      outlineSource: configStore.gerberOutlineSource ?? undefined,
-      outlineFallbackReason: configStore.gerberOutlineFallbackReason ?? undefined,
-      hasPads: !!(configStore.panelOverview.topPads?.length || configStore.panelOverview.bottomPads?.length),
-      panelGrid: configStore.config.panelGrid ?? undefined,
-      variants: { panel: configStore.panelOverview, single: configStore.panelBoards[0] ?? configStore.panelOverview,
-        boards: configStore.panelBoards } };
-  }
+  if (loading.value || !configStore.config.panelAvailable) return;
+  pendingPanel.value = null;
   dialogMode.value = activeMode.value;
   dialogBoardIndex.value = activeBoardIndex.value;
   showPanelDialog.value = true;
@@ -72,71 +63,16 @@ function selectDialogBoard(index: number) {
   dialogMode.value = "board";
 }
 
-function variantFor(p: GerberImportPayload, mode: PanelMode, boardIndex: number): PanelVariant {
-  return resolvePanelSelection(p.variants, mode, boardIndex).variant;
-}
-
-/** 统一显示用的结果 */
-interface DisplayResult {
-  width: number;
-  height: number;
-  filename: string;
-  outlinePoints: Array<[number, number]>;
-  holes: Array<Array<[number, number]>>;
-  topPadCount?: number;
-  bottomPadCount?: number;
-  skipped?: number;
-  isPanel?: boolean;
-  panelGrid?: { nx: number; ny: number };
-  boardCount?: number;
-  boardIndex?: number;
-  units?: string | null;
-  arcs?: number;
-  outlineSource?: 'gerber' | 'pads-bounds';
-  outlineFallbackReason?: 'missing' | 'invalid';
-}
-const display = computed<DisplayResult | null>(() => {
-  // Reflect the active board and pad edits when switching panel scopes.
-  if (!showPanelDialog.value) {
-    const c = configStore.config;
-    if (!c.pcbOutlinePoints.length && !c.stencilPadsTop.length && !c.stencilPadsBottom.length) return null;
-    const sameImport = payload.value?.filename === c.gerberFilename;
-    return { width: c.pcbSizeX, height: c.pcbSizeY, filename: c.gerberFilename ?? '',
-      outlineSource: configStore.gerberOutlineSource ?? undefined,
-      outlineFallbackReason: configStore.gerberOutlineFallbackReason ?? undefined,
-      outlinePoints: c.pcbOutlinePoints, holes: c.pcbOutlineHoles,
-      topPadCount: c.stencilPadsTop.length, bottomPadCount: c.stencilPadsBottom.length,
-      skipped: sameImport ? stencil.result.value?.skipped : undefined,
-      units: sameImport ? outline.result.value?.bbox.units : 'mm',
-      arcs: sameImport ? outline.result.value?.parse.arcsLinearized : undefined,
-      isPanel: c.panelAvailable, panelGrid: c.panelGrid ?? undefined,
-      boardCount: configStore.panelBoards.length, boardIndex: c.panelMode === 'board' ? configStore.selectedPanelBoard : undefined };
-  }
-  const p = payload.value;
-  if (!p) return null;
-  const mode = showPanelDialog.value ? dialogMode.value : activeMode.value;
-  const boardIndex = showPanelDialog.value ? dialogBoardIndex.value : activeBoardIndex.value;
-  const v = variantFor(p, mode, boardIndex);
-  const o = outline.result.value;
-  const s = stencil.result.value;
-  return {
-    width: v.width,
-    height: v.height,
-    filename: p.filename,
-    outlineSource: p.outlineSource,
-    outlineFallbackReason: p.outlineFallbackReason,
-    outlinePoints: v.outlinePoints,
-    holes: v.outlineHoles,
-    topPadCount: v.topPads?.length,
-    bottomPadCount: v.bottomPads?.length,
-    skipped: s?.skipped,
-    isPanel: p.isPanel,
-    panelGrid: p.panelGrid,
-    boardCount: availableBoards.value.length,
-    boardIndex: mode === "board" ? boardIndex : undefined,
-    units: props.mode === "stencil" ? undefined : o?.bbox.units ?? null,
-    arcs: o?.parse.arcsLinearized,
-  };
+const display = computed(() => {
+  const c = configStore.config;
+  if (!c.pcbOutlinePoints.length && !c.stencilPadsTop.length && !c.stencilPadsBottom.length) return null;
+  return { width: c.pcbSizeX, height: c.pcbSizeY, filename: configStore.gerberFileDetails?.outline ?? c.gerberFilename ?? "",
+    details: configStore.gerberFileDetails, outlineSource: configStore.gerberOutlineSource,
+    outlineFallbackReason: configStore.gerberOutlineFallbackReason,
+    outlinePoints: c.pcbOutlinePoints, holes: c.pcbOutlineHoles,
+    topPadCount: c.stencilPadsTop.length, bottomPadCount: c.stencilPadsBottom.length,
+    isPanel: c.panelAvailable, panelGrid: c.panelGrid, boardCount: configStore.panelBoards.length,
+    boardIndex: configStore.selectedPanelBoard };
 });
 
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -146,16 +82,18 @@ function pickFile() {
   fileInput.value?.click();
 }
 
+defineExpose({ pickFile, processFile, choosingPanel: showPanelDialog, error });
+
 /**
  * 解析结果 → 交给 store。
  * 拼版文件先弹窗让用户选口径(整版 / 单板),非拼版直接用整版口径。
  */
 function submit(p: GerberImportPayload) {
-  payload.value = p;
   if (p.isPanel) {
+    pendingPanel.value = p;
     // 拼版文件:先弹窗让用户选口径(默认沿用上次选择)
     dialogMode.value = activeMode.value;
-    dialogBoardIndex.value = activeBoardIndex.value;
+    dialogBoardIndex.value = resolvePanelSelection(p.variants, "board", activeBoardIndex.value).index ?? 0;
     showPanelDialog.value = true;
     return;
   }
@@ -165,14 +103,18 @@ function submit(p: GerberImportPayload) {
 
 /** 弹窗选择完成:按选中口径应用 */
 function confirmPanelMode(mode: PanelMode, boardIndex = dialogBoardIndex.value) {
-  if (loading.value) return;
+  if (loading.value || !showPanelDialog.value) return;
   showPanelDialog.value = false;
-  const p = payload.value;
+  const p = pendingPanel.value;
   if (p) {
     const selection = resolvePanelSelection(p.variants, mode, boardIndex);
     resetImportFeedback();
     emit("gerberLoaded", { ...p, mode: selection.mode, boardIndex: selection.index ?? undefined });
     completeImport();
+  } else if (mode !== activeMode.value || (mode === 'board' && boardIndex !== activeBoardIndex.value)) {
+    if (mode === 'board') configStore.setPanelBoard(boardIndex);
+    else configStore.setPanelMode(mode);
+    emit('panelScopeChanged');
   }
 }
 
@@ -205,17 +147,7 @@ function onDragLeave() {
 async function processDroppedPaths(paths: string[]) {
   if (!paths || paths.length === 0) return;
   const path = paths[0];
-  const fileName = path.split(/[/\\]/).pop() || path;
-
-  await session.processSource(async () => {
-    const bytes = await invoke<number[]>("read_dropped_file", { path });
-    const u8 = new Uint8Array(bytes);
-    return new File([u8], fileName, {
-      type: fileName.toLowerCase().endsWith(".zip")
-        ? "application/zip"
-        : "text/plain",
-    });
-  });
+  await session.processSource(() => readDroppedGerber(path));
 }
 
 // Tauri 2 原生文件拖拽事件
@@ -227,7 +159,7 @@ let disposed = false;
 watch(() => props.mode, () => {
   resetImportFeedback();
   session.cancel();
-  payload.value = null;
+  pendingPanel.value = null;
   showPanelDialog.value = false;
 }, { flush: 'sync' });
 
@@ -261,16 +193,6 @@ onBeforeUnmount(() => {
   unlistenLeave?.();
 });
 
-function clear() {
-  resetImportFeedback();
-  session.cancel();
-  showPanelDialog.value = false;
-  payload.value = null;
-  configStore.clearPanelScope();
-  Object.assign(configStore.config, { gerberFilename: null, pcbOutlinePoints: [], pcbOutlineHoles: [],
-    stencilPadsTop: [], stencilPadsBottom: [] });
-}
-
 function fmt(n: number): string {
   return n.toFixed(2);
 }
@@ -303,13 +225,9 @@ const outlineViewBox = computed(() => {
 
 <template>
   <div class="gerber-import">
-    <input
-      ref="fileInput"
-      type="file"
-      :accept="acceptAttr"
-      style="display: none"
-      @change="onFileChange"
-    />
+    <Teleport to="body">
+      <input ref="fileInput" type="file" :accept="acceptAttr" hidden @change="onFileChange" />
+    </Teleport>
 
     <!-- Dropzone -->
     <div
@@ -335,13 +253,18 @@ const outlineViewBox = computed(() => {
       </ActionStatusIcon>
       <p v-if="!loading" class="drop-text">{{ t('gerber.drop') }}</p>
       <p v-else class="drop-text">{{ t('gerber.parsing') }}</p>
-      <p class="drop-hint">{{ t('gerber.dropHint') }}</p>
+      <p class="drop-hint">{{ t(props.mode === 'stencil' ? 'gerber.dropHintStencil' : 'gerber.dropHint') }}</p>
     </div>
 
     <!-- Error -->
-    <el-alert v-if="error" type="error" :closable="false" class="error-alert">
+    <el-alert v-if="error" :title="display ? t('gerber.keptBoard') : undefined" type="error" :closable="false" class="error-alert">
       {{ error }}
     </el-alert>
+
+    <InlineHelp v-if="!display" id="gerber-import-help" class="import-files-help"
+      topic="gerberImport" :label="t('guideUi.importFiles')">
+      <span class="import-files-label">{{ t('guideUi.importFiles') }}</span>
+    </InlineHelp>
 
     <!-- Result -->
     <div v-if="display" class="result" :aria-busy="loading">
@@ -415,9 +338,9 @@ const outlineViewBox = computed(() => {
           </div>
         </div>
       </div>
-      <div v-if="props.mode === 'stencil' && display.skipped && display.skipped > 0" class="result-warning">
+      <div v-if="props.mode === 'stencil' && display.details?.skipped && display.details?.skipped > 0" class="result-warning">
         <span>{{ t('stencil.skippedShort') }}</span>
-        <span>{{ t('stencil.skippedWarning', { n: display.skipped }) }}</span>
+        <span>{{ t('stencil.skippedWarning', { n: display.details?.skipped }) }}</span>
       </div>
 
       <!-- Source metadata remains visible, with quieter type and spacing. -->
@@ -434,14 +357,14 @@ const outlineViewBox = computed(() => {
         </div>
         <div v-if="props.mode !== 'stencil'" class="info-row">
           <span class="info-label">{{ t('gerber.units') }}</span>
-          <span class="info-value">{{ display.units || t('gerber.unitsUnknown') }}</span>
+          <span class="info-value">{{ display.details?.units || t('gerber.unitsUnknown') }}</span>
         </div>
         <div class="info-row">
           <span class="info-label">{{ t('gerber.vertices') }}</span>
           <span class="info-value">
             {{ display.outlinePoints.length }}
-            <span v-if="display.arcs && display.arcs > 0" class="info-sub">
-              ({{ t('gerber.arcs', { n: display.arcs }) }})
+            <span v-if="display.details?.arcs && display.details?.arcs > 0" class="info-sub">
+              ({{ t('gerber.arcs', { n: display.details?.arcs }) }})
             </span>
           </span>
         </div>
@@ -452,22 +375,23 @@ const outlineViewBox = computed(() => {
       </div>
 
       <!-- Candidates -->
-      <div v-if="candidates.length > 1" class="alt-candidates">
+      <div v-if="display.details?.otherOutlines?.length" class="alt-candidates">
         <span class="candidates-label">{{ t('gerber.candidates') }}</span>
         <div class="candidates-list">
-          <span v-for="c in candidates.slice(1, 4)" :key="c.filename" class="candidate-item">
-            <code>{{ c.filename }}</code>
+          <span v-for="filename in display.details.otherOutlines" :key="filename" class="candidate-item">
+            <code>{{ filename }}</code>
           </span>
         </div>
       </div>
 
-      <button class="reimport-btn" @click="clear">{{ t('gerber.reimport') }}</button>
+      <button class="reimport-btn" :disabled="loading || showPanelDialog" @click="pickFile">{{ t('gerber.reimport') }}</button>
     </div>
 
     <!-- 拼版口径选择:检测到拼版时先问用户做整版还是单板 -->
     <el-dialog
       v-model="showPanelDialog"
-      :title="t('gerber.panelDialogTitle')"
+      @closed="!showPanelDialog && (pendingPanel = null)"
+      :title="t(pendingPanel ? 'gerber.panelDialogTitle' : 'gerber.panelScope')"
       class="panel-import-dialog"
       width="840"
       align-center
@@ -475,12 +399,12 @@ const outlineViewBox = computed(() => {
       :close-on-click-modal="false"
     >
       <p class="dialog-desc">
-        {{ t(payload?.variants.boards?.some(board => board.inferred) ? 'gerber.panelDialogDescConnected'
-          : display?.boardCount && display.boardCount > 1 ? 'gerber.panelDialogDescMixed' : 'gerber.panelDialogDesc', {
-          grid: display?.panelGrid
-            ? t('gerber.panelGrid', display.panelGrid)
+        {{ t(availableBoards.some(board => board.inferred) ? 'gerber.panelDialogDescConnected'
+          : availableBoards.length > 1 ? 'gerber.panelDialogDescMixed' : 'gerber.panelDialogDesc', {
+          grid: dialogGrid
+            ? t('gerber.panelGrid', dialogGrid)
             : t('gerber.panelDetected'),
-          n: display?.boardCount ?? 0,
+          n: availableBoards.length,
         }) }}
       </p>
       <div class="scope-options">
@@ -503,8 +427,8 @@ const outlineViewBox = computed(() => {
           <span class="scope-hint">{{ t('gerber.scopeBoardHint') }}</span>
         </button>
       </div>
-      <PanelBoardPicker v-if="payload" expanded :model-value="dialogBoardIndex"
-        :whole-panel="dialogMode === 'panel'" :boards="availableBoards" :panel="payload.variants.panel"
+      <PanelBoardPicker v-if="dialogPanel" expanded :model-value="dialogBoardIndex"
+        :whole-panel="dialogMode === 'panel'" :boards="availableBoards" :panel="dialogPanel"
         @update:model-value="selectDialogBoard" />
       <template #footer>
         <div class="panel-dialog-footer">
@@ -585,6 +509,9 @@ const outlineViewBox = computed(() => {
 .error-alert {
   margin-top: 12px;
 }
+
+.import-files-help { margin-top: 8px; }
+.import-files-label { color: var(--text-secondary); font-size: var(--body-sm-font-size); }
 
 /* Result */
 .result {

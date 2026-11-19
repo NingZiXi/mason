@@ -48,6 +48,8 @@ html[data-skin='sakura'] {
   --brand-accent-hover: var(--sakura-accent-hover);
   --brand-accent-active: var(--sakura-accent-active);
   --brand-accent-surface: #EDF2FF;
+  --pcb-fill: #DCE6FA;
+  --pcb-ink: #3E5FA4;
   --settings-logo-accent: #A9C7FF;
   --skin-petal: #F5DCE8;
   --skin-sky: var(--brand-accent);
@@ -230,6 +232,8 @@ html.dark[data-skin='sakura'] {
   --bg-brand-disabled: rgba(240, 170, 198, .22);
   --bg-brand-popup: #48313E;
   --brand-accent-surface: #293652;
+  --pcb-fill: #2B3A5B;
+  --pcb-ink: #91B0F0;
   --settings-logo-accent: var(--brand-accent);
   --skin-petal: #674656;
   --skin-sky: var(--brand-accent);
@@ -431,18 +435,14 @@ html[data-skin='sakura'] .el-button:not(.el-button--primary, .el-button--success
   --el-button-active-border-color: var(--interaction-border);
 }
 
-/* The clamp diagram uses the same rose grip and blue PCB as the model. */
-html[data-skin='sakura'] .app-sidebar .clamp-plan {
+/* Keep the clamp grip on the rose palette. */
+html[data-skin='sakura'] .app-sidebar .lip-section {
   --grip-fill: rgba(216, 92, 138, .22);
   --grip-ink: #AD3E69;
-  --pcb-fill: #DCE6FA;
-  --pcb-ink: #3E5FA4;
 }
-html.dark[data-skin='sakura'] .app-sidebar .clamp-plan {
+html.dark[data-skin='sakura'] .app-sidebar .lip-section {
   --grip-fill: rgba(240, 170, 198, .22);
   --grip-ink: #F3B6CE;
-  --pcb-fill: #2B3A5B;
-  --pcb-ink: #91B0F0;
 }
 
 /* Keep the workspace flat; the model supplies the depth. */

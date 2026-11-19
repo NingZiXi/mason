@@ -54,7 +54,7 @@ const grip = computed(() => Math.abs(plan.value.gripX - plan.value.gripY) < .01
 </template>
 
 <style scoped>
-.clamp-plan { --grip-fill: rgba(210, 155, 62, .38); --grip-ink: #996d2d; --pcb-fill: #d2dfe9; --pcb-ink: #718fa7; margin: 0 0 12px; padding: 10px 12px 0; border: 1px solid var(--surface-line); border-radius: var(--radius-control); corner-shape: var(--corner-shape); background: var(--surface-raised); }
+.clamp-plan { margin: 0 0 12px; padding: 10px 12px 0; border: 1px solid var(--surface-line); border-radius: var(--radius-control); corner-shape: var(--corner-shape); background: var(--surface-raised); }
 .plan-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); font-weight: var(--font-weight-medium); color: var(--text-secondary); }
 .plan-view-label { flex-shrink: 0; color: var(--text-tertiary); font-weight: var(--font-weight-default); }
 .plan-canvas { display: block; width: 100%; max-height: 176px; overflow: hidden; }
@@ -75,5 +75,4 @@ const grip = computed(() => Math.abs(plan.value.gripX - plan.value.gripY) < .01
 .plan-grip-value { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; padding: 9px 0; border-top: 1px solid var(--surface-line); font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); color: var(--text-secondary); }
 .plan-grip-value strong { display: inline-flex; align-items: baseline; gap: 4px; color: var(--grip-ink); font-family: var(--font-family-metric); font-size: var(--heading-xs-font-size); font-weight: var(--font-weight-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .plan-unit { color: var(--text-tertiary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); }
-:global(html.dark) .clamp-plan { --grip-fill: rgba(215, 169, 87, .28); --grip-ink: #d7b77d; --pcb-fill: #344b60; --pcb-ink: #8fa9bf; }
 </style>

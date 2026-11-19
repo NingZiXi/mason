@@ -281,15 +281,14 @@ pub struct EngineStatus {
     pub probe_error: Option<String>,
 }
 
-/// 用 find_spec 检查依赖(只查不导入,秒回;真 import build123d 要 ~5s)
-pub(crate) fn check_deps_blocking(python: &str) -> Result<Vec<String>, String> {
-    probe_deps(python_detect::python_command(python))
-}
-
-fn probe_deps(mut cmd: std::process::Command) -> Result<Vec<String>, String> {
+// Only diagnose missing packages after a real worker fails to start. A package
+// spec can exist even when its native DLLs/shared libraries cannot load.
+async fn probe_deps(cmd: std::process::Command) -> Result<Vec<String>, String> {
     let script = "import importlib.util,json; print(json.dumps([m for m in ('build123d','shapely','numpy') if importlib.util.find_spec(m) is None]))";
-    let output = cmd.args(["-c", script]).output()
-        .map_err(|err| err.to_string())?;
+    let mut cmd = tokio::process::Command::from(cmd);
+    cmd.kill_on_drop(true).args(["-c", script]);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await
+        .map_err(|_| "Python dependency check timed out".to_string())?.map_err(|err| err.to_string())?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let tail: Vec<_> = stderr.trim().chars().rev().take(1200).collect();
@@ -302,16 +301,16 @@ fn probe_deps(mut cmd: std::process::Command) -> Result<Vec<String>, String> {
 mod probe_tests {
     use super::*;
 
-    #[test]
-    fn failed_interpreter_is_not_reported_as_three_missing_packages() {
+    #[tokio::test]
+    async fn failed_interpreter_is_not_reported_as_three_missing_packages() {
         let python = python_detect::find_python_in_path().expect("Python on test host");
         let mut failed = python_detect::python_command(&python);
         failed.args(["-c", "import sys; sys.exit('startup failed')"]);
-        assert!(probe_deps(failed).unwrap_err().contains("startup failed"));
+        assert!(probe_deps(failed).await.unwrap_err().contains("startup failed"));
         // A working interpreter with site-packages disabled really is missing all three.
         let mut empty = python_detect::python_command(&python);
         empty.args(["-I", "-S"]);
-        assert_eq!(probe_deps(empty).unwrap(), ["build123d", "shapely", "numpy"]);
+        assert_eq!(probe_deps(empty).await.unwrap(), ["build123d", "shapely", "numpy"]);
     }
 }
 
@@ -336,13 +335,12 @@ pub async fn get_engine_status(app: AppHandle) -> Result<EngineStatus, AppError>
 
     match python {
         Some(p) => {
-            let py = p.clone();
-            let result = tokio::task::spawn_blocking(move || check_deps_blocking(&py))
-                .await
-                .map_err(|e| AppError::Other(format!("依赖检查失败: {}", e)))?;
-            let (missing, probe_error) = match result {
-                Ok(missing) => (missing, None),
-                Err(err) => (Vec::new(), Some(err)),
+            let (missing, probe_error) = match scad::verify_preview_engine(&app, &p).await {
+                Ok(()) => (Vec::new(), None),
+                Err(err) => match probe_deps(python_detect::python_command(&p)).await {
+                    Ok(missing) if !missing.is_empty() => (missing, None),
+                    _ => (Vec::new(), Some(err.to_string())),
+                },
             };
             Ok(EngineStatus {
                 python_path: Some(p),
@@ -695,9 +693,22 @@ pub async fn abort_model_export(token: String) -> Result<(), AppError> {
 
 /// 读取拖入的文件,供 drag-drop 后使用
 #[tauri::command]
-pub async fn read_dropped_file(path: String) -> Result<Vec<u8>, AppError> {
-    let bytes = std::fs::read(&path).map_err(|e| AppError::Io(format!("读取文件失败 {}: {}", path, e)))?;
-    Ok(bytes)
+pub async fn read_dropped_file(path: String) -> Result<tauri::ipc::Response, AppError> {
+    let bytes = tokio::fs::read(&path).await
+        .map_err(|e| AppError::Io(format!("读取文件失败 {}: {}", path, e)))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn dropped_zip_reaches_the_webview_as_original_binary_bytes() {
+    use tauri::ipc::{InvokeResponseBody, IpcResponse};
+
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../docs/assets/examples/mason-pcb2-gerber.zip");
+    let original = std::fs::read(&path).unwrap();
+    let response = read_dropped_file(path.to_str().unwrap().to_owned()).await.unwrap();
+    assert!(matches!(response.body().unwrap(), InvokeResponseBody::Raw(bytes) if bytes == original));
 }
 
 #[cfg(test)]

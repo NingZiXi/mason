@@ -142,7 +142,7 @@ async function remove() {
 <template>
   <section class="config-presets" :aria-label="t('presets.title')" :aria-busy="store.busy || working">
     <div class="preset-header">
-      <InlineHelp id="preset-help" class="preset-help" :label="t('presets.title')" :text="t('presets.hint')">
+      <InlineHelp id="preset-help" topic="presets" class="preset-help" :label="t('presets.title')" :text="t('presets.hint')">
         <label id="preset-label" class="preset-heading">{{ t('presets.title') }}</label>
       </InlineHelp>
       <span class="preset-status" :class="{ 'is-dirty': showUnsavedStatus, 'is-saved': store.selected && !store.dirty }" role="status" aria-live="polite">

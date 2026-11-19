@@ -3,7 +3,7 @@ import type { PadPolygon } from "./gerber/pads";
 import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide, reliefRegionDepth } from './component-relief';
 
 // Image polarity applies to the whole pad; part polarity and holes apply inside it.
-const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride }) => ({
+export const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride }) => ({
   type, polarity, parts, ...(padRole ? { padRole } : {}), ...(padRoleSource ? { padRoleSource } : {}),
   ...(apertureOverride ? { apertureOverride } : {}),
 }));
@@ -15,14 +15,21 @@ const reliefGeometry = (region: import('./component-relief').ComponentReliefRegi
   depth: region.through ? undefined : reliefRegionDepth(region, defaultDepth),
 });
 
+// Keep the exact serialized geometry: keys must also match deep-copied export
+// snapshots. JSON never contains an unescaped newline, so fields stay distinct.
+export interface ImportedGeometryKeys { outline: string; holes: string; top: string; bottom: string }
+function withGeometry(scalars: object, outline: string, holes: string, top: string, bottom: string) {
+  return JSON.stringify(scalars) + '\n' + outline + '\n' + holes + '\n' + top + '\n' + bottom;
+}
+
 // 计算当前参数的 hash(用于判断是否需要重新生成)
-export function modelParamsHash(c: AppConfig) {
+export function modelParamsHash(c: AppConfig, keys?: ImportedGeometryKeys) {
   // 只 hash 跟几何相关的参数(避免无关改动触发重渲染)
   // pcbOutlinePoints 用完整点列表:同点数的异形板框也要正确失效
   // mode 必须入 hash:钢网/治具模式下同一钢网尺寸生成不同外框
-  return JSON.stringify({
+  return withGeometry({
     mode: c.appMode,
-    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.pcbOutlinePoints, c.pcbOutlineHoles, c.stencilSizeX, c.stencilSizeY],
+    pcb: [c.pcbSizeX, c.pcbSizeY, c.pcbThickness, c.pcbPocketClearance, c.stencilSizeX, c.stencilSizeY],
     screw: [c.screwSpacing, c.screwSpec, c.useHexNut, c.nutAcrossFlats, c.nutHeight, c.nutPocketClearance],
     dims: [c.baseHeight, c.topCoverHeight, c.jigSize, c.insertHeight, c.platterHeight, c.platterCornerRadius, c.ejectSlotWidth,
       c.appMode === 'jig' && c.ejectSlotWidth > 0 ? c.ejectHoleDiameter : 0,
@@ -33,11 +40,11 @@ export function modelParamsHash(c: AppConfig) {
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
       c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,
       c.stencilFilterTestPoints, c.stencilTestPointMaxDia, c.stencilTestPointIsolation,
-      c.stencilGrid, c.stencilGridSize, c.stencilGridBar,
-      enginePads(c.stencilPadsTop), enginePads(c.stencilPadsBottom)],
-  });
+      c.stencilGrid, c.stencilGridSize, c.stencilGridBar],
+  }, keys?.outline ?? JSON.stringify(c.pcbOutlinePoints), keys?.holes ?? JSON.stringify(c.pcbOutlineHoles),
+  keys?.top ?? JSON.stringify(enginePads(c.stencilPadsTop)), keys?.bottom ?? JSON.stringify(enginePads(c.stencilPadsBottom)));
 }
-export function buildScadParams(c: AppConfig) {
+export function buildScadParams(c: AppConfig, top = enginePads(c.stencilPadsTop), bottom = enginePads(c.stencilPadsBottom)) {
   return {
     pcb_size_x: c.pcbSizeX,
     pcb_size_y: c.pcbSizeY,
@@ -93,33 +100,43 @@ export function buildScadParams(c: AppConfig) {
     stencil_grid: c.stencilGrid,
     stencil_grid_size: c.stencilGridSize,
     stencil_grid_bar: c.stencilGridBar,
-    stencil_pads_top: enginePads(c.stencilPadsTop),
-    stencil_pads_bottom: enginePads(c.stencilPadsBottom),
+    stencil_pads_top: top,
+    stencil_pads_bottom: bottom,
   };
+}
+
+/** Jig meshes use the PCB outline and relief regions, never its paste pads.
+ * A stencil only needs its own face. Keep unused vertices out of desktop IPC. */
+export function previewPartParams(params: ReturnType<typeof buildScadParams>, part: string) {
+  return { ...params, stencil_pads_top: part === 'stencil_top' ? params.stencil_pads_top : [],
+    stencil_pads_bottom: part === 'stencil_bottom' ? params.stencil_pads_bottom : [] };
 }
 
 /** Conservative part keys: changes in the other manufacturing mode/PCB side
  * cannot invalidate this mesh. Keep shared outline and notch inputs. */
-export function scadPartHash(params: ReturnType<typeof buildScadParams>, part: string) {
+export function scadPartHash(params: ReturnType<typeof buildScadParams>, part: string, keys?: ImportedGeometryKeys) {
   const stencil = part.startsWith("stencil_");
-  const stencilShared = new Set(["pcb_size_x", "pcb_size_y", "pcb_thickness", "pcb_outline_points", "pcb_outline_holes",
+  const stencilShared = new Set(["pcb_size_x", "pcb_size_y", "pcb_thickness",
     "outer_corner_radius", "pry_notch_sides", "pry_notch_scale", "pocket_clearance", "pad_shrink"]);
   const unusedJigInputs = new Set(part === "insert"
     ? ["screw_spacing", "screw_spec", "peri_screw_d", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance", "platter_height"]
-    : ["insert_height", "platter_height", "pcb_thickness", "pcb_outline_holes", "eject_slot_width", "eject_hole_diameter", "pry_notch_sides", "pry_notch_scale",
+    : ["insert_height", "platter_height", "pcb_thickness", "eject_slot_width", "eject_hole_diameter", "pry_notch_sides", "pry_notch_scale",
       ...(part === "cover" ? ["base_height", "use_hex_nut", "nut_across_flats", "nut_height", "nut_pocket_clearance"] : ["top_cover_height"])]);
-  const geometryParams = part === 'insert' ? { ...params,
+  const { pcb_outline_points, pcb_outline_holes, stencil_pads_top, stencil_pads_bottom, ...scalars } = params;
+  const geometryParams = part === 'insert' ? { ...scalars,
     eject_hole_diameter: params.eject_slot_width > 0 ? params.eject_hole_diameter : 0,
-    component_relief_regions: params.component_relief_regions.map(region => reliefGeometry(region, params.component_relief_depth)) } : params;
-  return JSON.stringify(Object.fromEntries(Object.entries(geometryParams).filter(([key]) => {
+    component_relief_regions: params.component_relief_regions.map(region => reliefGeometry(region, params.component_relief_depth)) } : scalars;
+  return withGeometry(Object.fromEntries(Object.entries(geometryParams).filter(([key]) => {
     // The default is not model geometry; legacy fallback is resolved above.
     if (key === 'component_relief_depth') return false;
     if (stencil) {
-      if (key === (part === "stencil_top" ? "stencil_pads_bottom" : "stencil_pads_top")) return false;
       return key.startsWith("stencil_") || stencilShared.has(key);
     }
     if (part !== 'insert' && ['component_relief_depth', 'component_relief_regions'].includes(key)) return false;
     return (!key.startsWith("stencil_") || ["stencil_size_x", "stencil_size_y", "stencil_lip", "stencil_corner_radius", "stencil_frame_width", "stencil_frame_shape"].includes(key))
       && key !== "pad_shrink" && !unusedJigInputs.has(key);
-  })));
+  })), keys?.outline ?? JSON.stringify(pcb_outline_points),
+  (stencil || part === 'insert') ? keys?.holes ?? JSON.stringify(pcb_outline_holes) : '',
+  part === 'stencil_top' ? keys?.top ?? JSON.stringify(stencil_pads_top) : '',
+  part === 'stencil_bottom' ? keys?.bottom ?? JSON.stringify(stencil_pads_bottom) : '');
 }

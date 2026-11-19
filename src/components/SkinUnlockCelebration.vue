@@ -61,8 +61,16 @@ const celebrationStyle = {
   '--celebration-soft': paintingSakura ? '#F3D9E4' : '#82B39A',
 };
 
+// The pin is an SVG detail inside the actual header Logo, too small to be
+// selected as a standalone control by the visibility helper.
+function launchPoint(): Point | null {
+  const logo = findCelebrationTarget(['.brand-logo']);
+  const pin = logo?.element.querySelector('.brand-end')?.getBoundingClientRect();
+  return pin ? { x: pin.left + pin.width / 2, y: pin.top + pin.height / 2 } : logo?.point ?? null;
+}
+
 function buildJobs() {
-  launchOrigin = findCelebrationTarget(['.brand-logo'])?.point ?? null;
+  launchOrigin = launchPoint();
   const header = findCelebrationSurface(['.app-header']);
   const sidebar = findCelebrationSurface(['.app-sidebar']);
   const preview = findCelebrationSurface(['.preview-overlays', '.canvas-container']);
@@ -186,7 +194,15 @@ function decorate(cursor: HTMLElement, layer: HTMLElement, job: Job) {
   const entry = launchOrigin
     ? { x: launchOrigin.x - rect.left, y: launchOrigin.y - rect.top }
     : { x: first.x - 80, y: first.y - 90 };
-  const entryBend = { x: entry.x + (first.x - entry.x) * .72, y: entry.y + (first.y - entry.y) * .42 };
+  // Sample a single gently bowed flight. The tip slows into contact without
+  // braking at an intermediate waypoint, even for the long trip to Export.
+  const dx = first.x - entry.x, dy = first.y - entry.y;
+  const bow = Math.min(1, 46 / (Math.hypot(dx, dy) || 1));
+  const flight = Array.from({ length: 13 }, (_, i) => {
+    const u = i / 12, t = 1 - (1 - u) ** 2, bend = 2 * t * (1 - t) * bow;
+    return { point: { x: entry.x + dx * t - dy * bend, y: entry.y + dy * t + dx * bend },
+      opacity: Math.min(1, u * 4), time: 500 * u };
+  });
   // Distance-based timing keeps the brush tip and growing stroke together,
   // including the long vertical legs of the preview frame.
   const lengths = points.map((point, index) => index ? Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y) : 0);
@@ -202,11 +218,10 @@ function decorate(cursor: HTMLElement, layer: HTMLElement, job: Job) {
   cursor.classList.toggle('worker-right-edge', job.actor === 3);
   cursor.classList.toggle('bubble-below', rect.top + first.y < 140);
   animate(cursor, [
-    { transform: pose(entry), opacity: 0, offset: 0, easing: 'cubic-bezier(.22, 1, .36, 1)' },
-    { transform: pose(entryBend), opacity: 1, offset: 300 / whole, easing: 'cubic-bezier(.3, .1, .3, 1)' },
+    ...flight.slice(0, -1).map(f => ({ transform: pose(f.point), opacity: f.opacity, offset: f.time / whole })),
     ...travelFrames,
-    { transform: pose(last), opacity: 1, offset: (500 + duration + 160) / whole },
-    { transform: pose({ x: last.x + (entry.x - last.x) * .28, y: last.y - 45 }), opacity: 0, offset: 1 },
+    { transform: pose(last), opacity: 1, offset: (500 + duration + 120) / whole, easing: 'cubic-bezier(.3,0,.4,1)' },
+    { transform: pose({ x: last.x + (job.actor % 2 ? 12 : -12), y: last.y - 18 }), opacity: 0, offset: 1 },
   ], { duration: whole, delay: start - 500, easing: 'linear' });
 
   // Keep the actual brush tip on the reveal path. The tool itself settles onto
@@ -265,8 +280,11 @@ function decorate(cursor: HTMLElement, layer: HTMLElement, job: Job) {
       { transform: `translate(${x}px, ${y}px) scale(.55)`, opacity: 0 },
     ], { duration: 460, delay: start + duration + 20 + index * 35, easing: 'cubic-bezier(.16, 1, .3, 1)' });
   });
-  // Keep completed paint on the window until the crew's final tidy-up.
-  animate(layer, [{ opacity: 1 }, { opacity: 1, offset: .75 }, { opacity: 0 }], { duration: 700, delay: 4100, fill: 'forwards' });
+  // Lift the temporary tint once that surface is finished. The new skin
+  // underneath stays visible; outlines wait for the preview fill to finish.
+  animate(layer, [{ opacity: job.kind === 'accent' ? .8 : 1 }, { opacity: 0 }], {
+    duration: 360, delay: start + duration + (job.kind === 'edge' ? 500 : 100), fill: 'forwards',
+  });
   const bubble = cursor.querySelector('.cursor-bubble');
   if (bubble) animate(bubble, [
     { opacity: 0, transform: 'translateY(4px) scale(.96)' },

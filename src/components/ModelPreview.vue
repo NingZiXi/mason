@@ -7,11 +7,13 @@ import { useI18n } from "vue-i18n";
 import { useConfigStore } from "../stores/config";
 import { useUiStore } from "../stores/ui";
 import { observePreviewResize } from "../lib/preview-resize";
+import { previewPartParams } from '../lib/model-params';
 import { createPreviewParameterCache, watchPreviewGeometryChanges } from '../lib/preview-params';
 import { useWorkSessionStore } from "../stores/work-session";
 import { GenerationTasks, isGenerationCancelled } from "../lib/generation-tasks";
 import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cache";
-import { buildJigAssembly, disposeJigAssembly, recolorJigAssembly, setJigExplosion, setJigVisibility, setJigReliefInspection } from "../lib/jig-assembly";
+import { animateJigVisibility, buildJigAssembly, disposeJigAssembly, inheritJigVisibility, recolorJigAssembly,
+  setJigExplosion, setJigPartsOpacity, setJigReliefInspection, setJigVisibility, stepJigVisibility } from "../lib/jig-assembly";
 import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide } from '../lib/component-relief';
 import { getModelPalette } from "../lib/model-palette";
 import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
@@ -19,10 +21,12 @@ import { useCompletionFeedback } from "../composables/useCompletionFeedback";
 import { reviewStencilSizeForExport } from "../lib/stencil-export-review";
 import { reviewOutlineForExport } from "../lib/outline-export-review";
 import { defaultExportName, validExportName } from "../lib/export-name";
-import { exportModels, ModelExportError } from "../lib/model-export";
+import { modelExportPlan, exportModels, ModelExportError, type ModelExportPart, type ModelExportProgress } from "../lib/model-export";
 import { exportReadiness } from "../lib/export-readiness";
-import { createPreviewCameraMotion, createPreviewFramingMotion, type PreviewView } from "../lib/preview-camera-motion";
+import { createPreviewCameraMotion, createPreviewFramingMotion, matchesPreviewView, type PreviewView } from "../lib/preview-camera-motion";
 import SlidingIndicator from "./SlidingIndicator.vue";
+import LiquidSegmentTrack from "./LiquidSegmentTrack.vue";
+import PreviewModeAction from "./PreviewModeAction.vue";
 import ActionStatusIcon from "./ActionStatusIcon.vue";
 import { vAppTooltip } from '../directives/app-tooltip';
 import * as THREE from "three";
@@ -30,14 +34,16 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
-type PartName = "base" | "insert" | "cover" | "stencil_top" | "stencil_bottom";
+type PartName = ModelExportPart['name'];
 type PreviewName = PartName | "assembly";
+const JIG_PARTS = ["insert", "base", "cover"] as const;
 
 const StencilInspection = defineAsyncComponent(() => import("./StencilInspection.vue"));
 
 const store = useConfigStore();
 const workSession = useWorkSessionStore();
-const emit = defineEmits<{ reviewStencilSize: []; reviewBoardOutline: [] }>();
+const props = defineProps<{ choosingPanel?: boolean; importError?: string | null }>();
+const emit = defineEmits<{ reviewStencilSize: []; reviewBoardOutline: []; pickGerber: []; dropGerber: [file: File] }>();
 const ui = useUiStore();
 const modelPalette = computed(() => getModelPalette(ui.skin));
 const colorHex = (color: number) => `#${color.toString(16).padStart(6, "0")}`;
@@ -63,12 +69,24 @@ const activePart = ref<PreviewName>(store.config.appMode === "stencil"
   ? (store.config.stencilPadsTop.length || !store.config.stencilPadsBottom.length ? "stencil_top" : "stencil_bottom")
   : "insert");
 const loading = ref(false);
-const exporting = ref(false);
+const activeExportFormat = ref<'stl' | 'step' | null>(null);
+const exporting = computed(() => activeExportFormat.value !== null);
+const exportProgress = shallowRef<ModelExportProgress | null>(null);
 const { completed: refreshCompleted, complete: completeRefresh, reset: resetRefresh } = useCompletionFeedback();
 const { completed: exportCompleted, complete: completeExport, reset: resetExport } = useCompletionFeedback();
 const inspectionOpen = ref(false);
 // Keep the inspected board and viewport mounted after the first visit.
 const inspectionLoaded = ref(false);
+// User intent changes immediately; the visible surface follows only when drawable.
+const inspectionVisible = ref(false);
+const viewPending = computed(() => inspectionVisible.value !== inspectionOpen.value);
+const showViewWait = ref(false);
+watch(viewPending, (pending, _, cleanup) => {
+  showViewWait.value = false;
+  if (!pending) return;
+  const timer = setTimeout(() => { showViewWait.value = true; }, 240);
+  cleanup(() => clearTimeout(timer));
+});
 const generationTasks = new GenerationTasks(invoke);
 const errorMsg = ref<string | null>(null);
 
@@ -89,6 +107,9 @@ const hasData = computed(() =>
     ? store.config.stencilPadsTop.length > 0 || store.config.stencilPadsBottom.length > 0
     : store.config.pcbOutlinePoints.length > 0
 );
+const canUseModel = computed(() => hasData.value && !store.gerberImporting && !props.choosingPanel
+  && store.pythonDetected && !store.engineLoading);
+const exportDisabled = computed(() => exporting.value || !canUseModel.value);
 watch(hasData, ready => { if (!ready) inspectionOpen.value = false; });
 
 // three.js 引用(shallowRef 避免响应式包装影响性能)
@@ -107,12 +128,21 @@ function cancelCameraMotion() {
 }
 
 function onCameraInteraction() {
-  cancelCameraMotion();
-  selectedView.value = null;
+  if (!cameraMotion) return;
+  // Stop at the visible pose when the user takes over an in-flight transition.
+  cameraMotion = null;
+  onCameraChange();
 }
 
 function onCameraChange() {
-  if (!syncingCamera) invalidate();
+  if (syncingCamera) return;
+  const view = selectedView.value;
+  const cam = camera.value;
+  const ctrl = controls.value;
+  if (view && cam && ctrl && !cameraMotion && !matchesPreviewView(cameraOffset.copy(cam.position).sub(ctrl.target), view)) {
+    selectedView.value = null;
+  }
+  invalidate();
 }
 
 // Clear the controller's remaining inertia through its public API, then put
@@ -139,12 +169,14 @@ function settleCameraControls() {
 
 const currentMesh = shallowRef<THREE.Mesh | null>(null);
 let currentMeshPart: PartName | null = null;
+const displayedPartHashes = new Map<PartName, string>();
 let framedBoardOutline: typeof store.config.pcbOutlinePoints | null = null;
 const currentAssembly = shallowRef<THREE.Group | null>(null);
 const explosionPercent = ref(0);
 const showAssemblyPcb = ref(true);
 const showAssemblyStencil = ref(true);
 const inspectRelief = ref(false);
+let assemblyFading = false;
 const hasRelief = computed(() => activeReliefRegions(store.config).length > 0);
 watch(hasRelief, visible => { if (!visible) inspectRelief.value = false; });
 watch(inspectRelief, enabled => {
@@ -152,13 +184,45 @@ watch(inspectRelief, enabled => {
   invalidate();
 });
 watch([showAssemblyPcb, showAssemblyStencil], () => {
-  if (currentAssembly.value) setJigVisibility(currentAssembly.value, showAssemblyPcb.value, showAssemblyStencil.value);
+  if (!currentAssembly.value) return;
+  assemblyFading = animateJigVisibility(currentAssembly.value, showAssemblyPcb.value,
+    showAssemblyStencil.value, performance.now());
   invalidate();
 });
 let displayedExplosion = 0;
-let explosionFrameTime: number | null = null;
-watch(explosionPercent, () => invalidate());
+let explosionReset: { from: number; start: number; duration: number } | null = null;
+
+function scrubExplosion(value: number | number[]) {
+  if (typeof value !== 'number') return;
+  explosionReset = null;
+  explosionPercent.value = value;
+  invalidate();
+}
+
+function resetExplosion() {
+  if (explosionReset || explosionPercent.value === 0) return;
+  const from = explosionPercent.value;
+  explosionReset = { from, start: performance.now(), duration: 140 + from * 1.2 };
+  invalidate();
+}
 const hasPreview = computed(() => !!currentMesh.value || !!currentAssembly.value);
+// A parameter refresh keeps the displayed mesh usable until its replacement arrives.
+const showModelTools = computed(() => hasData.value && hasPreview.value);
+const sceneError = ref<string | null>(null);
+const previewState = computed(() => {
+  if (props.choosingPanel) return 'panel';
+  if (store.gerberImporting) return 'parsing';
+  if (!hasData.value) return 'empty';
+  if (store.engineLoading) return 'checking';
+  if (!store.pythonDetected) return 'unavailable';
+  if (sceneError.value || errorMsg.value) return 'error';
+  // The file is already imported during the debounce before the first mesh.
+  return loading.value || !hasPreview.value ? 'rendering' : 'ready';
+});
+function dropGerber(event: DragEvent) {
+  const file = event.dataTransfer?.files[0];
+  if (file && previewState.value === 'empty') emit('dropGerber', file);
+}
 const animationId = ref<number | null>(null);
 
 // STL 字节缓存:key 是 part 名称(insert/cover/base),value 是 {bytes, paramsHash, geometry?}
@@ -240,56 +304,103 @@ function initThreeScene() {
   renderer.value = r;
   controls.value = ctrl;
 
-  animate();
+  invalidate();
 }
 
 // 按需渲染:静止时不画也不跑 RAF(暂停动画循环,空闲零 CPU),
 // 场景变化(invalidate)或相机运动(update 返回 true)时再唤醒
 let needsRender = true;
 
+let parameterSettle: {
+  start: number;
+  materials: THREE.MeshStandardMaterial[];
+  opacity: (amount: number) => void;
+} | null = null;
+
+function settleParameterUpdate(materials: THREE.MeshStandardMaterial[], opacity: (amount: number) => void) {
+  if (!materials.length) return;
+  for (const material of materials) material.emissive.copy(material.color);
+  const start = performance.now();
+  parameterSettle = { start, materials, opacity };
+  advanceParameterSettle(start);
+}
+
+function finishParameterSettle() {
+  if (!parameterSettle) return;
+  for (const material of parameterSettle.materials) {
+    material.emissive.setHex(0);
+    material.emissiveIntensity = 1;
+  }
+  parameterSettle.opacity(1);
+  parameterSettle = null;
+  invalidate();
+}
+
+function advanceParameterSettle(now: number) {
+  if (!parameterSettle) return;
+  const elapsed = Math.max(0, now - parameterSettle.start);
+  if (elapsed >= 240) {
+    finishParameterSettle();
+  } else {
+    // The new geometry is already interactive. Only its surface settles;
+    // there's no overlapping stale mesh, camera jump, or extra CAD work.
+    const light = 0.3 * (1 - elapsed / 240) ** 2;
+    for (const material of parameterSettle.materials) material.emissiveIntensity = light;
+    parameterSettle.opacity(1 - 0.14 * (1 - Math.min(1, elapsed / 140)) ** 2);
+  }
+  needsRender = true;
+}
+
 function invalidate() {
   if (disposed) return;
   needsRender = true;
-  if (animationId.value === null) animate();
+  if (animationId.value === null) animationId.value = requestAnimationFrame(animate);
 }
 
-function animate() {
-  if (disposed) return;
-  animationId.value = requestAnimationFrame(animate);
-  if (!scene.value || !camera.value || !renderer.value) return;
-  const now = performance.now();
+function animate(now: number) {
+  if (disposed || !scene.value || !camera.value || !renderer.value) {
+    animationId.value = null;
+    return;
+  }
   if (cameraMotion && controls.value) {
     const continuing = cameraMotion.sample(now, cameraOffset, controls.value.target);
     camera.value.position.copy(controls.value.target).add(cameraOffset);
     if (!continuing) cameraMotion = null;
     needsRender = true;
   }
-  const targetExplosion = explosionPercent.value / 100;
-  let exploding = false;
-  if (currentAssembly.value && displayedExplosion !== targetExplosion) {
-    const dt = explosionFrameTime === null ? 16 : Math.min(now - explosionFrameTime, 50);
-    displayedExplosion += (targetExplosion - displayedExplosion) * (1 - Math.exp(-dt / 65));
-    if (Math.abs(displayedExplosion - targetExplosion) < 0.0005) displayedExplosion = targetExplosion;
+  if (explosionReset) {
+    const { from, start, duration } = explosionReset;
+    const t = currentAssembly.value && activePart.value === 'assembly' && !inspectionOpen.value
+      ? THREE.MathUtils.clamp((now - start) / duration, 0, 1) : 1;
+    explosionPercent.value = from * (1 - t) ** 2 * (1 + 2 * t);
+    if (t === 1) explosionReset = null;
+  }
+  if (currentAssembly.value && displayedExplosion !== explosionPercent.value / 100) {
+    displayedExplosion = explosionPercent.value / 100;
     setJigExplosion(currentAssembly.value, displayedExplosion);
     needsRender = true;
-    exploding = displayedExplosion !== targetExplosion;
   }
-  explosionFrameTime = exploding ? now : null;
+  if (assemblyFading && currentAssembly.value) {
+    assemblyFading = stepJigVisibility(currentAssembly.value, now);
+    needsRender = true;
+  }
+  advanceParameterSettle(now);
   const moved = controls.value ? controls.value.update() : false;
   if (moved || needsRender) {
+    needsRender = false;
     renderer.value.render(scene.value, camera.value);
     // 相机或场景变化后重投影测量标签,保证文字始终贴住测量线
     if (measureTags.value.length) updateMeasureTags();
-    needsRender = false;
   }
-  // 完全静止 → 暂停循环,等待下一次 invalidate 唤醒
-  if (!moved && !needsRender && !exploding && !cameraMotion && animationId.value !== null) {
-    cancelAnimationFrame(animationId.value);
-    animationId.value = null;
-  }
+  // controls.update() can invalidate this frame; schedule only once, after drawing.
+  animationId.value = moved || needsRender || explosionReset || cameraMotion || assemblyFading || parameterSettle
+    ? requestAnimationFrame(animate) : null;
 }
 
 function disposeMesh() {
+  parameterSettle = null; // Its materials are being disposed below.
+  assemblyFading = false;
+  displayedPartHashes.clear();
   clearMeasure();
   resetTopology();
   if (currentAssembly.value) {
@@ -317,7 +428,7 @@ function disposeMesh() {
 // 渲染序号:切 tab / 参数变化后,丢弃仍在途的旧请求结果,防止旧模型覆盖新 tab
 let renderSeq = 0;
 
-async function renderCurrent(force = false): Promise<boolean> {
+async function renderCurrent(force = false, parameterUpdate = false): Promise<boolean> {
   if (disposed || inspectionOpen.value) return false;
   // A tab switch or return to 3D renders immediately. Consume an older
   // parameter debounce so it cannot cancel and restart this same request.
@@ -325,9 +436,7 @@ async function renderCurrent(force = false): Promise<boolean> {
   renderTimer = null;
   cancelPreviewTasks(["preview"]);
   if (!scene.value || !store.pythonDetected) {
-    if (!store.pythonDetected) {
-      errorMsg.value = t("preview.noPythonRender");
-    }
+    errorMsg.value = null; // The engine status overlay owns checking and failure feedback.
     return false;
   }
 
@@ -353,7 +462,7 @@ async function renderCurrent(force = false): Promise<boolean> {
     // Keep its material, topology and measurements until its own geometry changes.
     if (currentMeshPart !== partName || currentMesh.value?.geometry !== geometry || currentAssembly.value
       || framedBoardOutline !== store.config.pcbOutlinePoints) {
-      applyStlToMesh(geometry);
+      applyStlToMesh(geometry, cached.paramsHash, parameterUpdate);
     }
     // 接管 loading:本次渲染已同步完成,而在途的旧请求(seq 已过期)
     // 的 finally 不会清 loading —— 不接管会永久转圈
@@ -368,7 +477,7 @@ async function renderCurrent(force = false): Promise<boolean> {
   let rendered = false;
 
   try {
-    const parts: PartName[] = partName === "assembly" ? ["insert", "base", "cover"] : [partName];
+    const parts = partName === "assembly" ? JIG_PARTS : [partName];
     const params = buildScadParams();
     // Sequential generation keeps the Python worker responsive and shares any
     // in-flight preload rather than generating the same part a second time.
@@ -377,9 +486,10 @@ async function renderCurrent(force = false): Promise<boolean> {
       if (!canCacheResult(hash, generation) || seq !== renderSeq || activePart.value !== partName) return false;
     }
     if (partName === "assembly") {
-      applyAssembly();
+      applyAssembly(parameterUpdate);
     } else {
-      applyStlToMesh(getOrParseGeometry(partName, stlCache.value[partName].bytes, partHash(partName, params)));
+      const { bytes, paramsHash: partKey } = stlCache.value[partName];
+      applyStlToMesh(getOrParseGeometry(partName, bytes, partKey), partKey, parameterUpdate);
     }
     rendered = true;
   } catch (e) {
@@ -431,7 +541,7 @@ function ensurePart(part: PartName, generation: number, params: ReturnType<typeo
   if (pending) return pending.promise;
   if (!force && stlCache.value[part]?.paramsHash === hash) return Promise.resolve();
   const kind = background ? "preload" : "preview";
-  const request = generationTasks.run<ArrayBuffer>("generate_stl", { params, part: PART_TO_RUST[part] }, kind).then(bytes => {
+  const request = generationTasks.run<ArrayBuffer>("generate_stl", { params: previewPartParams(params, part), part: PART_TO_RUST[part] }, kind).then(bytes => {
     if (!disposed && generation === cacheGeneration && store.pythonDetected && hasData.value && partHash(part) === hash) cachePart(part, bytes, hash, force);
   }).finally(() => {
     if (pendingParts.get(key)?.promise === request) pendingParts.delete(key);
@@ -472,7 +582,7 @@ function framePreviewObject(object: THREE.Object3D, resetView = false, smooth = 
   framedBoardOutline = store.config.pcbOutlinePoints;
 }
 
-function applyAssembly() {
+function applyAssembly(parameterUpdate: boolean) {
   if (!pcbEnvironment && renderer.value) {
     const room = new RoomEnvironment();
     const generator = new THREE.PMREMGenerator(renderer.value);
@@ -489,15 +599,20 @@ function applyAssembly() {
     screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture, palette: modelPalette.value });
   const sameBoard = framedBoardOutline === store.config.pcbOutlinePoints;
   const smoothFraming = sameBoard && !!(currentMesh.value || currentAssembly.value);
-  const entering = !currentAssembly.value || !sameBoard;
+  const previous = sameBoard ? currentAssembly.value : null;
+  const entering = !previous;
+  const changed = parameterUpdate && previous && !store.gerberImporting
+    ? JIG_PARTS.filter(part => displayedPartHashes.get(part) !== stlCache.value[part].paramsHash) : [];
+  const continueFade = previous ? inheritJigVisibility(group, previous) : false;
+  if (!previous) setJigVisibility(group, showAssemblyPcb.value, showAssemblyStencil.value);
+  setJigReliefInspection(group, inspectRelief.value);
   setMeasureMode(false);
   disposeMesh();
   scene.value?.add(group);
   currentAssembly.value = group;
-  setJigVisibility(group, showAssemblyPcb.value, showAssemblyStencil.value);
-  setJigReliefInspection(group, inspectRelief.value);
+  assemblyFading = continueFade;
+  for (const part of JIG_PARTS) displayedPartHashes.set(part, stlCache.value[part].paramsHash);
   displayedExplosion = explosionPercent.value / 100;
-  explosionFrameTime = null;
   if (entering && camera.value && controls.value) {
     // Frame the full travel once, so dragging never moves the camera or clips
     // the raised screws. Keep the user's orbit/zoom on parameter refreshes.
@@ -505,15 +620,23 @@ function applyAssembly() {
     framePreviewObject(group, true, smoothFraming);
   }
   setJigExplosion(group, displayedExplosion);
+  if (changed.length) {
+    const materials = changed.map(part => (group.getObjectByName(part) as THREE.Mesh<
+      THREE.BufferGeometry, THREE.MeshStandardMaterial>).material);
+    settleParameterUpdate(materials, amount => setJigPartsOpacity(group, changed, amount));
+  }
   invalidate();
 }
 
 // 把 geometry 应用到 mesh(独立函数,缓存命中时直接用)
-function applyStlToMesh(geometry: THREE.BufferGeometry) {
+function applyStlToMesh(geometry: THREE.BufferGeometry, hash: string, parameterUpdate: boolean) {
   const smoothFraming = framedBoardOutline === store.config.pcbOutlinePoints
     && !!(currentMesh.value || currentAssembly.value);
   const entering = !currentMesh.value || currentMeshPart !== activePart.value
     || framedBoardOutline !== store.config.pcbOutlinePoints;
+  const part = activePart.value;
+  const changed = parameterUpdate && !entering && !store.gerberImporting && part !== 'assembly'
+    && displayedPartHashes.get(part) !== hash;
   // Single parts, assembly materials, and their legends share one palette.
   const palette = modelPalette.value;
   const color = activePart.value === 'assembly' ? palette.assembly : palette.parts[activePart.value];
@@ -536,8 +659,20 @@ function applyStlToMesh(geometry: THREE.BufferGeometry) {
   disposeMesh();
   if (scene.value) scene.value.add(mesh);
   currentMesh.value = mesh;
-  currentMeshPart = activePart.value === 'assembly' ? null : activePart.value;
+  currentMeshPart = part === 'assembly' ? null : part;
+  if (currentMeshPart) displayedPartHashes.set(currentMeshPart, hash);
   if (entering) framePreviewObject(mesh, false, smoothFraming);
+  if (changed) {
+    settleParameterUpdate([material], amount => {
+      const transparent = amount < 1;
+      if (material.transparent !== transparent) {
+        material.transparent = transparent;
+        material.needsUpdate = true;
+      }
+      material.opacity = amount;
+      material.depthWrite = !transparent;
+    });
+  }
   resetTopology(); // 新几何 → 拓扑缓存与测量状态作废
   invalidate();
 }
@@ -592,6 +727,7 @@ interface MeasureLabel {
 }
 
 const measureMode = ref(false);
+const measureButton = ref<HTMLButtonElement | null>(null);
 // 两个选中特征 + 各自的面板行(类型徽标 + 几何信息)
 const selA = shallowRef<MeasureFeature | null>(null);
 const selB = shallowRef<MeasureFeature | null>(null);
@@ -1034,7 +1170,6 @@ function clearMeasure() {
 function setMeasureMode(on: boolean) {
   clearMeasure();
   measureMode.value = on;
-  if (on) errorMsg.value = null;
 }
 
 // 面板 ✕:删除第 1/第 2 个选中对象(删第 1 个时把第 2 个提升上来)
@@ -1556,6 +1691,9 @@ function clearMeasureHover() {
 
 function onCanvasPointerMove(e: PointerEvent) {
   if (!measureMode.value || disposed || inspectionOpen.value) return;
+  // Returning an orbit drag to its starting pixel must not turn it back into a click.
+  if (pointerDownAt && (pointerDownAt.id !== e.pointerId || e.buttons !== 1 ||
+    Math.hypot(e.clientX - pointerDownAt.x, e.clientY - pointerDownAt.y) > 5)) pointerDownAt = null;
   // Pressed pointers belong to orbit/pan, never to deferred hover picking.
   if (e.buttons !== 0 || pointerDownAt) {
     clearMeasureHover();
@@ -1573,11 +1711,12 @@ function onCanvasPointerMove(e: PointerEvent) {
 }
 
 // 区分「点击取点」与「拖拽旋转」:位移超过 5px 视为旋转
-let pointerDownAt: { x: number; y: number } | null = null;
+let pointerDownAt: { x: number; y: number; id: number } | null = null;
 
 function onCanvasPointerDown(e: PointerEvent) {
   clearMeasureHover();
-  pointerDownAt = { x: e.clientX, y: e.clientY };
+  pointerDownAt = measureMode.value && !inspectionOpen.value && e.isPrimary && e.button === 0 && e.buttons === 1
+    ? { x: e.clientX, y: e.clientY, id: e.pointerId } : null;
 }
 
 function onCanvasPointerLeave() {
@@ -1588,9 +1727,9 @@ function onCanvasPointerLeave() {
 function onCanvasPointerUp(e: PointerEvent) {
   const start = pointerDownAt;
   pointerDownAt = null;
-  if (!measureMode.value || !start) return;
+  if (!measureMode.value || !start || start.id !== e.pointerId) return;
   // 仅左键取点:右键(平移)/中键(缩放)的点击不算测量
-  if (e.button !== 0) return;
+  if (e.button !== 0 || e.buttons !== 0) return;
   if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 5) return;
 
   // 点击时重新拾取一次(比依赖 hover 更可靠,比如鼠标静止后场景变了)
@@ -1600,7 +1739,11 @@ function onCanvasPointerUp(e: PointerEvent) {
 }
 
 function onMeasureKeyDown(e: KeyboardEvent) {
-  if (e.key === "Escape" && measureMode.value) setMeasureMode(false);
+  if (e.key !== 'Escape' || e.defaultPrevented || inspectionOpen.value || !measureMode.value) return;
+  const target = e.target instanceof Element ? e.target : null;
+  if (target?.closest('[role="dialog"], [role="alertdialog"], dialog')) return;
+  if (target?.closest('.measure-panel')) measureButton.value?.focus({ preventScroll: true });
+  setMeasureMode(false);
 }
 
 // 防抖渲染(参数快速调整时)
@@ -1611,13 +1754,14 @@ function scheduleRender() {
   if (inspectionOpen.value) return;
   renderTimer = window.setTimeout(() => {
     renderTimer = null;
-    renderCurrent();
+    void renderCurrent(false, true);
   }, 300);
 }
 
 // 切换部件时立即渲染
 watch(activePart, () => {
   cancelCameraMotion();
+  finishParameterSettle();
   resetRefresh();
   setMeasureMode(false);
   renderCurrent();
@@ -1689,6 +1833,7 @@ watch(
 // A skin change is visual only: keep geometry, camera, selection, and the
 // exploded positions intact, with no CAD generation or texture recreation.
 watch(() => ui.skin, () => {
+  finishParameterSettle();
   const palette = modelPalette.value;
   const material = currentMesh.value?.material;
   if (material instanceof THREE.MeshStandardMaterial) {
@@ -1754,9 +1899,11 @@ async function preloadAllParts() {
 // 手动刷新:清缓存 + 重新生成所有 3 个部件
 const refreshing = ref(false);
 const refreshState = computed(() => refreshing.value ? 'busy' : refreshCompleted.value ? 'success' : 'idle');
-const exportState = computed(() => exporting.value ? 'busy' : exportCompleted.value ? 'success' : 'idle');
+const exportState = computed(() => exporting.value ? 'busy'
+  : exportCompleted.value && !workSession.hasUnexportedChanges ? 'success' : 'idle');
 async function refreshAll() {
-  if (disposed || refreshing.value || inspectionOpen.value || store.gerberImporting || !hasData.value || !store.pythonDetected) return;
+  if (disposed || refreshing.value || inspectionOpen.value || !canUseModel.value) return;
+  finishParameterSettle();
   resetRefresh();
   refreshing.value = true;
   const generation = ++cacheGeneration;
@@ -1788,6 +1935,7 @@ async function refreshAll() {
 
 watch(() => store.gerberImporting, importing => {
   if (importing) {
+    finishParameterSettle();
     resetRefresh();
     resetExport();
   }
@@ -1798,12 +1946,18 @@ watch(inspectionOpen, resetRefresh);
 // 体积由 Python 端 build123d 精确计算;克重按 PLA 密度 1.24 g/cm³ 估算
 const PLA_DENSITY_G_CM3 = 1.24;
 const showMetrics = ref(false);
+const metricsButton = ref<HTMLButtonElement | null>(null);
+watch(showModelTools, visible => {
+  if (visible) return;
+  if (measureMode.value) setMeasureMode(false);
+  showMetrics.value = false;
+});
 const printMetrics = usePartMetrics(
   () => store.pythonDetected && hasData.value
     ? { hash: paramsHash(), params: buildScadParams(), parts: [...allParts.value] }
     : null,
   hash => store.pythonDetected && hasData.value && paramsHash() === hash,
-  (part, params, signal) => generationTasks.run<PartMetrics>("part_metrics", { params, part: PART_TO_RUST[part as PartName] }, "metrics", signal),
+  (part, params, signal) => generationTasks.run<PartMetrics>("part_metrics", { params: previewPartParams(params, part), part: PART_TO_RUST[part as PartName] }, "metrics", signal),
   (part, params) => partHash(part, params),
 );
 const { metrics, loading: metricsLoading, load: loadMetrics } = printMetrics;
@@ -1838,6 +1992,7 @@ watch(inspectionOpen, visible => {
   loading.value = false;
   if (visible) {
     cancelCameraMotion();
+    finishParameterSettle();
     onCanvasPointerLeave();
     if (renderTimer !== null) window.clearTimeout(renderTimer);
     if (preloadTimer !== null) window.clearTimeout(preloadTimer);
@@ -1851,13 +2006,25 @@ watch(inspectionOpen, visible => {
     scheduleMetrics();
   }
 }, { flush: "post" });
+watch([inspectionOpen, previewState, appMode, hasData], ([requested, state, mode, hasBoard]) => {
+  if (!hasBoard || mode !== 'stencil' || (!requested && state !== 'rendering')) inspectionVisible.value = false;
+}, { flush: 'post' });
+function presentInspection() {
+  if (inspectionOpen.value && hasData.value && appMode.value === 'stencil') inspectionVisible.value = true;
+}
+
 
 function massGrams(volMm3: number): number {
   return (volMm3 / 1000) * PLA_DENSITY_G_CM3;
 }
 
 function toggleMetrics() {
-  showMetrics.value = !showMetrics.value;
+  if (showMetrics.value || (showModelTools.value && canUseModel.value)) showMetrics.value = !showMetrics.value;
+}
+
+function closeMetrics() {
+  showMetrics.value = false;
+  metricsButton.value?.focus({ preventScroll: true });
 }
 
 const metricsRows = computed(() =>
@@ -1916,7 +2083,8 @@ function onResize() {
 let stopPreviewResize: (() => void) | null = null;
 
 onMounted(() => {
-  initThreeScene();
+  try { initThreeScene(); }
+  catch (e) { sceneError.value = e instanceof Error ? e.message : String(e); }
   window.addEventListener("keydown", onMeasureKeyDown);
   if (canvasEl.value?.parentElement) {
     stopPreviewResize = observePreviewResize(canvasEl.value.parentElement, onResize);
@@ -2011,10 +2179,29 @@ async function ensureOutlineReviewed() {
   return result === 'ready';
 }
 
-async function chooseExportProjectName(): Promise<string | null> {
+function currentExportPlan(fmt: 'stl' | 'step') {
+  return modelExportPlan(appMode.value, fmt, !!store.config.stencilPadsTop.length, !!store.config.stencilPadsBottom.length);
+}
+
+const exportPartLabelKeys: Record<PartName, string> = {
+  base: 'preview.base', insert: 'preview.insert', cover: 'preview.cover',
+  stencil_top: 'preview.stencilTop', stencil_bottom: 'preview.stencilBottom',
+};
+
+async function chooseExportProjectName(fmt: 'stl' | 'step', parts: readonly ModelExportPart[]): Promise<string | null> {
+  const message = h('div', [
+    h('div', { class: 'export-scope' }, [
+      h('div', { class: 'export-scope-heading' }, [
+        h('strong', t('preview.exportScopeLabel')),
+        h('span', { class: 'export-scope-count' }, t('preview.exportScopeCount', { count: parts.length, format: fmt.toUpperCase() })),
+      ]),
+      h('ul', { class: 'export-scope-parts', role: 'list' }, parts.map(({ name }) => h('li', { key: name }, t(exportPartLabelKeys[name])))),
+    ]),
+    h('p', { class: 'export-name-note' }, t('preview.exportNameMessage')),
+  ]);
   try {
     const { value } = await ElMessageBox.prompt(
-      t("preview.exportNameMessage"),
+      message,
       t("preview.exportNameTitle"),
       {
         inputValue: defaultExportName(store.gerberSourceFilename ?? store.config.gerberFilename),
@@ -2041,14 +2228,24 @@ async function chooseExportProjectName(): Promise<string | null> {
   }
 }
 
-const exportPartLabelKeys: Record<PartName, string> = {
-  base: 'preview.base', insert: 'preview.insert', cover: 'preview.cover',
-  stencil_top: 'preview.stencilTop', stencil_bottom: 'preview.stencilBottom',
-};
+const exportCount = computed(() => {
+  const step = exportProgress.value;
+  return step?.phase === 'write' ? `${step.current}/${step.total}` : '';
+});
+const exportBusyText = computed(() => {
+  const step = exportProgress.value;
+  return step?.phase === 'write' ? `${exportCount.value} · ${t(exportPartLabelKeys[step.part])}`
+    : t(step?.phase === 'commit' ? 'preview.finalizingExport' : 'preview.exporting');
+});
+const exportButtonLabel = computed(() => {
+  if (activeExportFormat.value) return `${activeExportFormat.value.toUpperCase()} · ${exportBusyText.value}`;
+  const action = `${t('preview.export')} ${ui.defaultExportFormat.toUpperCase()}`;
+  return exportState.value === 'success' ? `${t('preview.exportComplete')} · ${action}` : action;
+});
 
 // 导出 STL / STEP:先核对外形与钢网尺寸,再选目录并完整生成文件。
 async function exportAll(fmt: "stl" | "step") {
-  if (exporting.value || disposed || store.gerberImporting || !hasData.value) return;
+  if (disposed || exportDisabled.value) return;
   const reliefReady = () => {
     if (appMode.value === 'jig' && store.config.componentReliefEnabled && !hasRelief.value) {
       ElMessage.warning(t('relief.regionsRequired'));
@@ -2057,12 +2254,8 @@ async function exportAll(fmt: "stl" | "step") {
     return true;
   };
   if (!reliefReady()) return;
-  if (!store.pythonDetected) {
-    ElMessage.error(t("preview.noPythonExport"));
-    return;
-  }
 
-  exporting.value = true;
+  activeExportFormat.value = fmt;
   resetExport();
   workSession.exporting = true;
   try {
@@ -2074,12 +2267,14 @@ async function exportAll(fmt: "stl" | "step") {
       title: fmt === "stl" ? t("preview.exportStl") : t("preview.exportStep"),
     });
     if (!parentDir || Array.isArray(parentDir)) return;
-    const projectName = await chooseExportProjectName();
+    const board = store.config.pcbOutlinePoints;
+    const parts = currentExportPlan(fmt);
+    const projectName = await chooseExportProjectName(fmt, parts);
     if (!projectName || disposed) return;
     if (!await ensureOutlineReviewed()) return;
     if (!await ensureStencilSizeReviewed()) return;
 
-    if (disposed) return;
+    if (disposed || !canUseModel.value) return;
     if (!reliefReady()) return;
     const readiness = exportReadiness(store, hasData.value);
     if (readiness !== 'ready') {
@@ -2088,43 +2283,33 @@ async function exportAll(fmt: "stl" | "step") {
       return;
     }
 
+    const latest = currentExportPlan(fmt);
+    if (store.config.pcbOutlinePoints !== board || latest.length !== parts.length || latest.some((p, i) => p.name !== parts[i].name)) {
+      ElMessage.warning(t('preview.exportScopeChanged'));
+      return;
+    }
     const params: ReturnType<typeof buildScadParams> = JSON.parse(JSON.stringify(buildScadParams()));
     const exportSnapshot = workSession.captureExport();
-    const mode = appMode.value;
-    const hasTop = store.config.stencilPadsTop.length > 0;
-    const hasBottom = store.config.stencilPadsBottom.length > 0;
-    // 钢网模式:只导出导入了焊盘的面(都没导入时导出顶层占位)
-    const stencilParts: Array<{ name: PartName; rust: string; filename: string }> = [];
-    if (hasTop || !hasBottom) {
-      stencilParts.push({ name: "stencil_top", rust: "stencil_top", filename: `stencil_top.${fmt}` });
-    }
-    if (hasBottom) {
-      stencilParts.push({ name: "stencil_bottom", rust: "stencil_bottom", filename: `stencil_bottom.${fmt}` });
-    }
-    const parts: Array<{ name: PartName; rust: string; filename: string }> =
-      mode === "stencil"
-        ? stencilParts
-        : [
-            { name: "base", rust: "base", filename: `jig_base.${fmt}` },
-            { name: "insert", rust: "pcb_insert", filename: `jig_pcb_insert.${fmt}` },
-            { name: "cover", rust: "top_cover", filename: `jig_top_cover.${fmt}` },
-          ];
-
     const exportParts = parts.map(p => {
       const cached = fmt === "stl" ? stlCache.value[p.name] : undefined;
       return { ...p, ...(cached && cached.paramsHash === partHash(p.name, params) ? { bytes: cached.bytes } : {}) };
     });
     const exportDir = await exportModels({ invoke, parentDir, name: projectName, params,
-      parts: exportParts, active: () => !disposed });
+      parts: exportParts, active: () => !disposed,
+      onProgress: step => { exportProgress.value = step; } });
 
     workSession.markExported(exportSnapshot);
-    if (!disposed && !store.gerberImporting && !workSession.hasUnexportedChanges) completeExport();
-    const n = parts.length;
-    ElMessage.success(
-      fmt === "stl"
-        ? t("preview.exported", { n, dir: exportDir })
-        : t("preview.exportedStep", { n, dir: exportDir })
-    );
+    if (!disposed && containerEl.value) {
+      // The files exist even if the user has already moved on to a newer edit.
+      // Only the current snapshot earns the button's completed state.
+      if (!store.gerberImporting && !workSession.hasUnexportedChanges) completeExport();
+      ElMessage.success({
+        appendTo: containerEl.value,
+        customClass: "model-export-success",
+        message: t(fmt === "stl" ? "preview.exported" : "preview.exportedStep", { n: parts.length, dir: exportDir }),
+        duration: 2800,
+      });
+    }
   } catch (e) {
     if (e instanceof ModelExportError) {
       if (e.cancelled && !e.cleanupError) return;
@@ -2139,7 +2324,8 @@ async function exportAll(fmt: "stl" | "step") {
       ElMessage.error(t("preview.exportFailed", { msg: e instanceof Error ? e.message : String(e) }));
     }
   } finally {
-    exporting.value = false;
+    exportProgress.value = null;
+    activeExportFormat.value = null;
     workSession.exporting = false;
   }
 }
@@ -2184,9 +2370,8 @@ watch(partTabs, (tabs) => {
 <template>
   <div class="preview-wrapper" :class="{ 'is-dark': ui.resolvedTheme === 'dark' }" :style="paletteStyles">
     <div class="preview-header">
-      <div class="preview-modes" role="group" :aria-label="t('preview.viewModes')">
-        <div class="tab-group" role="group" :aria-label="t('preview.singleParts')">
-          <SlidingIndicator />
+      <div class="preview-modes" data-mode-motion="tools" role="group" :aria-label="t('preview.viewModes')">
+        <LiquidSegmentTrack class="tab-group" :aria-label="t('preview.singleParts')">
           <button
             v-for="tab in singlePartTabs"
             :key="tab.name"
@@ -2198,32 +2383,16 @@ watch(partTabs, (tabs) => {
             <span class="tab-dot" :style="{ background: tab.color }" />
             {{ tab.label }}
           </button>
-        </div>
-        <template v-if="appMode === 'jig'">
-          <span class="mode-divider" aria-hidden="true" />
-          <button class="assembly-mode-btn" :class="{ active: activePart === 'assembly' }"
-            :aria-pressed="activePart === 'assembly'" @click="activePart = 'assembly'">
-            <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true">
-              <path d="M9 2.5l6.5 3.6L9 9.7 2.5 6.1 9 2.5ZM2.5 9L9 12.6 15.5 9M2.5 11.9L9 15.5l6.5-3.6"
-                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            {{ t('preview.assembly') }}
-          </button>
-        </template>
-        <template v-if="appMode === 'stencil'">
-          <span class="mode-divider" aria-hidden="true" />
-          <button class="assembly-mode-btn" :class="{ active: inspectionOpen }" :aria-pressed="inspectionOpen"
-            :disabled="!hasData" @click="inspectionOpen = !inspectionOpen">
-            <svg viewBox="0 0 18 18" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round">
-              <rect x="2.5" y="2.5" width="13" height="13" rx="2" /><path d="M6 6h2v2H6zM10 6h2v2h-2zM6 10h2v2H6zM10 10h2v2h-2z" />
-            </svg>
-            {{ t(inspectionOpen ? 'inspection.back3d' : 'inspection.title') }}
-          </button>
-        </template>
+        </LiquidSegmentTrack>
+        <span class="mode-divider" aria-hidden="true" />
+        <PreviewModeAction v-if="appMode === 'jig'" kind="assembly" :active="activePart === 'assembly'"
+          @activate="activePart = 'assembly'" />
+        <PreviewModeAction v-else kind="inspection" :active="inspectionOpen" :disabled="!inspectionOpen && !canUseModel"
+          @activate="inspectionOpen = !inspectionOpen" />
       </div>
       <div class="header-actions">
-        <button v-if="!inspectionOpen" class="action-btn" :class="{ 'is-complete': refreshCompleted }"
-          @click="refreshAll" :disabled="refreshing || store.gerberImporting || !hasData || !store.pythonDetected"
+        <button :class="{ 'view-action-hidden': inspectionOpen, 'is-complete': refreshCompleted }" class="action-btn"
+          @click="refreshAll" :disabled="refreshing || !canUseModel"
           :aria-busy="refreshing" :aria-label="t('preview.refresh')">
           <ActionStatusIcon :state="refreshState">
             <svg viewBox="0 0 16 16" width="14" height="14">
@@ -2237,18 +2406,18 @@ watch(partTabs, (tabs) => {
             <span :class="{ 'is-visible': refreshState === 'success' }">{{ t('preview.refreshed') }}</span>
           </span>
         </button>
-        <button v-if="!inspectionOpen" class="action-btn" :class="{ active: showMetrics }" @click="toggleMetrics" v-app-tooltip="t('preview.printInfo')">
+        <button ref="metricsButton" :class="{ 'view-action-hidden': inspectionOpen, active: showMetrics }" class="action-btn" :aria-pressed="showMetrics" :disabled="!showMetrics && (!showModelTools || !canUseModel)" @click="toggleMetrics" v-app-tooltip="t('preview.printInfo')">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M8 1.5l5.5 3.1v6.8L8 14.5l-5.5-3.1V4.6zM8 8l5.5-3.1M8 8v6.5M8 8L2.5 4.9"
               fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
           </svg>
           {{ t('preview.printInfo') }}
         </button>
-        <div class="export-actions" :class="{ 'is-disabled': exporting || store.gerberImporting || !hasData, 'is-complete': exportCompleted }" :aria-busy="exporting">
+        <div class="export-actions" :class="{ 'is-disabled': exportDisabled, 'is-complete': exportState === 'success' }" :aria-busy="exporting">
           <button class="action-btn primary export-default"
-            :disabled="exporting || store.gerberImporting || !hasData"
-            v-app-tooltip="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
-            :aria-label="t('preview.export') + ' ' + ui.defaultExportFormat.toUpperCase()"
+            :disabled="exportDisabled"
+            v-app-tooltip="exportButtonLabel"
+            :aria-label="exportButtonLabel"
             @click="exportAll(ui.defaultExportFormat)">
             <ActionStatusIcon :state="exportState">
               <svg viewBox="0 0 16 16" width="14" height="14">
@@ -2258,30 +2427,31 @@ watch(partTabs, (tabs) => {
             </ActionStatusIcon>
             <span class="action-label" aria-hidden="true">
               <span :class="{ 'is-visible': exportState === 'idle' }">{{ t('preview.export') }}</span>
-              <span :class="{ 'is-visible': exportState === 'busy' }">{{ t('preview.exporting') }}</span>
+              <span :class="{ 'is-visible': exportState === 'busy' && exportProgress?.phase !== 'commit' }">{{ t('preview.exporting') }}</span>
+              <span :class="{ 'is-visible': exportState === 'busy' && exportProgress?.phase === 'commit' }">{{ t('preview.finalizingExport') }}</span>
               <span :class="{ 'is-visible': exportState === 'success' }">{{ t('preview.exportComplete') }}</span>
             </span>
           </button>
-          <el-dropdown trigger="click" @command="(f: string | number | object) => exportAll(f as 'stl' | 'step')">
-            <button class="action-btn primary export-format-toggle" :disabled="exporting || store.gerberImporting || !hasData" v-app-tooltip="t('preview.exportOptions')" :aria-label="t('preview.exportOptions')">
+          <el-dropdown trigger="click" :disabled="exportDisabled" @command="(f: string | number | object) => exportAll(f as 'stl' | 'step')">
+            <button class="action-btn primary export-format-toggle" :disabled="exportDisabled" v-app-tooltip="t('preview.exportOptions')" :aria-label="t('preview.exportOptions')">
               <svg class="caret" viewBox="0 0 16 16" width="10" height="10">
                 <path d="M4 6.5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="stl" :disabled="exporting || store.gerberImporting || !hasData">{{ t('preview.exportStl') }}</el-dropdown-item>
-              <el-dropdown-item command="step" :disabled="exporting || store.gerberImporting || !hasData">{{ t('preview.exportStep') }}</el-dropdown-item>
+              <el-dropdown-item command="stl" :disabled="exportDisabled">{{ t('preview.exportStl') }}</el-dropdown-item>
+              <el-dropdown-item command="step" :disabled="exportDisabled">{{ t('preview.exportStep') }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
           </el-dropdown>
         </div>
-        <span class="action-announcement" role="status">{{ refreshCompleted ? t('preview.refreshed') : '' }}</span>
+        <span class="action-announcement" role="status">{{ exportProgress ? exportButtonLabel : refreshCompleted ? t('preview.refreshed') : '' }}</span>
       </div>
     </div>
 
     <div ref="containerEl" class="canvas-container" :class="{ measuring: measureMode, 'has-preview': hasPreview }">
-      <div v-show="!inspectionOpen" class="scene-layer">
+      <div :inert="inspectionOpen || inspectionVisible" class="scene-layer" :data-mode-motion="!inspectionOpen && previewState === 'ready' ? 'scene' : undefined">
       <canvas
         ref="canvasEl"
         @pointerdown="onCanvasPointerDown"
@@ -2301,50 +2471,56 @@ watch(partTabs, (tabs) => {
         >{{ tag.text }}</span>
       </div>
       </div>
-      <div v-show="!inspectionOpen" class="preview-overlays">
-      <div class="viewport-tools" role="group" :aria-label="t('preview.viewControls')" @pointerdown.stop @wheel.stop @dblclick.stop>
-        <!-- 视图快捷切换 -->
-        <div class="view-btns">
-          <SlidingIndicator />
-          <button class="view-btn" v-app-tooltip="t('preview.viewFront')" :aria-label="t('preview.viewFront')" :aria-pressed="selectedView === 'front'" @click="setView('front')">
+      <div :inert="inspectionOpen || inspectionVisible" class="preview-overlays">
+      <div v-if="showModelTools" class="viewport-dock">
+        <div class="viewport-tools" role="group" :aria-label="t('preview.viewControls')" @pointerdown.stop @wheel.stop @dblclick.stop>
+          <!-- 视图快捷切换 -->
+          <div class="view-btns">
+            <SlidingIndicator />
+            <button class="view-btn" v-app-tooltip="t('preview.viewFront')" :aria-label="t('preview.viewFront')" :aria-pressed="selectedView === 'front'" @click="setView('front')">
+              <svg viewBox="0 0 16 16" width="14" height="14">
+                <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4" />
+              </svg>
+            </button>
+            <button class="view-btn" v-app-tooltip="t('preview.viewTop')" :aria-label="t('preview.viewTop')" :aria-pressed="selectedView === 'top'" @click="setView('top')">
+              <svg viewBox="0 0 16 16" width="14" height="14">
+                <path d="M8 3.5l4.5 4.5L8 12.5 3.5 8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <button class="view-btn" v-app-tooltip="t('preview.viewIso')" :aria-label="t('preview.viewIso')" :aria-pressed="selectedView === 'iso'" @click="setView('iso')">
+              <svg viewBox="0 0 16 16" width="14" height="14">
+                <path d="M8 2l5.2 3v6L8 14l-5.2-3V5zM8 8l5.2-3M8 8L2.8 5M8 8v6"
+                  fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </div>
+          <span class="viewport-tool-divider" aria-hidden="true" />
+          <button ref="measureButton" class="action-btn" :aria-pressed="measureMode" :class="{ active: measureMode }" :disabled="activePart === 'assembly' || !!currentAssembly" @click="setMeasureMode(!measureMode)" v-app-tooltip="t(activePart === 'assembly' ? 'preview.measureSinglePart' : 'preview.measure')">
             <svg viewBox="0 0 16 16" width="14" height="14">
-              <rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.4" />
+              <path d="M1.6 11.2L11.2 1.6l3.2 3.2-9.6 9.6zM4.4 8.4l1.6 1.6M6.8 6l1.6 1.6M9.2 3.6l1.6 1.6"
+                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-          </button>
-          <button class="view-btn" v-app-tooltip="t('preview.viewTop')" :aria-label="t('preview.viewTop')" :aria-pressed="selectedView === 'top'" @click="setView('top')">
-            <svg viewBox="0 0 16 16" width="14" height="14">
-              <path d="M8 3.5l4.5 4.5L8 12.5 3.5 8z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
-            </svg>
-          </button>
-          <button class="view-btn" v-app-tooltip="t('preview.viewIso')" :aria-label="t('preview.viewIso')" :aria-pressed="selectedView === 'iso'" @click="setView('iso')">
-            <svg viewBox="0 0 16 16" width="14" height="14">
-              <path d="M8 2l5.2 3v6L8 14l-5.2-3V5zM8 8l5.2-3M8 8L2.8 5M8 8v6"
-                fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
-            </svg>
+            {{ t('preview.measure') }}
           </button>
         </div>
-        <span class="viewport-tool-divider" aria-hidden="true" />
-        <button class="action-btn" :aria-pressed="measureMode" :class="{ active: measureMode }" :disabled="activePart === 'assembly' || !!currentAssembly" @click="setMeasureMode(!measureMode)" v-app-tooltip="t(activePart === 'assembly' ? 'preview.measureSinglePart' : 'preview.measure')">
-          <svg viewBox="0 0 16 16" width="14" height="14">
-            <path d="M1.6 11.2L11.2 1.6l3.2 3.2-9.6 9.6zM4.4 8.4l1.6 1.6M6.8 6l1.6 1.6M9.2 3.6l1.6 1.6"
-              fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          {{ t('preview.measure') }}
-        </button>
+        <div class="viewport-hint" :class="{ 'measure-hint': measureMode }">
+          <span v-if="currentAssembly" class="assembly-caption">{{ t('preview.assemblyHint') }}</span>
+          {{ t(measureMode ? 'preview.measureHint' : 'preview.hint') }}
+        </div>
       </div>
       <Transition name="preview-panel">
-        <div v-if="activePart === 'assembly' && currentAssembly" class="assembly-explosion" @pointerdown.stop @wheel.stop>
+        <div v-if="showModelTools && activePart === 'assembly' && currentAssembly" class="assembly-explosion" @pointerdown.stop @wheel.stop>
           <div class="assembly-panel-heading">
             <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round">
               <path d="m10 2 7 4-7 4-7-4 7-4ZM3 10l7 4 7-4M3 14l7 4 7-4" />
             </svg>
             <span>{{ t('preview.assemblyControls') }}</span>
-            <button class="explosion-reset" v-app-tooltip="t('preview.resetAssembly')" :aria-label="t('preview.resetAssembly')" @click="explosionPercent = 0">
+            <button class="explosion-reset" v-app-tooltip="t('preview.resetAssembly')" :aria-label="t('preview.resetAssembly')" :disabled="explosionPercent === 0" @click="resetExplosion">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a5 5 0 1 1 0 4M3 2v4h4" /></svg>
             </button>
           </div>
-          <div class="explosion-label"><span>{{ t('preview.explodedView') }}</span><output>{{ explosionPercent }}<small>%</small></output></div>
-          <el-slider v-model="explosionPercent" :aria-label="t('preview.explodedView')" :show-tooltip="false" />
+          <div class="explosion-label"><span>{{ t('preview.explodedView') }}</span><output>{{ Math.round(explosionPercent) }}<small>%</small></output></div>
+          <el-slider :model-value="explosionPercent" @pointerdown.capture.left="explosionReset = null" @update:model-value="scrubExplosion" :aria-label="t('preview.explodedView')" :show-tooltip="false" />
           <div class="explosion-endpoints"><span>{{ t('preview.assembled') }}</span><span>{{ t('preview.explode') }}</span></div>
           <div class="assembly-layer-controls">
             <button role="switch" :aria-checked="showAssemblyPcb" class="assembly-layer-toggle" :class="{ 'is-on': showAssemblyPcb }" @click="showAssemblyPcb = !showAssemblyPcb">
@@ -2369,7 +2545,7 @@ watch(partTabs, (tabs) => {
         </div>
       </Transition>
       <!-- 测量面板:显示两个选中对象(可单独删除)+ 测量结果行 -->
-      <Transition name="preview-panel"><div v-if="measureMode" class="measure-panel">
+      <Transition name="preview-panel"><div v-if="showModelTools && measureMode" class="measure-panel">
         <div class="measure-panel-head">{{ t('preview.measure') }}</div>
         <div v-if="!selA && !selB" class="measure-panel-empty">{{ t('preview.measurePickFirst') }}</div>
         <div v-if="selA" class="measure-sel-row">
@@ -2404,47 +2580,44 @@ watch(partTabs, (tabs) => {
         </div>
       </div>
       </Transition>
-      <!-- 测量模式提示 -->
-      <Transition name="preview-panel">
-      <div v-if="measureMode" class="measure-hint">
-        {{ t('preview.measureHint') }}
-      </div>
-      </Transition>
       <!-- 空状态引导:无模型、无加载、无错误时显示(虚线卡片模拟拖放目标) -->
       <Transition name="preview-state">
       <div
-        v-if="!hasPreview && !loading && !errorMsg && store.pythonDetected"
+        v-if="previewState === 'empty'"
         key="empty"
         class="empty-state"
       >
-        <div class="empty-card">
-          <svg viewBox="0 0 64 64" width="48" height="48" class="empty-icon">
+        <button type="button" class="empty-card" data-mode-motion="empty" @click="previewState === 'empty' && emit('pickGerber')"
+          @dragover.prevent @drop.prevent="dropGerber">
+          <svg viewBox="0 0 64 64" width="48" height="48" class="empty-icon" aria-hidden="true">
             <rect x="5" y="5" width="54" height="54" rx="11" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="7,5" />
             <path d="M32 20v18M24 30l8 8 8-8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
             <rect x="24" y="46" width="16" height="4" rx="2" fill="currentColor" opacity="0.55" />
           </svg>
-          <p class="empty-line1">{{ appMode === 'stencil' ? t('preview.emptyLine1Stencil') : t('preview.emptyLine1') }}</p>
-          <p class="empty-line2">{{ appMode === 'stencil' ? t('preview.emptyLine2Stencil') : t('preview.emptyLine2') }}</p>
-        </div>
+          <span class="empty-line1">{{ t(appMode === 'stencil' ? 'preview.emptyLine1Stencil' : 'preview.emptyLine1') }}</span>
+          <span class="empty-line2" :class="{ 'import-error': props.importError }">{{ props.importError || t(appMode === 'stencil' ? 'preview.emptyLine2Stencil' : 'preview.emptyLine2') }}</span>
+        </button>
       </div>
-      <div v-else-if="loading" key="loading" class="overlay" role="status">
+      <div v-else-if="previewState === 'panel'" key="panel" class="overlay" role="status">{{ t('gerber.panelDialogTitle') }}</div>
+      <div v-else-if="previewState === 'parsing' || previewState === 'checking' || previewState === 'rendering'" key="loading" class="overlay" role="status">
         <svg class="spin-icon" viewBox="0 0 16 16" width="20" height="20">
           <path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
         </svg>
-        <span>{{ t('preview.rendering') }}</span>
+        <span>{{ t(previewState === 'parsing' ? 'gerber.parsing' : previewState === 'checking' ? 'preview.checkingEngine' : 'preview.rendering') }}</span>
       </div>
-      <div v-else-if="errorMsg" key="error" class="overlay error" role="alert">
-        <span tabindex="0" @pointerdown.stop @wheel.stop @dblclick.stop>{{ errorMsg }}</span>
+      <div v-else-if="previewState === 'error'" key="error" class="overlay error" role="alert">
+        <span tabindex="0" @pointerdown.stop @wheel.stop @dblclick.stop>{{ sceneError ? t('preview.renderFailed', { msg: sceneError }) : errorMsg }}</span>
       </div>
-      <div v-else-if="!store.pythonDetected" key="warning" class="overlay warning" role="status">
+      <div v-else-if="previewState === 'unavailable'" key="warning" class="overlay warning" role="status">
         <svg viewBox="0 0 16 16" width="16" height="16">
           <path d="M8 2L1 14h14L8 2zM8 6v4M8 12v.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <span>{{ t('preview.noPythonPreview') }}</span>
+        <span>{{ t(store.pythonError ? 'python.unavailable' : 'preview.noPythonPreview') }}</span>
       </div>
       </Transition>
       <!-- 打印信息卡:体积/用料估算(懒加载,按当前参数缓存) -->
-      <Transition name="preview-panel"><div v-if="showMetrics" class="metrics-card" :aria-busy="metricsLoading">
+      <Transition name="preview-panel"><div v-if="showModelTools && showMetrics" class="metrics-card" :aria-busy="metricsLoading"
+        @keydown.esc.stop.prevent="closeMetrics">
         <div class="metrics-head">
           <span>{{ t('preview.metricsTitle') }}</span>
           <span class="metrics-progress" role="status" :aria-label="metricsLoading ? t('preview.metricsLoading') : undefined">
@@ -2452,12 +2625,13 @@ watch(partTabs, (tabs) => {
               <path d="M8 2a6 6 0 1 0 6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
             </svg>
           </span>
-          <button type="button" class="metrics-close" v-app-tooltip="t('preview.metricsClose')" :aria-label="t('preview.metricsClose')" @click="showMetrics = false">
+          <button type="button" class="metrics-close" v-app-tooltip="t('preview.metricsClose')" :aria-label="t('preview.metricsClose')" @click="closeMetrics">
             <svg viewBox="0 0 20 20" width="14" height="14" fill="none" aria-hidden="true">
               <path d="m6 6 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
             </svg>
           </button>
         </div>
+        <div class="metrics-body">
           <ul class="metrics-list">
             <li v-for="row in metricsRows" :key="row.name" class="metrics-row">
               <span class="metrics-dot" :style="{ background: row.color }" />
@@ -2477,16 +2651,16 @@ watch(partTabs, (tabs) => {
               <template v-else>—</template>
             </span>
           </div>
-        <div class="metrics-note">{{ t('preview.metricsDensity') }}</div>
+          <div class="metrics-note">{{ t('preview.metricsDensity') }}</div>
+        </div>
       </div>
       </Transition>
-      <div class="viewport-hint">
-        <span v-if="currentAssembly" class="assembly-caption">{{ t('preview.assemblyHint') }}</span>
-        {{ t('preview.hint') }}
       </div>
+      <div class="inspection-surface" :class="{ presented: inspectionVisible }" :inert="!inspectionOpen || !inspectionVisible">
+        <StencilInspection v-if="appMode === 'stencil' && hasData && inspectionLoaded" style="inset: 0"
+          :active="inspectionOpen" :side="activePart === 'stencil_bottom' ? 'bottom' : 'top'" @presentable="presentInspection" />
       </div>
-      <StencilInspection v-if="appMode === 'stencil' && hasData && inspectionLoaded" v-show="inspectionOpen"
-        :active="inspectionOpen" :side="activePart === 'stencil_bottom' ? 'bottom' : 'top'" />
+      <div v-if="showViewWait" class="view-wait" role="status">{{ t(inspectionOpen ? 'inspection.loading' : 'preview.rendering') }}</div>
     </div>
   </div>
 </template>
@@ -2510,9 +2684,16 @@ watch(partTabs, (tabs) => {
   position: absolute;
   inset: 0 0 0 var(--preview-inset, 0px);
   container: preview-controls / size;
+  display: grid;
+  grid-template: minmax(0, 1fr) auto / minmax(0, 1fr);
   pointer-events: none;
 }
-.preview-overlays > .measure-panel, .preview-overlays > .metrics-card { pointer-events: auto; }
+/* Keep the floating panels inside the space left above the dock, including when text wraps. */
+.preview-overlays > :is(.measure-panel, .metrics-card, .assembly-explosion) {
+  grid-area: 1 / 1 / 2 / 2;
+  pointer-events: auto;
+  max-height: calc(100% - 24px);
+}
 .is-layout-animating .scene-layer {
   transition: transform var(--sidebar-duration) var(--sidebar-ease);
 }
@@ -2617,8 +2798,8 @@ watch(partTabs, (tabs) => {
   cursor: pointer;
   transition: var(--control-transition);
 }
-.assembly-mode-btn > svg { flex-shrink: 0; }
-.assembly-mode-btn:hover { background: var(--surface-well); color: var(--interaction-ink, var(--bg-brand)); }
+.assembly-mode-btn:disabled { cursor: default; }
+.assembly-mode-btn:hover:enabled:not(.active) { background: var(--surface-well); color: var(--interaction-ink, var(--bg-brand)); }
 .assembly-mode-btn.active {
   background: var(--status-success-surface-l1);
   border-color: color-mix(in srgb, var(--bg-brand) 24%, transparent);
@@ -2706,8 +2887,18 @@ watch(partTabs, (tabs) => {
   color: inherit;
 }
 
-.export-actions { display: inline-flex; align-items: stretch; border-radius: var(--radius-full); transition: var(--control-transition); }
-.export-actions.is-complete { box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-accent) 14%, transparent); }
+.export-actions { position: relative; display: inline-flex; align-items: stretch; border-radius: var(--radius-full); transition: var(--control-transition); }
+.export-actions::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 1px solid color-mix(in srgb, var(--brand-accent) 52%, transparent);
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.export-actions.is-complete::after { opacity: 1; }
 .export-actions :deep(.el-dropdown) { display: inline-flex; }
 .export-actions .action-btn { --button-press-scale: 1; }
 /* Both halves move together so the split button never opens a gap. */
@@ -2724,18 +2915,24 @@ watch(partTabs, (tabs) => {
   opacity: 0.8;
 }
 
-/* 视图快捷按钮组(正/顶/等轴) */
+/* Keep the toolbar clear of the contextual hint even when it needs another line. */
+.viewport-dock {
+  grid-area: 2 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 12px 12px;
+  min-width: 0;
+}
 .viewport-tools {
-  position: absolute;
-  left: 50%;
-  bottom: 44px;
-  transform: translateX(-50%);
+  align-self: center;
   z-index: 6;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 6px;
-  max-width: calc(100% - 32px);
+  max-width: 100%;
   border: 1px solid var(--surface-line);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
@@ -2806,12 +3003,31 @@ watch(partTabs, (tabs) => {
 }
 
 /* Canvas:背景用径向渐变模拟"工作台"顶光,模型区有纵深感 */
+.view-action-hidden { visibility: hidden; }
+.inspection-surface { position: absolute; inset: 0 0 0 var(--preview-inset, 0px); z-index: 11;
+  opacity: 0; visibility: hidden; transition: opacity 160ms ease-in-out, visibility 0s 160ms; }
+.inspection-surface.presented { opacity: 1; visibility: visible; transition-delay: 0s; }
+.view-wait { position: absolute; z-index: 12; top: 12px; right: 12px; padding: 5px 10px;
+  border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-secondary); font-size: 12px; pointer-events: none; }
 .canvas-container {
+  isolation: isolate;
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
   overflow: hidden;
   background: radial-gradient(100% 85% at 50% 36%, #FCFDFC 0%, #EEF2EF 64%, #E6EBE7 100%);
+}
+
+/* Keep this passive notice in the visible work area, below the window controls. */
+.canvas-container :deep(.model-export-success) {
+  position: absolute;
+  left: calc(50% + var(--preview-inset, 0px) / 2);
+  max-width: calc(100% - var(--preview-inset, 0px) - 32px);
+  pointer-events: none;
+}
+.canvas-container :deep(.model-export-success .el-message__content) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .is-dark .canvas-container {
@@ -2897,7 +3113,6 @@ canvas {
   left: 36px;
   width: 232px;
   max-width: calc(100% - 48px);
-  max-height: calc(100% - 116px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -3035,20 +3250,6 @@ canvas {
   text-align: right;
 }
 
-/* 测量模式提示条 */
-.measure-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 12px;
-  background: rgba(38, 38, 38, 0.72);
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 10px;
-  padding: 4px 10px;
-  border-radius: var(--radius-6);
-  pointer-events: none;
-  backdrop-filter: blur(4px);
-}
-
 /* 空状态引导:虚线卡片模拟拖放目标 */
 .empty-state {
   position: absolute;
@@ -3060,6 +3261,9 @@ canvas {
 }
 
 .empty-card {
+  pointer-events: auto;
+  cursor: pointer;
+  font: inherit;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3151,9 +3355,8 @@ canvas {
 
 /* Viewport Hint */
 .viewport-hint {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   background: rgba(38, 38, 38, 0.72);
   color: rgba(255, 255, 255, 0.88);
   font-size: 10px;
@@ -3163,6 +3366,8 @@ canvas {
   font-family: var(--font-family-default);
   border: 1px solid rgba(255,255,255,.12);
 }
+
+.measure-hint { align-self: flex-start; }
 
 .assembly-caption {
   display: block;
@@ -3178,7 +3383,7 @@ canvas {
   transition: translate 280ms var(--ease-out), max-height 280ms var(--ease-out);
   width: 176px;
   max-width: calc(100% - 40px);
-  max-height: calc(100% - 176px);
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 14px 16px 12px;
   border: 1px solid var(--surface-line);
@@ -3211,9 +3416,10 @@ canvas {
 }
 .explosion-reset:hover { background: var(--bg-overlay-l1); color: var(--interaction-ink, var(--bg-brand)); }
 .explosion-label { display: flex; align-items: baseline; justify-content: space-between; color: var(--text-secondary); }
-.explosion-label output { color: var(--interaction-ink, var(--bg-brand)); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.explosion-label output { min-inline-size: 4.5ch; text-align: end; color: var(--interaction-ink, var(--bg-brand)); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .explosion-label small { font-size: 10px; margin-left: 2px; opacity: .65; }
-.assembly-explosion :deep(.el-slider) { height: 28px; }
+/* Keep the full 36px pointer target inside the panel at either endpoint. */
+.assembly-explosion :deep(.el-slider) { box-sizing: border-box; padding-inline: 4px; height: 28px; }
 .assembly-explosion :deep(.el-slider__runway) { height: 3px; background: var(--bg-overlay-l3); }
 .assembly-explosion :deep(.el-slider__bar) { height: 3px; }
 .assembly-explosion :deep(.el-slider__button-wrapper) { top: -16.5px; }
@@ -3253,19 +3459,20 @@ canvas {
   right: 12px;
   width: 224px;
   max-width: calc(100% - 24px);
-  max-height: calc(100% - 116px);
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--surface-raised);
   border: 1px solid var(--surface-line);
   border-radius: var(--radius-popover);
   corner-shape: var(--corner-shape);
   box-shadow: var(--shadow-float);
-  padding: 12px;
   z-index: 10;
   font-family: var(--font-family-default);
 }
 
 .metrics-head {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3273,7 +3480,15 @@ canvas {
   line-height: var(--body-md-line-height);
   font-weight: var(--font-weight-strong);
   color: var(--text-default);
-  margin-bottom: 8px;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--surface-line);
+}
+
+.metrics-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: 4px 12px 12px;
 }
 
 .metrics-progress {
@@ -3369,19 +3584,28 @@ canvas {
    Size these cards from that actual viewport, retaining space for its tools. */
 @container preview-controls (max-width: 540px) {
   .measure-panel:has(~ .metrics-card), .measure-panel ~ .metrics-card {
-    max-height: calc((100% - 128px) / 2);
+    max-height: calc(50% - 18px);
   }
   .measure-panel ~ .metrics-card {
-    top: calc((100% - 128px) / 2 + 24px);
+    top: calc(50% + 6px);
   }
 }
 
 /* Material estimates and assembly controls share the right edge. Keeping their
    scroll areas separate also prevents overlap in shorter windows. */
 .assembly-explosion:has(~ .metrics-card), .assembly-explosion ~ .metrics-card {
-  max-height: calc((100% - 128px) / 2);
+  max-height: calc(50% - 18px);
 }
 .assembly-explosion:has(~ .metrics-card) {
-  translate: 0 -40px;
+  translate: 0 6px;
+}
+@container preview-controls (max-height: 430px) {
+  .metrics-body { padding-bottom: 8px; }
+  .metrics-note { margin-top: 6px; }
+  .assembly-explosion:has(~ .metrics-card) { padding-block: 8px; }
+  .assembly-explosion:has(~ .metrics-card) .assembly-panel-heading {
+    margin-bottom: 5px;
+    line-height: 1.3;
+  }
 }
 </style>

@@ -40,6 +40,7 @@ function setup() {
   const create = new Function('watch', 'inspectionOpen', 'generationTasks', 'printMetrics', 'window',
     'cancelCameraMotion', 'onCanvasPointerLeave', 'onResize', 'renderCurrent', 'scheduleMetrics', `
     const inspectionLoaded = { value: false }, loading = { value: true };
+    const finishParameterSettle = () => {};
     let renderSeq = 4, renderTimer = 1, preloadTimer = 2, metricsTimer = 3;
     const pendingParts = new Map([['old-preview', { kind: 'preview' }], ['old-preload', { kind: 'preload' }]]);
     ${javascript}

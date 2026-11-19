@@ -8,6 +8,8 @@ mod generation;
 mod python_detect;
 mod scad;
 mod skin_icon;
+#[cfg(windows)]
+mod window_frame;
 
 pub fn run() {
     let context = tauri::generate_context!();
@@ -19,7 +21,15 @@ pub fn run() {
         if let Err(err) = result { eprintln!("Bundled CAD engine failed: {err}"); std::process::exit(1); }
         return;
     }
-    tauri::Builder::default()
+    #[cfg(windows)]
+    let context = window_frame::configure(context);
+    let builder = tauri::Builder::default();
+    #[cfg(windows)]
+    let builder = builder.setup(|app| {
+        window_frame::install(app);
+        Ok(())
+    });
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())

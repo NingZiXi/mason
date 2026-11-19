@@ -5,16 +5,33 @@ import { ElSwitch } from "element-plus";
 import { DEFAULT, useConfigStore, windowHalf, platterHalfXY, windowHalfXY, stencilLipMax, stencilClampFloor, STRUCTURE_PRESETS } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
+import { focusParameterControl } from "../lib/focus-parameter-control";
 import InlineHelp from "./InlineHelp.vue";
 import ClampPlanPreview from "./ClampPlanPreview.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
 import ComponentReliefForm from './ComponentReliefForm.vue';
 import { ejectHoleLimits, resolveEjectHoleSize } from '../lib/eject-hole';
-import { vAppTooltip } from '../directives/app-tooltip';
+import { effectiveInsertHeight } from '../lib/component-relief';
+import PryNotchPicker from "./PryNotchPicker.vue";
 
 const store = useConfigStore();
 const { t } = useI18n();
 const c = computed(() => store.config);
+type NumberKey =
+  | 'pcbSizeX' | 'pcbSizeY' | 'pcbThickness' | 'stencilSizeX' | 'stencilSizeY' | 'insertHeight'
+  | 'platterCornerRadius' | 'outerCornerRadius' | 'windowGap' | 'pcbPocketClearance' | 'postClearance'
+  | 'jigSize' | 'nutAcrossFlats' | 'nutHeight' | 'nutPocketClearance';
+function updateNumber(key: NumberKey, value: number | null | undefined) {
+  // A temporarily blank input must not alter the model or invalidate a size review.
+  if (typeof value === 'number' && Number.isFinite(value)) c.value[key] = value;
+}
+const actualTrayThickness = computed(() => {
+  const actual = effectiveInsertHeight(c.value);
+  const minimum = c.value.insertHeight;
+  if (!Number.isFinite(actual) || !Number.isFinite(minimum)) return null;
+  const displayed = actual.toFixed(2);
+  return displayed === minimum.toFixed(2) ? null : displayed.replace(/0$/, '');
+});
 // The legacy numeric field remains the switch; diameter is remembered separately.
 const ejectHoleEnabled = computed({
   get: () => c.value.ejectSlotWidth > 0,
@@ -52,13 +69,13 @@ function cancelStencilReveal() {
   guideAnimation = undefined;
 }
 
-async function revealStencilSize(force = false) {
+async function revealStencilSize(force = false, mayFocus = () => false) {
   cancelStencilReveal();
   const sequence = guideSequence;
   const section = stencilSizeSection.value;
   const sidebar = section?.closest<HTMLElement>(".app-sidebar");
   if (!section || !sidebar || (!force && !showStencilSizeGuide.value)) return;
-  // Scroll only the parameter sidebar, leaving the 3D view and keyboard focus alone.
+  // Automatic import guidance scrolls only the sidebar. An explicit edit request can also move focus.
   const top = Math.max(0, Math.min(sidebar.scrollHeight - sidebar.clientHeight,
     sidebar.scrollTop + section.getBoundingClientRect().top - sidebar.getBoundingClientRect().top - 16));
   if (Math.abs(sidebar.scrollTop - top) > 1) {
@@ -80,6 +97,7 @@ async function revealStencilSize(force = false) {
   }
   const guide = stencilSizeGuide.value;
   if (sequence !== guideSequence || !guide?.isConnected || !showStencilSizeGuide.value) return;
+  if (mayFocus()) section.querySelector<HTMLInputElement>("#stencil-length")?.focus({ preventScroll: true });
   const style = getComputedStyle(guide);
   const highlight = { backgroundColor: "rgba(232, 187, 62, .30)", borderColor: "rgba(198, 153, 37, .65)" };
   const clear = { backgroundColor: style.backgroundColor, borderColor: style.borderColor };
@@ -122,6 +140,8 @@ onBeforeMount(() => {
 //   都不小于 PCB 槽,否则 PCB 边缘悬空。与 store / Python 同源。
 const lipMax = computed(() => Math.max(0, Math.floor(stencilLipMax(c.value) * 10) / 10));
 const lipValue = computed(() => Math.min(Math.max(0, c.value.stencilLip ?? 0), lipMax.value));
+// Both segments share the available travel on the limiting axis, not the PCB area.
+const lipPercentTenths = computed(() => lipMax.value > 0 ? Math.round(1000 * lipValue.value / lipMax.value) : null);
 function onLipChange(v: number | number[]) {
   const n = Array.isArray(v) ? v[0] : v;
   c.value.stencilLip = Math.max(0, Math.min(lipMax.value, Number(n) || 0));
@@ -147,15 +167,6 @@ const windowSizeXY = computed(() => {
 //   这里只做"输入框强制约束"——v-model 范围(防止用户绕过)
 
 // 取放缺口:四向点亮开关(可任意组合,全灭 = 关闭)
-type NotchSide = 'up' | 'down' | 'left' | 'right';
-const NOTCH_SIDES: NotchSide[] = ['up', 'down', 'left', 'right'];
-function toggleNotchSide(s: NotchSide) {
-  const cur = c.value.pryNotchSides;
-  c.value.pryNotchSides = cur.includes(s)
-    ? cur.filter((x) => x !== s)
-    : [...cur, s];
-}
-
 // 高级参数默认折叠:常规流程(Gerber → 导出)用默认值即可
 const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 
@@ -192,7 +203,7 @@ function applyPreset(id: string) {
 
     <section class="parameter-section preset-section" :aria-label="t('config.preset')">
     <!-- 结构预设:一键套用常用螺丝 + 结构高度组合 -->
-    <InlineHelp id="config-presetHint" class="section-help" :label="t('config.preset')" :text="t('config.presetHint')"><span>{{ t('config.preset') }}</span></InlineHelp>
+    <InlineHelp id="config-presetHint" topic="structure" class="section-help" :label="t('config.preset')"><span>{{ t('config.preset') }}</span></InlineHelp>
     <div class="preset-group">
       <SlidingIndicator />
       <button
@@ -212,39 +223,45 @@ function applyPreset(id: string) {
     <div class="section-label">{{ t('config.pcb') }}</div>
     <div class="field-row pcb-dimensions">
       <div class="field">
-        <label class="field-label">{{ t('config.length') }}</label>
-        <el-input-number
-          v-model="c.pcbSizeX"
+        <label for="jig-length" class="field-label">{{ t('config.length') }}</label>
+        <el-input-number id="jig-length"
+          :model-value="c.pcbSizeX"
+          :value-on-clear="c.pcbSizeX"
           :min="5"
           :max="300"
           :step="0.5"
           :precision="1"
           size="default"
           style="width: 100%"
+          @update:model-value="updateNumber('pcbSizeX', $event)"
         />
       </div>
       <div class="field">
-        <label class="field-label">{{ t('config.width') }}</label>
-        <el-input-number
-          v-model="c.pcbSizeY"
+        <label for="jig-width" class="field-label">{{ t('config.width') }}</label>
+        <el-input-number id="jig-width"
+          :model-value="c.pcbSizeY"
+          :value-on-clear="c.pcbSizeY"
           :min="5"
           :max="300"
           :step="0.5"
           :precision="1"
           size="default"
           style="width: 100%"
+          @update:model-value="updateNumber('pcbSizeY', $event)"
         />
       </div>
     <div class="field">
-      <label class="field-label">{{ t('config.thickness') }}</label>
-      <el-input-number
-        v-model="c.pcbThickness"
+      <label for="jig-thickness" class="field-label">{{ t('config.thickness') }}</label>
+      <el-input-number id="jig-thickness"
+        :model-value="c.pcbThickness"
+        :value-on-clear="c.pcbThickness"
         :min="0.4"
         :max="3.2"
         :step="0.2"
         :precision="2"
         size="default"
         style="width: 100%"
+        @update:model-value="updateNumber('pcbThickness', $event)"
       />
     </div>
     </div>
@@ -255,7 +272,7 @@ function applyPreset(id: string) {
         <path v-if="store.gerberOutlineSource === 'pads-bounds'" d="M8 4.5v4M8 11v.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
         <path v-else d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <span>{{ t(store.gerberOutlineSource === 'pads-bounds' ? 'config.gerberEstimated' : 'config.gerberApplied', { f: c.gerberFilename }) }}</span>
+      <span>{{ t(store.gerberOutlineSource === 'pads-bounds' ? 'config.gerberEstimated' : 'config.gerberApplied', { f: store.gerberFileDetails?.outline ?? c.gerberFilename }) }}</span>
     </div>
 
     </section>
@@ -264,12 +281,15 @@ function applyPreset(id: string) {
 
     <!-- 钢网(基本:按板子自动推荐,可改成实际购买的钢网尺寸;长宽独立可矩形) -->
     <section ref="stencilSizeSection" class="parameter-section stencil-size-section" :aria-label="t('config.stencil')">
-    <div class="section-label">{{ t('config.stencil') }}</div>
+    <InlineHelp id="jig-stencil-size-help" topic="stencilSize" class="section-help" :label="t('config.stencilSize')">
+      <span>{{ t('config.stencil') }}</span>
+    </InlineHelp>
     <div class="field-row">
       <div class="field">
-        <label class="field-label">{{ t('config.stencilSizeX') }}</label>
-        <el-input-number
-          v-model="c.stencilSizeX"
+        <label for="stencil-length" class="field-label">{{ t('config.stencilSizeX') }}</label>
+        <el-input-number id="stencil-length"
+          :model-value="c.stencilSizeX"
+          :value-on-clear="c.stencilSizeX"
           :aria-label="t('config.stencilSizeX')"
           :aria-describedby="showStencilSizeGuide ? 'stencil-size-guide' : undefined"
           :min="10"
@@ -278,12 +298,14 @@ function applyPreset(id: string) {
           :precision="0"
           size="default"
           style="width: 100%"
+          @update:model-value="updateNumber('stencilSizeX', $event)"
         />
       </div>
       <div class="field">
-        <label class="field-label">{{ t('config.stencilSizeY') }}</label>
-        <el-input-number
-          v-model="c.stencilSizeY"
+        <label for="stencil-width" class="field-label">{{ t('config.stencilSizeY') }}</label>
+        <el-input-number id="stencil-width"
+          :model-value="c.stencilSizeY"
+          :value-on-clear="c.stencilSizeY"
           :aria-label="t('config.stencilSizeY')"
           :aria-describedby="showStencilSizeGuide ? 'stencil-size-guide' : undefined"
           :min="10"
@@ -292,6 +314,7 @@ function applyPreset(id: string) {
           :precision="0"
           size="default"
           style="width: 100%"
+          @update:model-value="updateNumber('stencilSizeY', $event)"
         />
       </div>
     </div>
@@ -314,106 +337,58 @@ function applyPreset(id: string) {
     </section>
 
     <section class="parameter-section lip-section" :aria-label="t('config.platterLipGroup')">
-    <!-- 唇宽滑块(单条):四边一致,凸台/窗口逐轴随之变化 -->
-    <InlineHelp id="clamp-plan-help" class="section-help lip-section-heading" :label="t('config.platterLipGroup')" :text="t('clampPlan.help')"><span>{{ t('config.platterLipGroup') }}</span></InlineHelp>
-    <div class="platter-lip-card">
-      <ClampPlanPreview />
-      <div class="platter-lip-slider">
-        <label class="field-label">
-          <span class="lbl-l">{{ t('config.stencilLip') }}</span>
-          <strong class="lip-current"><span>{{ lipValue.toFixed(1) }}</span><small>mm</small></strong>
-        </label>
-        <el-slider
-          :model-value="lipValue"
-          @update:model-value="onLipChange"
-          :min="0"
-          :max="Math.max(lipMax, 0.1)"
-          :step="0.1"
-          :show-tooltip="true"
-          :format-tooltip="(v: number) => `${t('config.stencilLip')} = ${v.toFixed(1)} mm`"
-          :disabled="lipMax <= 0"
-        />
-        <div class="slider-readout">
-          <span class="rd-r">
-            <span class="rd-v">{{ platterSize }}</span>
-            <span class="rd-k">{{ t('config.platterSizeShort') }}</span>
-          </span>
-          <span class="rd-eq">→</span>
-          <span class="rd-r">
-            <span class="rd-v">{{ windowSizeXY }}</span>
-            <span class="rd-k">{{ t('config.windowSizeShort') }}</span>
-          </span>
-        </div>
+      <div class="section-label lip-section-heading">{{ t('config.platterLipGroup') }}</div>
+      <div class="platter-lip-card">
+        <ClampPlanPreview />
+        <InlineHelp id="clamp-plan-help" topic="lip" class="platter-lip-slider" :label="t('config.platterLipGroup')" :text="t('clampPlan.help')">
+          <label for="jig-stencil-lip" class="field-label lip-label" @click.prevent="focusParameterControl">{{ t('guideUi.lipWidth') }}</label>
+          <template v-if="lipPercentTenths !== null" #trailing>
+            <strong class="lip-current">{{ lipValue.toFixed(1) }}<small>mm</small></strong>
+          </template>
+          <template #control>
+            <div class="lip-proportion" :class="{ unavailable: lipPercentTenths === null }">
+              <el-slider id="jig-stencil-lip" :aria-label="t('config.stencilLip')"
+                :model-value="lipValue"
+                @update:model-value="onLipChange"
+                :min="0"
+                :max="Math.max(lipMax, 0.1)"
+                :step="0.1"
+                :show-tooltip="false"
+                :disabled="lipPercentTenths === null"
+                :format-value-text="(v: number) => `${v.toFixed(1)} mm`"
+              />
+              <template v-if="lipPercentTenths !== null">
+                <div class="lip-ratio-key">
+                  <span><i aria-hidden="true" />{{ t('guideUi.lip') }} <b>{{ lipPercentTenths / 10 }}%</b></span>
+                  <span><i aria-hidden="true" />{{ t('guideUi.margin') }} <b>{{ (1000 - lipPercentTenths) / 10 }}%</b></span>
+                </div>
+                <div class="lip-budget"><span>{{ t('guideUi.width') }}</span><span>{{ lipMax.toFixed(1) }} mm</span></div>
+              </template>
+            </div>
+            <div v-if="lipPercentTenths === null" class="auto-hint">
+              <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
+                <path d="M8 7v4M8 5.5v.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+              </svg>
+              <span>{{ t('config.lipNoRoom') }}</span>
+            </div>
+            <dl class="slider-readout">
+              <div><dt>{{ t('config.platterSizeShort') }}</dt><dd>{{ platterSize }} <small>mm</small></dd></div>
+              <div><dt>{{ t('config.windowSizeShort') }}</dt><dd>{{ windowSizeXY }} <small>mm</small></dd></div>
+            </dl>
+          </template>
+        </InlineHelp>
       </div>
-      <div v-if="lipMax <= 0" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M8 7v4M8 5.5v.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-        </svg>
-        <span>{{ t('config.lipNoRoom') }}</span>
-      </div>
-    </div>
-
     </section>
 
     <section class="parameter-section handling-section" :aria-label="t('config.handling')">
     <div class="section-label">{{ t('config.handling') }}</div>
-    <div class="field">
-      <label class="field-label">{{ t('config.pryNotch') }}</label>
-      <div class="notch-picker">
-        <button
-          v-for="s in NOTCH_SIDES"
-          :key="s"
-          class="notch-btn"
-          :class="[`notch-${s}`, { active: c.pryNotchSides.includes(s) }]"
-          v-app-tooltip="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
-          :aria-label="t(`config.pryNotch${s.charAt(0).toUpperCase() + s.slice(1)}`)"
-          :aria-pressed="c.pryNotchSides.includes(s)"
-          @click="toggleNotchSide(s)"
-        >
-          <svg viewBox="0 0 16 16" width="12" height="12">
-            <path
-              v-if="s === 'up'" d="M8 3l4 5H4z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-            <path
-              v-else-if="s === 'down'" d="M8 13l4-5H4z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-            <path
-              v-else-if="s === 'left'" d="M3 8l5-4v8z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-            <path
-              v-else d="M13 8l-5-4v8z"
-              :fill="c.pryNotchSides.includes(s) ? 'currentColor' : 'none'"
-              stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"
-            />
-          </svg>
-        </button>
-        <div class="notch-center">
-          <svg viewBox="0 0 16 16" width="16" height="16">
-            <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          </svg>
-        </div>
-      </div>
-    </div>
-    <div class="field">
-      <label class="field-label">
-        {{ t('config.pryNotchSize') }}
-        <span class="field-value">{{ Math.round(c.pryNotchScale * 100) }}%</span>
-      </label>
-      <el-slider
-        v-model="c.pryNotchScale"
-        :min="0.5"
-        :max="1.5"
-        :step="0.05"
-        :disabled="c.pryNotchSides.length === 0"
-      />
-    </div>
+    <InlineHelp id="jig-pry-notch-help" topic="pryNotch" notch-variant="jig" :label="t('config.pryNotch')">
+      <span class="field-label">{{ t('config.pryNotch') }}</span>
+      <template #control>
+        <PryNotchPicker variant="jig" />
+      </template>
+    </InlineHelp>
     <div class="auto-hint">
       <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
         <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
@@ -425,7 +400,7 @@ function applyPreset(id: string) {
     </section>
 
     <!-- 高级参数(默认折叠) -->
-    <button class="advanced-toggle" @click="showAdvanced = !showAdvanced">
+    <button class="advanced-toggle" :aria-expanded="showAdvanced" @click="showAdvanced = !showAdvanced">
       <span>{{ t('config.advanced') }}</span>
       <svg class="chevron" :class="{ 'is-open': showAdvanced }" viewBox="0 0 16 16" width="14" height="14">
         <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -435,77 +410,111 @@ function applyPreset(id: string) {
     <MotionCollapse :open="showAdvanced"><div class="advanced-body">
       <!-- 托盘几何:凸台/圆角/退件槽 -->
       <div class="section-label">{{ t('config.trayGeometry') }}</div>
-      <div class="field-row field-row-3">
+      <div class="field-row tray-geometry-fields">
         <div class="field">
-          <label class="field-label">{{ t('config.insertHeight') }}</label>
-          <el-input-number v-model="c.insertHeight" :min="4" :max="20" :step="0.5" :precision="1" size="small" style="width: 100%" />
+          <label for="jig-insert-height" class="field-label">{{ t('config.insertHeight') }}</label>
+          <el-input-number id="jig-insert-height" :model-value="c.insertHeight" :value-on-clear="c.insertHeight"
+            :min="4" :max="20" :step="0.5" :precision="1" size="small" style="width: 100%"
+            @update:model-value="updateNumber('insertHeight', $event)" />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('config.platterCorner') }}</label>
-          <el-input-number v-model="c.platterCornerRadius" :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%" />
+          <label for="jig-platter-corner" class="field-label">{{ t('config.platterCorner') }}</label>
+          <el-input-number id="jig-platter-corner"
+            :model-value="c.platterCornerRadius" :value-on-clear="c.platterCornerRadius"
+            :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%"
+            @update:model-value="updateNumber('platterCornerRadius', $event)"
+          />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('config.outerCorner') }}</label>
-          <el-input-number v-model="c.outerCornerRadius" :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%" />
+          <label for="jig-outer-corner" class="field-label">{{ t('config.outerCorner') }}</label>
+          <el-input-number id="jig-outer-corner"
+            :model-value="c.outerCornerRadius" :value-on-clear="c.outerCornerRadius"
+            :min="0" :max="10" :step="0.5" :precision="1" size="small" style="width: 100%"
+            @update:model-value="updateNumber('outerCornerRadius', $event)"
+          />
         </div>
+        <output v-if="actualTrayThickness !== null" class="tray-height-readout" for="jig-insert-height">
+          {{ t('config.actualTrayThickness', { height: actualTrayThickness }) }}
+        </output>
       </div>
       <div class="field eject-hole-field">
-        <div class="eject-hole-heading">
-          <InlineHelp id="config-ejectSlot-help" :label="t('config.ejectSlot')" :text="t('config.ejectSlotHint')">
-            <span class="field-label">{{ t('config.ejectSlot') }}</span>
-          </InlineHelp>
-          <el-switch v-model="ejectHoleEnabled" :aria-label="t('config.ejectSlot')" />
-        </div>
-        <MotionCollapse :open="ejectHoleEnabled">
-          <div class="eject-size-control">
-            <div class="eject-size-heading">
-              <span>{{ t('config.ejectSlotDiameter') }}</span>
-              <div class="eject-size-value">
-                <strong><span>{{ ejectSize.diameter ? `Φ ${ejectSize.diameter.toFixed(1)}` : '—' }}</span><small>mm</small></strong>
-                <button type="button" class="eject-auto-button" :class="{ active: !ejectSize.custom }"
-                  :aria-pressed="!ejectSize.custom" @click="resetEjectDiameter">{{ t('config.ejectSlotAuto') }}</button>
+        <InlineHelp id="config-ejectSlot-help" topic="eject" :label="t('config.ejectSlot')" :text="t('config.ejectSlotHint')">
+          <label for="jig-eject-slot" class="field-label">{{ t('config.ejectSlot') }}</label>
+          <template #trailing><el-switch id="jig-eject-slot" v-model="ejectHoleEnabled" :aria-label="t('config.ejectSlot')" /></template>
+          <template #control>
+            <MotionCollapse :open="ejectHoleEnabled">
+              <div class="eject-size-control">
+                <div class="eject-size-heading">
+                  <label for="jig-eject-diameter" @click.prevent="focusParameterControl">{{ t('config.ejectSlotDiameter') }}</label>
+                  <div class="eject-size-value">
+                    <strong><span>{{ ejectSize.diameter ? `Φ ${ejectSize.diameter.toFixed(1)}` : '—' }}</span><small>mm</small></strong>
+                    <button type="button" class="eject-auto-button" :class="{ active: !ejectSize.custom }"
+                      :aria-pressed="!ejectSize.custom" @click="resetEjectDiameter">{{ t('config.ejectSlotAuto') }}</button>
+                  </div>
+                </div>
+                <el-slider id="jig-eject-diameter" v-if="ejectSize.max > ejectSize.min" :model-value="ejectSliderValue" :min="ejectSize.min" :max="ejectSize.max"
+                  :step="0.5" :disabled="!ejectSize.available"
+                  :aria-label="t('config.ejectSlotDiameter')" :show-tooltip="true"
+                  :format-tooltip="(value: number) => `Φ ${value.toFixed(1)} mm`" @update:model-value="updateEjectDiameter" />
+                <button v-else id="jig-eject-diameter" type="button" class="eject-auto-button eject-fixed-size" :disabled="!ejectSize.available"
+                  :class="{ active: ejectSize.custom && ejectSize.diameter === ejectSize.min }"
+                  :aria-pressed="ejectSize.custom && ejectSize.diameter === ejectSize.min"
+                  :aria-label="`${t('config.ejectSlotDiameter')} Φ ${ejectSize.min.toFixed(1)} mm`"
+                  @click="updateEjectDiameter(ejectSize.min)">Φ {{ ejectSize.min.toFixed(1) }} mm</button>
+                <p v-if="ejectSize.max > ejectSize.min || !ejectSize.available || ejectSize.clamped" class="eject-hole-note"
+                  :class="{ 'is-limited': ejectSize.clamped || !ejectSize.available }">{{ ejectHoleNote }}</p>
               </div>
-            </div>
-            <el-slider v-if="ejectSize.max > ejectSize.min" :model-value="ejectSliderValue" :min="ejectSize.min" :max="ejectSize.max"
-              :step="0.5" :disabled="!ejectSize.available"
-              :aria-label="t('config.ejectSlotDiameter')" :show-tooltip="true"
-              :format-tooltip="(value: number) => `Φ ${value.toFixed(1)} mm`" @update:model-value="updateEjectDiameter" />
-            <button v-else type="button" class="eject-auto-button eject-fixed-size" :disabled="!ejectSize.available"
-              :class="{ active: ejectSize.custom && ejectSize.diameter === ejectSize.min }"
-              :aria-pressed="ejectSize.custom && ejectSize.diameter === ejectSize.min"
-              :aria-label="`${t('config.ejectSlotDiameter')} Φ ${ejectSize.min.toFixed(1)} mm`"
-              @click="updateEjectDiameter(ejectSize.min)">Φ {{ ejectSize.min.toFixed(1) }} mm</button>
-            <p v-if="ejectSize.max > ejectSize.min || !ejectSize.available || ejectSize.clamped" class="eject-hole-note"
-              :class="{ 'is-limited': ejectSize.clamped || !ejectSize.available }">{{ ejectHoleNote }}</p>
-          </div>
-        </MotionCollapse>
+            </MotionCollapse>
+          </template>
+        </InlineHelp>
       </div>
 
       <!-- 装配间隙 -->
       <div class="section-label">{{ t('config.assemblyGap') }}</div>
-      <div class="field-row">
-        <div class="field">
-          <label class="field-label">{{ t('config.windowGap') }}</label>
-          <el-input-number v-model="c.windowGap" :min="0" :max="5" :step="0.1" :precision="2" size="small" style="width: 100%" />
-        </div>
-        <div class="field">
-          <InlineHelp id="config-pocketClearanceHint" :label="t('config.pocketClearance')" :text="t('config.pocketClearanceHint')"><span class="field-label">{{ t('config.pocketClearance') }}</span></InlineHelp>
-          <el-input-number v-model="c.pcbPocketClearance" :min="0" :max="2" :step="0.05" :precision="2" size="small" style="width: 100%" />
-        </div>
+      <div class="field">
+        <InlineHelp id="jig-window-gap-help" topic="windowGap" :label="t('config.windowGap')">
+          <label for="jig-window-gap" class="field-label">{{ t('config.windowGap') }}</label>
+          <template #control>
+            <el-input-number id="jig-window-gap"
+              :model-value="c.windowGap" :value-on-clear="c.windowGap"
+              :min="0" :max="5" :step="0.1" :precision="2" size="small" style="width: 100%"
+              @update:model-value="updateNumber('windowGap', $event)"
+            />
+          </template>
+        </InlineHelp>
       </div>
-      <div class="field-row">
-        <div class="field">
-          <InlineHelp id="config-postClearanceHint" :label="t('config.postClearance')" :text="t('config.postClearanceHint')"><span class="field-label">{{ t('config.postClearance') }}</span></InlineHelp>
-          <el-input-number v-model="c.postClearance" :min="0" :max="1" :step="0.025" :precision="3" size="small" style="width: 100%" />
-        </div>
+      <div class="field">
+        <InlineHelp id="config-pocketClearanceHint" topic="pocket" :label="t('config.pocketClearance')" :text="t('config.pocketClearanceHint')">
+          <label for="jig-pocket-clearance" class="field-label">{{ t('config.pocketClearance') }}</label>
+          <template #control>
+            <el-input-number id="jig-pocket-clearance"
+              :model-value="c.pcbPocketClearance" :value-on-clear="c.pcbPocketClearance"
+              :min="0" :max="2" :step="0.05" :precision="2" size="small" style="width: 100%"
+              @update:model-value="updateNumber('pcbPocketClearance', $event)"
+            />
+          </template>
+        </InlineHelp>
+      </div>
+      <div class="field">
+        <InlineHelp id="config-postClearanceHint" topic="post" :label="t('config.postClearance')" :text="t('config.postClearanceHint')">
+          <label for="jig-post-clearance" class="field-label">{{ t('config.postClearance') }}</label>
+          <template #control>
+            <el-input-number id="jig-post-clearance"
+              :model-value="c.postClearance" :value-on-clear="c.postClearance"
+              :min="0" :max="1" :step="0.025" :precision="3" size="small" style="width: 100%"
+              @update:model-value="updateNumber('postClearance', $event)"
+            />
+          </template>
+        </InlineHelp>
       </div>
 
       <!-- 夹具外形 -->
       <div class="section-label">{{ t('config.jigShape') }}</div>
       <div class="field">
-        <label class="field-label">{{ t('config.jigSide') }}</label>
-        <el-input-number
-          v-model="c.jigSize"
+        <label for="jig-side" class="field-label">{{ t('config.jigSide') }}</label>
+        <el-input-number id="jig-side"
+          :model-value="c.jigSize" :value-on-clear="c.jigSize"
+          @update:model-value="updateNumber('jigSize', $event)"
           :min="jigMin"
           :max="500"
           :step="5"
@@ -524,43 +533,45 @@ function applyPreset(id: string) {
       <!-- 螺母沉槽(B 面底座) -->
       <div class="section-label">{{ t('config.hexNutPocket') }}</div>
       <div class="field checkbox-field">
-        <el-checkbox v-model="c.useHexNut" size="default">
-          <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
-        </el-checkbox>
+        <InlineHelp id="config-nut-pocket-help" topic="nutPocket" :label="t('config.hexNutPocket')">
+          <el-checkbox v-model="c.useHexNut" size="default">
+            <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
+          </el-checkbox>
+        </InlineHelp>
       </div>
       <MotionCollapse :open="c.useHexNut">
         <div class="field-row">
           <div class="field">
-            <label class="field-label">{{ t('config.nutAcrossFlats') }}</label>
-            <el-input-number
-              v-model="c.nutAcrossFlats"
+            <label for="jig-nut-across-flats" class="field-label">{{ t('config.nutAcrossFlats') }}</label>
+            <el-input-number id="jig-nut-across-flats"
+              :model-value="c.nutAcrossFlats" :value-on-clear="c.nutAcrossFlats"
+              @update:model-value="updateNumber('nutAcrossFlats', $event)"
               :min="3" :max="15" :step="0.1" :precision="2"
               size="small" style="width: 100%"
             />
           </div>
           <div class="field">
-            <label class="field-label">{{ t('config.nutHeight') }}</label>
-            <el-input-number
-              v-model="c.nutHeight"
+            <label for="jig-nut-height" class="field-label">{{ t('config.nutHeight') }}</label>
+            <el-input-number id="jig-nut-height"
+              :model-value="c.nutHeight" :value-on-clear="c.nutHeight"
+              @update:model-value="updateNumber('nutHeight', $event)"
               :min="1.5" :max="6" :step="0.1" :precision="2"
               size="small" style="width: 100%"
             />
           </div>
         </div>
         <div class="field">
-          <InlineHelp id="config-nutPocketClearanceHint" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')"><span class="field-label">{{ t('config.nutPocketClearance') }}</span></InlineHelp>
-          <el-input-number
-            v-model="c.nutPocketClearance"
-            :min="0" :max="1" :step="0.05" :precision="2"
-            size="small" style="width: 100%"
-          />
-        </div>
-        <div class="auto-hint">
-          <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon">
-            <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-            <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>{{ t('config.useHexNutHint') }}</span>
+          <InlineHelp id="config-nutPocketClearanceHint" topic="nut" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')">
+            <label for="jig-nut-pocket-clearance" class="field-label">{{ t('config.nutPocketClearance') }}</label>
+            <template #control>
+              <el-input-number id="jig-nut-pocket-clearance"
+                :model-value="c.nutPocketClearance" :value-on-clear="c.nutPocketClearance"
+                @update:model-value="updateNumber('nutPocketClearance', $event)"
+                :min="0" :max="1" :step="0.05" :precision="2"
+                size="small" style="width: 100%"
+              />
+            </template>
+          </InlineHelp>
         </div>
       </MotionCollapse>
 
@@ -581,13 +592,6 @@ function applyPreset(id: string) {
 .parameter-section > .section-label:first-child { margin-top: 0; }
 .parameter-section > .field:last-child { margin-bottom: 0; }
 .parameter-section > .auto-hint:last-child { margin-bottom: 0; }
-.pcb-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.pcb-dimensions > .field:last-child { grid-column: 1 / -1; }
-.field-row > .field { min-width: 0; }
-@container (min-width: 380px) {
-  .pcb-dimensions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .pcb-dimensions > .field:last-child { grid-column: auto; }
-}
 
 /* 参数警告卡 */
 .warnings-card {
@@ -654,6 +658,14 @@ function applyPreset(id: string) {
   gap: 12px;
 }
 
+.pcb-dimensions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pcb-dimensions > .field:last-child { grid-column: 1 / -1; }
+.field-row > .field { min-width: 0; }
+@container (min-width: 380px) {
+  .pcb-dimensions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pcb-dimensions > .field:last-child { grid-column: auto; }
+}
+
 .stencil-size-section {
   display: flow-root;
   margin-top: 0;
@@ -686,12 +698,23 @@ function applyPreset(id: string) {
   flex: 1;
 }
 
-.field-row-3 > .field {
-  flex: 1;
-}
-
 .field {
   margin-bottom: 12px;
+}
+
+.tray-geometry-fields { flex-wrap: wrap; row-gap: 6px; margin-bottom: 12px; }
+.tray-geometry-fields > .field { margin-bottom: 0; }
+@container (max-width: 300px) {
+  /* Keep the 24px step buttons; reclaim only the space beside them. */
+  .tray-geometry-fields :deep(.el-input-number--small .el-input__wrapper) { padding-inline: 27px; }
+}
+.tray-height-readout {
+  flex: 0 0 100%;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-md-line-height);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .checkbox-field {
@@ -718,10 +741,6 @@ function applyPreset(id: string) {
   margin-bottom: 4px;
 }
 
-.eject-hole-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.eject-hole-heading :deep(.inline-help) { min-width: 0; }
-.eject-hole-heading .field-label { margin-bottom: 0; }
-.eject-hole-heading :deep(.el-switch) { flex-shrink: 0; }
 .eject-size-control { padding: 9px 2px 1px; }
 .eject-size-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-secondary); font-size: 11px; }
 .eject-size-value { display: flex; align-items: center; gap: 10px; }
@@ -766,60 +785,6 @@ function applyPreset(id: string) {
   color: var(--text-brand);
   font-weight: var(--font-weight-strong);
   font-family: var(--font-family-metric);
-}
-
-.notch-picker {
-  position: relative;
-  width: 116px;
-  height: 116px;
-  margin: 4px auto;
-}
-
-.notch-btn {
-  position: absolute;
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-neutral-l2);
-  border-radius: var(--radius-control); corner-shape: var(--corner-shape);
-  background: var(--bg-secondary, transparent);
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: var(--control-transition);
-}
-
-.notch-btn:hover {
-  border-color: var(--border-neutral-l3);
-  color: var(--text-secondary);
-}
-
-.notch-btn.active {
-  border-color: var(--interaction-border);
-  background: var(--control-selection-surface);
-  color: var(--text-brand);
-}
-
-.notch-btn.notch-up { top: 0; left: 50%; transform: translateX(-50%); }
-.notch-btn.notch-down { bottom: 0; left: 50%; transform: translateX(-50%); }
-.notch-btn.notch-left { left: 0; top: 50%; transform: translateY(-50%); }
-.notch-btn.notch-right { right: 0; top: 50%; transform: translateY(-50%); }
-
-.notch-center {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: var(--text-tertiary);
-  opacity: 0.6;
-}
-
-.field-value {
-  float: right;
-  color: var(--text-tertiary);
-  font-weight: var(--font-weight-default);
-  font-variant-numeric: tabular-nums;
 }
 
 .advanced-toggle {
@@ -923,97 +888,36 @@ function applyPreset(id: string) {
   padding: 10px 10px 12px;
   margin-bottom: 0;
 }
+.lip-section {
+  --grip-fill: rgba(210, 155, 62, .38);
+  --grip-ink: #996d2d;
+}
+:global(html.dark) .lip-section { --grip-fill: rgba(215, 169, 87, .28); --grip-ink: #d7b77d; }
 .lip-section-heading { margin-bottom: 10px; }
-.lip-current { display: inline-flex; align-items: baseline; gap: 4px; flex-shrink: 0; color: var(--text-brand); font-family: var(--font-family-metric); font-size: 16px; font-weight: var(--font-weight-strong); line-height: 22px; font-variant-numeric: tabular-nums; }
-.lip-current small { color: var(--text-tertiary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); }
 .platter-lip-slider { padding-inline: 4px; }
+.platter-lip-slider .lip-label { color: var(--text-default); }
+.lip-current { display: inline-flex; align-items: baseline; gap: 4px; flex-shrink: 0; color: var(--grip-ink); font-family: var(--font-family-metric); font-size: 16px; font-weight: var(--font-weight-strong); line-height: 22px; font-variant-numeric: tabular-nums; }
+.lip-current small, .slider-readout small { color: var(--text-tertiary); font-size: var(--body-sm-font-size); font-weight: var(--font-weight-default); }
 
-.platter-lip-slider .field-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 2px;
-}
+.lip-proportion { --lip-track: color-mix(in srgb, var(--grip-ink) 72%, var(--surface-raised)); --margin-track: color-mix(in srgb, var(--interaction-ink) 27%, var(--surface-raised)); }
+.lip-proportion :deep(.el-slider) { --el-slider-height: 10px; --el-slider-border-radius: 6px; --el-slider-button-wrapper-offset: -13px; width: auto; margin: 2px 8px 0; }
+.lip-proportion :deep(.el-slider__runway) { background: var(--margin-track); }
+.lip-proportion :deep(.el-slider__bar) { background: var(--lip-track); border-radius: inherit; }
+.lip-proportion :deep(.el-slider__button) { box-sizing: border-box; display: inline-grid; place-items: center; width: 15px; height: 22px; border: 1px solid var(--text-tertiary); border-radius: 6px; background: var(--surface-raised); }
+.lip-proportion :deep(.el-slider__button::after) { content: ''; width: 2px; height: 8px; border-radius: 1px; background: var(--text-secondary); }
+.lip-proportion.unavailable :deep(.el-slider__runway) { background: var(--surface-line); }
+.lip-proportion.unavailable :deep(.el-slider__button) { opacity: .55; box-shadow: none; }
+.lip-ratio-key { display: grid; grid-template-columns: fit-content(48%) minmax(0, 1fr); align-items: baseline; gap: 8px; color: var(--text-secondary); font-size: 11px; }
+.lip-ratio-key span { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 5px; }
+.lip-ratio-key span:last-child { justify-content: flex-end; text-align: end; }
+.lip-ratio-key i { align-self: center; flex: 0 0 7px; height: 7px; border-radius: 2px; background: var(--lip-track); }
+.lip-ratio-key span:last-child i { background: var(--margin-track); }
+.lip-ratio-key b { font-variant-numeric: tabular-nums; color: var(--text-default); }
+.lip-budget { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0 8px; margin-top: 3px; color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.platter-lip-card .auto-hint { margin: 2px 0 0; padding: 7px 9px; font-size: 11px; }
 
-.platter-lip-slider .lbl-l,
-.platter-lip-slider .lbl-r {
-  font-size: 12px;
-  font-weight: var(--font-weight-medium);
-  color: var(--text-default);
-}
-
-.platter-lip-slider .lbl-title {
-  font-size: 14px;
-  color: var(--text-tertiary);
-  margin: 0 8px;
-  font-weight: var(--font-weight-medium);
-}
-
-.platter-lip-slider :deep(.el-slider) {
-  margin: 10px 6px 4px 6px;
-}
-
-.platter-lip-slider :deep(.el-slider__runway) {
-  background: var(--parameter-slider-track);
-}
-
-.platter-lip-card .auto-hint {
-  margin: 8px 0 0 0;
-  padding: 6px 10px;
-  font-size: 11px;
-}
-
-.slider-readout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  padding: 10px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-family: var(--font-family-metric);
-  gap: 4px;
-}
-
-.slider-readout .rd-l,
-.slider-readout .rd-r {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  min-width: 64px;
-}
-
-.slider-readout .rd-l {
-  align-items: flex-start;
-}
-
-.slider-readout .rd-r {
-  min-width: 0;
-  align-items: flex-start;
-}
-.slider-readout .rd-r:last-child { align-items: flex-end; }
-
-.slider-readout .rd-k {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-family: var(--font-family-default);
-}
-
-.slider-readout .rd-v {
-  font-size: 13px;
-  font-weight: var(--font-weight-medium);
-  color: var(--text-default);
-  font-variant-numeric: tabular-nums;
-}
-
-.slider-readout .rd-eq {
-  flex: 1;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  font-style: italic;
-  font-family: var(--font-family-metric);
-  white-space: nowrap;
-}
+.slider-readout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 9px 0 0; padding-top: 8px; border-top: 1px solid var(--surface-line); }
+.slider-readout > div:last-child { text-align: end; }
+.slider-readout dt { font-size: 11px; color: var(--text-secondary); }
+.slider-readout dd { margin: 0; font-size: 13px; font-family: var(--font-family-metric); font-weight: var(--font-weight-medium); color: var(--text-default); font-variant-numeric: tabular-nums; }
 </style>

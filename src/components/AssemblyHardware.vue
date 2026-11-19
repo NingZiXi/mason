@@ -19,7 +19,7 @@ const size = computed(() => {
 
 <template>
   <section class="hardware-card" :aria-label="t('hardware.title')">
-    <InlineHelp id="assembly-hardware-help" :label="t('hardware.title')"
+    <InlineHelp id="assembly-hardware-help" topic="hardware" :label="t('hardware.title')"
       :text="t('hardware.help', { thickness: CLAMP_SHEET_ESTIMATE })">
       <h3 class="hardware-title">{{ t('hardware.title') }}</h3>
     </InlineHelp>

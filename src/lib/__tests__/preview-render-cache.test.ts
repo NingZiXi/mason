@@ -32,6 +32,8 @@ function setup() {
     const camera = { value: cam }, controls = { value: orbit };
     const cancelCameraMotion = () => {}, settleCameraControls = () => {}, selectedView = { value: 'iso' };
     let currentMeshPart = null, framedBoardOutline = null, disposed = false, renderSeq = 0, cacheGeneration = 0, renderTimer = null, cameraMotion = null;
+    let parameterSettle = null, assemblyFading = false;
+    const displayedPartHashes = new Map();
     const inspectionOpen = { value: false }, hasData = { value: true };
     const store = { pythonDetected: true, config: { pcbOutlinePoints: [[-15,-10], [15,-10], [15,10], [-15,10]] } };
     const activePart = { value: 'insert' }, loading = { value: false }, errorMsg = { value: null };

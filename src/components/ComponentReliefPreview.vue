@@ -43,29 +43,45 @@ const opacity = (region: ComponentReliefRegion) => {
 </script>
 
 <template>
-  <button type="button" class="relief-preview" :aria-label="t('relief.previewHint')" @click="emit('edit')">
-    <span class="preview-heading"><span>{{ t('relief.previewTitle') }}</span><span class="region-count">{{ t('relief.regionCount', { n: regions.length }) }}</span></span>
-    <svg class="preview-canvas" :viewBox="viewBox" preserveAspectRatio="xMidYMid meet" role="img" :aria-labelledby="`${id}-title`">
-      <title :id="`${id}-title`">{{ t('relief.previewTitle') }}</title>
-      <defs><clipPath :id="clipId"><path :d="boardPath" clip-rule="evenodd" /></clipPath></defs>
-      <g :transform="`scale(1, ${printSide === 'top' ? -1 : 1})`">
-        <path :d="boardPath" class="preview-board" />
-        <g :clip-path="`url(#${clipId})`">
-          <g v-for="region in regions" :key="region.id" class="preview-region" :class="{ 'is-through': region.through }" :fill-opacity="opacity(region)">
-            <ellipse v-if="region.shape === 'circle'" :cx="region.x" :cy="region.y" :rx="region.width / 2" :ry="region.height / 2" />
-            <path v-else-if="region.shape === 'polygon'" :d="path(region.points ?? [])" />
-            <rect v-else :x="region.x - region.width / 2" :y="region.y - region.height / 2" :width="region.width" :height="region.height" />
+  <button type="button" class="relief-preview" :class="{ 'is-empty': !regions.length }"
+    :aria-label="t(regions.length ? 'relief.previewHint' : 'relief.edit')"
+    :aria-describedby="regions.length ? undefined : `${id}-empty`" @click="emit('edit')">
+    <template v-if="regions.length">
+      <span class="preview-heading"><span>{{ t('relief.previewTitle') }}</span><span class="region-count">{{ t('relief.regionCount', { n: regions.length }) }}</span></span>
+      <svg class="preview-canvas" :viewBox="viewBox" preserveAspectRatio="xMidYMid meet" role="img" :aria-labelledby="`${id}-title`">
+        <title :id="`${id}-title`">{{ t('relief.previewTitle') }}</title>
+        <defs><clipPath :id="clipId"><path :d="boardPath" clip-rule="evenodd" /></clipPath></defs>
+        <g :transform="`scale(1, ${printSide === 'top' ? -1 : 1})`">
+          <path :d="boardPath" class="preview-board" />
+          <g :clip-path="`url(#${clipId})`">
+            <g v-for="region in regions" :key="region.id" class="preview-region" :class="{ 'is-through': region.through }" :fill-opacity="opacity(region)">
+              <ellipse v-if="region.shape === 'circle'" :cx="region.x" :cy="region.y" :rx="region.width / 2" :ry="region.height / 2" />
+              <path v-else-if="region.shape === 'polygon'" :d="path(region.points ?? [])" />
+              <rect v-else :x="region.x - region.width / 2" :y="region.y - region.height / 2" :width="region.width" :height="region.height" />
+            </g>
           </g>
         </g>
-      </g>
-    </svg>
-    <span v-if="regions.length" class="preview-legend" aria-hidden="true">
-      <span><i class="support-swatch" />{{ t('relief.supportLegend') }}</span>
-      <span v-if="range"><i class="relief-swatch" />{{ t('relief.blind') }} <span class="depth-range">{{ depthLabel }}</span></span>
-      <span v-if="throughCount"><i class="through-swatch" />{{ t('relief.throughCount', { count: throughCount }) }}</span>
-    </span>
-    <span v-else class="preview-empty">{{ t('relief.previewEmpty') }}</span>
-    <span class="preview-footer"><span>{{ t('relief.previewHint') }}</span><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg></span>
+      </svg>
+      <span class="preview-legend" aria-hidden="true">
+        <span><i class="support-swatch" />{{ t('relief.supportLegend') }}</span>
+        <span v-if="range"><i class="relief-swatch" />{{ t('relief.blind') }} <span class="depth-range">{{ depthLabel }}</span></span>
+        <span v-if="throughCount"><i class="through-swatch" />{{ t('relief.throughCount', { count: throughCount }) }}</span>
+      </span>
+      <span class="preview-footer"><span>{{ t('relief.previewHint') }}</span><svg class="preview-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg></span>
+    </template>
+    <template v-else>
+      <span class="empty-mark" aria-hidden="true">
+        <svg viewBox="0 0 20 20" width="20" height="20">
+          <rect x="2.5" y="4" width="15" height="12" rx="2" />
+          <rect x="7" y="7.5" width="6" height="5" rx="1" stroke-dasharray="2 2" />
+        </svg>
+      </span>
+      <span class="empty-copy">
+        <span class="empty-title">{{ t('relief.edit') }}</span>
+        <span :id="`${id}-empty`" class="empty-hint">{{ t('relief.previewEmpty') }}</span>
+      </span>
+      <svg class="preview-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg>
+    </template>
   </button>
 </template>
 
@@ -88,10 +104,16 @@ const opacity = (region: ComponentReliefRegion) => {
 .preview-legend .relief-swatch { border-color: var(--interaction-border); background: color-mix(in srgb, var(--bg-brand) 42%, transparent); }
 .preview-legend .through-swatch { border: 1px dashed var(--interaction-ink); background: color-mix(in srgb, var(--bg-brand) 72%, transparent); }
 .preview-legend .depth-range { color: var(--text-tertiary); font-family: var(--font-family-metric); font-variant-numeric: tabular-nums; }
-.preview-empty { padding-bottom: 10px; text-align: center; color: var(--text-tertiary); font-size: 10px; }
 .preview-footer { padding: 10px 0; border-top: 1px solid var(--surface-line); color: var(--interaction-ink); }
-.preview-footer svg { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; transition: translate var(--motion-panel) var(--ease-out); }
+.relief-preview.is-empty { flex-direction: row; align-items: center; gap: 10px; min-height: 58px; padding: 9px 11px; }
+.relief-preview.is-empty:focus-visible { outline-offset: -2px; }
+.empty-mark { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: var(--radius-inner); background: var(--surface-well); color: var(--interaction-ink); }
+.empty-mark svg, .preview-chevron { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.empty-copy { display: grid; flex: 1; min-width: 0; gap: 3px; line-height: 1.5; overflow-wrap: anywhere; }
+.empty-title { color: var(--text-default); font-size: var(--body-sm-font-size); font-weight: 600; }
+.empty-hint { color: var(--text-secondary); font-size: 10px; }
+.preview-chevron { flex: 0 0 auto; color: var(--interaction-ink); transition: translate var(--motion-panel) var(--ease-out); }
 @media (hover: hover) and (pointer: fine) {
-  .relief-preview:hover .preview-footer svg { translate: 3px 0; }
+  .relief-preview:hover .preview-chevron { translate: 3px 0; }
 }
 </style>

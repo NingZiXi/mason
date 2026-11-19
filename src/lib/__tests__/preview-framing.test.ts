@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs';
 import { createSourceFile, isFunctionDeclaration, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
 import * as THREE from 'three';
 import { getModelPalette } from '../model-palette';
-import { createPreviewFramingMotion } from '../preview-camera-motion';
+import { createPreviewFramingMotion, matchesPreviewView, type PreviewView } from '../preview-camera-motion';
 
 // Exercise the real mesh replacement and camera framing without WebGL or UI.
 const source = readFileSync(new URL('../../components/ModelPreview.vue', import.meta.url), 'utf8');
 const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)![1];
 const syntax = createSourceFile('ModelPreview.ts', script, ScriptTarget.Latest, true, ScriptKind.TS);
-const names = new Set(['applyStlToMesh', 'applyAssembly', 'framePreviewObject', 'cancelCameraMotion', 'onCameraInteraction']);
+const names = new Set(['applyStlToMesh', 'applyAssembly', 'framePreviewObject', 'cancelCameraMotion', 'onCameraInteraction', 'onCameraChange',
+  'invalidate', 'animate', 'scrubExplosion', 'resetExplosion', 'settleParameterUpdate', 'advanceParameterSettle', 'finishParameterSettle']);
 const functions = syntax.statements.filter(node => isFunctionDeclaration(node) && names.has(node.name?.text ?? ''));
 const javascript = transpileModule(functions.map(node => node.getText(syntax)).join('\n'),
   { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
@@ -23,7 +24,10 @@ function setup(aspect = 4 / 3) {
   const update = vi.fn(() => { camera.lookAt(target); camera.updateMatrixWorld(true); });
   update();
   const settle = vi.fn();
-  let now = 0;
+  let now = 0, nextFrame = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  const requestFrame = (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; };
+  const render = vi.fn();
   const makeAssembly = () => {
     const group = new THREE.Group();
     const geometry = new THREE.BoxGeometry(180, 30, 160), material = new THREE.MeshBasicMaterial();
@@ -32,30 +36,40 @@ function setup(aspect = 4 / 3) {
     return group;
   };
   const create = new Function('THREE', 'cam', 'target', 'update', 'settle', 'palette',
-    'createPreviewFramingMotion', 'performance', 'buildJigAssembly', `
+    'createPreviewFramingMotion', 'matchesPreviewView', 'performance', 'buildJigAssembly', 'requestAnimationFrame', 'render', `
     const camera = { value: cam }, controls = { value: { target, update } };
     const modelPalette = { value: palette }, ui = { skin: 'classic' }, activePart = { value: 'insert' };
     const store = { config: { pcbOutlinePoints: [[-20,-15], [20,-15], [20,15], [-20,15]] } };
     const scene = { value: new THREE.Scene() }, currentMesh = { value: null }, currentAssembly = { value: null };
-    let currentMeshPart = null, framedBoardOutline = null, cameraMotion = null;
+    let currentMeshPart = null, framedBoardOutline = null, cameraMotion = null, syncingCamera = false;
     const settleCameraControls = settle, selectedView = { value: 'iso' };
-    const renderer = { value: null }, pcbEnvironment = null;
-    const stlCache = { value: { insert: {}, base: {}, cover: {} } }, getOrParseGeometry = () => {};
+    const renderer = { value: { render } }, pcbEnvironment = {};
+    const animationId = { value: null }, inspectionOpen = { value: false }, measureTags = { value: [] };
+    const cameraOffset = new THREE.Vector3(), disposed = false;
+    let needsRender = true, explosionReset = null;
+    let assemblyFading = false, parameterSettle = null;
+    const displayedPartHashes = new Map(), JIG_PARTS = ['insert', 'base', 'cover'];
+    const stlCache = { value: Object.fromEntries(JIG_PARTS.map(part => [part, { paramsHash: part }])) };
+    const getOrParseGeometry = () => {};
     const effectiveInsertHeight = () => 10, effectiveJigPrintSide = () => 'top';
     const showAssemblyPcb = { value: true }, showAssemblyStencil = { value: true }, inspectRelief = { value: false };
     const explosionPercent = { value: 0 };
-    let displayedExplosion = 0, explosionFrameTime = null;
+    let displayedExplosion = 0;
     const setMeasureMode = () => {}, setJigVisibility = () => {}, setJigReliefInspection = () => {};
+    const inheritJigVisibility = () => false, stepJigVisibility = () => false;
     const setJigExplosion = (group, value) => { group.children[0].position.y = value * 120; };
-    const resetTopology = () => {}, invalidate = () => {};
+    const resetTopology = () => {};
     const disposeMesh = () => {
+      parameterSettle = null; assemblyFading = false; displayedPartHashes.clear();
       if (currentMesh.value) { scene.value.remove(currentMesh.value); currentMesh.value.material.dispose(); }
       if (currentAssembly.value) scene.value.remove(currentAssembly.value);
       currentMesh.value = null; currentMeshPart = null; currentAssembly.value = null;
     };
     ${javascript}
-    return { apply: applyStlToMesh, mesh: () => currentMesh.value, applyAssembly,
+    return { scrub: scrubExplosion, reset: resetExplosion, percent: () => explosionPercent.value,
+      lift: () => currentAssembly.value.children[0].position.y, apply: applyStlToMesh, mesh: () => currentMesh.value, applyAssembly,
       motion: () => cameraMotion, interact: onCameraInteraction,
+      selected: () => selectedView.value, change: onCameraChange,
       sample: time => {
         if (!cameraMotion) return;
         const offset = new THREE.Vector3();
@@ -70,7 +84,8 @@ function setup(aspect = 4 / 3) {
       dispose: disposeMesh };
   `);
   const harness = create(THREE, camera, target, update, settle, getModelPalette('classic'),
-    createPreviewFramingMotion, { now: () => now }, makeAssembly) as {
+    createPreviewFramingMotion, matchesPreviewView, { now: () => now }, makeAssembly, requestFrame, render) as {
+    scrub: (value: number) => void; reset: () => void; percent: () => number; lift: () => number;
     apply: (geometry: THREE.BufferGeometry) => void;
     mesh: () => THREE.Mesh;
     board: () => void;
@@ -79,6 +94,8 @@ function setup(aspect = 4 / 3) {
     applyAssembly: () => void;
     motion: () => ReturnType<typeof createPreviewFramingMotion> | null;
     interact: () => void;
+    selected: () => PreviewView | null;
+    change: () => void;
     sample: (now: number) => void;
     dispose: () => void;
   };
@@ -100,10 +117,32 @@ function setup(aspect = 4 / 3) {
     }
   };
   const sample = (time: number) => { now = time; harness.sample(time); };
-  return { ...harness, sample, camera, target, update, settle, geometry, expectVisible };
+  const tick = (time: number) => {
+    now = time;
+    const pending = [...frames.values()]; frames.clear();
+    pending.forEach(frame => frame(now));
+  };
+  return { ...harness, sample, tick, frames, render, camera, target, update, settle, geometry, expectVisible };
 }
 
 describe('single-part preview framing', () => {
+  it('keeps the view selected through a click, dolly and pan, until the camera changes direction', () => {
+    const state = setup();
+    state.interact();
+    expect(state.selected()).toBe('iso');
+    state.camera.position.multiplyScalar(0.6);
+    state.change();
+    expect(state.selected()).toBe('iso');
+    const pan = new THREE.Vector3(40, -15, 10);
+    state.camera.position.add(pan);
+    state.target.add(pan);
+    state.change();
+    expect(state.selected()).toBe('iso');
+    state.camera.position.x += 25;
+    state.change();
+    expect(state.selected()).toBeNull();
+  });
+
   it.each([4 / 3, .45, .08])('frames a large first model at viewport aspect %s', aspect => {
     const state = setup(aspect);
     state.apply(state.geometry(600, 420));
@@ -234,5 +273,37 @@ describe('single-part preview framing', () => {
     state.sample(1000);
     expect(state.camera.position).toEqual(position);
     expect(state.target).toEqual(target);
+  });
+});
+
+describe('exploded assembly interaction', () => {
+  it('renders only the last slider input per frame without any trailing motion', () => {
+    const state = setup();
+    state.part('assembly'); state.applyAssembly(); state.tick(0);
+    state.render.mockClear();
+    state.scrub(85); state.scrub(12); state.scrub(60);
+    expect(state.frames.size).toBe(1);
+    state.tick(16);
+    expect(state.lift()).toBe(72);
+    expect(state.render).toHaveBeenCalledOnce();
+    expect(state.frames.size).toBe(0);
+  });
+
+  it('keeps the label and part aligned during reset, mesh refresh, and manual takeover', () => {
+    const state = setup();
+    state.part('assembly'); state.applyAssembly(); state.scrub(100); state.tick(0);
+    state.reset(); state.tick(130);
+    expect(state.percent()).toBeCloseTo(50);
+    state.applyAssembly();
+    expect(state.lift()).toBeCloseTo(60);
+    state.scrub(80); state.tick(145); state.tick(300);
+    expect(state.lift()).toBeCloseTo(96);
+    expect(state.percent()).toBe(80);
+    expect(state.frames.size).toBe(0);
+    state.reset(); state.tick(600);
+    expect(state.lift()).toBe(0);
+    expect(state.percent()).toBe(0);
+    state.reset();
+    expect(state.frames.size).toBe(0);
   });
 });

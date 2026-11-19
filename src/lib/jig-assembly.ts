@@ -30,20 +30,83 @@ export interface AssemblyOptions {
   jigPrintSide?: JigPrintSide;
 }
 
-/** Reveal the tray without discarding layer visibility or the explosion pose. */
-export function setJigReliefInspection(group: THREE.Group, enabled: boolean) {
-  for (const part of group.children) {
-    if (part.name === 'insert') continue;
-    part.traverse(object => {
-      if (!(object instanceof THREE.Mesh)) return;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      materials.forEach(material => {
-        if (material.transparent !== enabled) material.needsUpdate = true;
-        material.transparent = enabled;
-        material.opacity = enabled ? 0.18 : 1;
-        material.depthWrite = !enabled;
-      });
+type MaterialAppearance = Pick<THREE.Material, "opacity" | "alphaTest" | "transparent" | "depthWrite">;
+type JigPartName = "insert" | "base" | "cover";
+type PartAppearance = {
+  object: THREE.Object3D;
+  materials: Map<THREE.Material, MaterialAppearance>;
+  amount: number;
+  opacity: number;
+  transition: { from: number; to: number; start: number; duration: number } | null;
+};
+type AssemblyAppearance = {
+  relief: boolean;
+  requestedVisibility: [boolean, boolean];
+  parts: PartAppearance[];
+  layers: readonly [PartAppearance | undefined, PartAppearance | undefined];
+};
+const appearanceStates = new WeakMap<THREE.Group, AssemblyAppearance>();
+
+function getAppearance(group: THREE.Group) {
+  const existing = appearanceStates.get(group);
+  if (existing) return existing;
+  const parts = group.children.map((object): PartAppearance => {
+    const materials = new Map<THREE.Material, MaterialAppearance>();
+    object.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      const meshMaterials: THREE.Material[] = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of meshMaterials) {
+        const { opacity, alphaTest, transparent, depthWrite } = material;
+        materials.set(material, { opacity, alphaTest, transparent, depthWrite });
+      }
     });
+    return { object, materials, amount: object.visible ? 1 : 0, opacity: 1, transition: null };
+  });
+  const pcb = parts.find(part => part.object.name === "pcb");
+  const stencil = parts.find(part => part.object.name === "metal-stencil");
+  const state: AssemblyAppearance = {
+    relief: false, parts, layers: [pcb, stencil],
+    requestedVisibility: [pcb?.object.visible ?? true, stencil?.object.visible ?? true],
+  };
+  appearanceStates.set(group, state);
+  return state;
+}
+
+function applyPartAppearance(part: PartAppearance, state: AssemblyAppearance) {
+  // A hidden layer has its normal material ready for the next reveal.
+  const relief = state.relief && part.object.name !== "insert";
+  const opacityFactor = (relief ? 0.18 : 1) * (part.amount || 1) * part.opacity;
+  const fading = opacityFactor < 1;
+  // Parameter changes briefly dim solids. Keep their depth while they remain
+  // mostly opaque; true layer fades and relief inspection must reveal behind them.
+  const solidKeepsOcclusion = part.opacity < 1 && opacityFactor >= 0.8;
+  for (const [material, original] of part.materials) {
+    const transparent = original.transparent || relief || fading;
+    if (material.transparent !== transparent) {
+      material.transparent = transparent;
+      material.needsUpdate = true;
+    }
+    material.opacity = original.opacity * opacityFactor;
+    material.depthWrite = original.depthWrite && !relief && (!fading || solidKeepsOcclusion);
+    // Three applies alpha testing after opacity and the map are multiplied.
+    // Scale both terms so PCB pads and stencil apertures keep the same cutout.
+    material.alphaTest = original.alphaTest * (opacityFactor || 1);
+  }
+}
+
+function applyLayerAmount(layer: PartAppearance, amount: number, state: AssemblyAppearance) {
+  layer.amount = amount;
+  layer.object.visible = amount > 0;
+  applyPartAppearance(layer, state);
+}
+
+/** Reveal the tray without discarding layer visibility, fades, or the explosion pose. */
+export function setJigReliefInspection(group: THREE.Group, enabled: boolean) {
+  const state = getAppearance(group);
+  if (state.relief === enabled) return;
+  state.relief = enabled;
+  for (const part of state.parts) {
+    if (part.object.name !== "insert") applyPartAppearance(part, state);
   }
 }
 
@@ -78,10 +141,79 @@ export function recolorJigAssembly(group: THREE.Group, palette: ModelPalette) {
 }
 
 export function setJigVisibility(group: THREE.Group, pcb: boolean, stencil: boolean) {
-  const board = group.getObjectByName("pcb");
-  const sheet = group.getObjectByName("metal-stencil");
-  if (board) board.visible = pcb;
-  if (sheet) sheet.visible = stencil;
+  const state = getAppearance(group);
+  state.requestedVisibility = [pcb, stencil];
+  state.layers.forEach((layer, index) => {
+    if (!layer) return;
+    layer.transition = null;
+    applyLayerAmount(layer, Number(state.requestedVisibility[index]), state);
+  });
+}
+
+/** Continue a same-board layer fade on its replacement assembly without a visible snap. */
+export function inheritJigVisibility(group: THREE.Group, previousGroup: THREE.Group) {
+  const next = getAppearance(group);
+  const previous = getAppearance(previousGroup);
+  next.requestedVisibility = [...previous.requestedVisibility];
+  next.layers.forEach((layer, index) => {
+    if (!layer) return;
+    const source = previous.layers[index];
+    layer.transition = source?.transition ? { ...source.transition } : null;
+    applyLayerAmount(layer, source?.amount ?? Number(next.requestedVisibility[index]), next);
+  });
+  return next.layers.some(layer => !!layer?.transition);
+}
+
+/** Fade only generated plastic pieces; layer and hardware materials stay untouched. */
+export function setJigPartsOpacity(group: THREE.Group, names: readonly JigPartName[], opacity: number) {
+  const state = getAppearance(group);
+  const amount = THREE.MathUtils.clamp(Number.isFinite(opacity) ? opacity : 1, 0, 1);
+  for (const name of names) {
+    const part = state.parts.find(item => item.object.name === name);
+    if (!part || part.opacity === amount) continue;
+    part.opacity = amount;
+    applyPartAppearance(part, state);
+  }
+}
+
+/** Retarget from the last rendered amount when a switch is reversed mid-fade. */
+export function animateJigVisibility(group: THREE.Group, pcb: boolean, stencil: boolean, now: number) {
+  const state = getAppearance(group);
+  state.requestedVisibility = [pcb, stencil];
+  const { layers } = state;
+  layers.forEach((layer, index) => {
+    if (!layer) return;
+    const to = Number(state.requestedVisibility[index]);
+    const from = layer.amount;
+    if (to === (layer.transition?.to ?? from)) return;
+    if (to === from) {
+      layer.transition = null;
+      applyLayerAmount(layer, to, state);
+      return;
+    }
+    layer.transition = { from, to, start: now, duration: Math.max(55, (to ? 185 : 145) * Math.abs(to - from)) };
+  });
+  return layers.some(layer => !!layer?.transition);
+}
+
+/** Advance only transitioning layers and tell the render loop when to stop. */
+export function stepJigVisibility(group: THREE.Group, now: number) {
+  const state = appearanceStates.get(group);
+  if (!state) return false;
+  const { layers } = state;
+  for (const layer of layers) {
+    if (!layer?.transition) continue;
+    const { from, to, start, duration } = layer.transition;
+    const progress = THREE.MathUtils.clamp((now - start) / duration, 0, 1);
+    if (progress === 1) {
+      layer.transition = null;
+      applyLayerAmount(layer, to, state);
+    } else {
+      const eased = progress * progress * (3 - 2 * progress);
+      applyLayerAmount(layer, THREE.MathUtils.lerp(from, to, eased), state);
+    }
+  }
+  return layers.some(layer => !!layer?.transition);
 }
 
 const explosionStates = new WeakMap<THREE.Group, Array<{ object: THREE.Object3D; y: number; lift: number }>>();
@@ -216,6 +348,7 @@ export function buildJigAssembly(
 /** Assembly owns its clones and fasteners, never the STL cache's geometry. */
 export function disposeJigAssembly(group: THREE.Group) {
   explosionStates.delete(group);
+  appearanceStates.delete(group);
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
   group.traverse(object => {

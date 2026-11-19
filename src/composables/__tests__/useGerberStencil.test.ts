@@ -204,3 +204,65 @@ M02*`,
     expect(result.outlineFallbackReason).toBe('invalid');
   });
 });
+
+describe('stencil ZIP outline recovery', () => {
+  it('recovers separated lines and arcs, retains an internal slot and assigns pads to PCB material', async () => {
+    type Point = [number, number];
+    const coord = (mm: number) => Math.round(mm * 100_000);
+    const xy = ([x, y]: Point) => `X${coord(x)}Y${coord(y)}`;
+    const line = (from: Point, to: Point) => `G01*\n${xy(from)}D02*\n${xy(to)}D01*`;
+    const arc = (from: Point, to: Point, [i, j]: Point, direction: 'G02' | 'G03') =>
+      `${xy(from)}D02*\n${direction}*\n${xy(to)}I${coord(i)}J${coord(j)}D01*`;
+    const outline = [
+      '%FSLAX45Y45*%', '%MOMM*%', '%ADD10C,0.25*%', '%ADD11C,0.15*%', 'D10*', 'G75*',
+      // A 40 x 30 mm rounded rectangle. The independent strokes have mixed
+      // directions, scrambled order, small gaps and a 0.074 mm tangent overlap.
+      line([40, 26.994], [40, 3.006]),
+      arc([3, 0], [0, 3], [0, 3], 'G02'),
+      line([3.032, 30], [36.967, 30]),
+      line([15.5, 8.147], [15.5, 17.769]),
+      arc([37, 0], [40, 3], [0, 3], 'G03'),
+      line([0, 27.074], [0, 3.004]),
+      arc([0, 27], [3, 30], [3, 0], 'G02'),
+      line([36.949, 0], [3.041, 0]),
+      line([16.7, 17.769], [16.7, 8.147]),
+      arc([40, 27], [37, 30], [-3, 0], 'G03'),
+      // The slot caps are 0.131 and 0.147 mm past the ends of the side walls.
+      'D11*',
+      line([16.7, 8], [15.5, 8]),
+      line([15.5, 17.9], [16.7, 17.9]),
+      'M02*',
+    ].join('\n');
+    const flash = (...points: Point[]) => [
+      '%FSLAX45Y45*%', '%MOMM*%', '%ADD10R,0.4X0.4*%', 'D10*',
+      ...points.map(point => `${xy(point)}D03*`), 'M02*',
+    ].join('\n');
+
+    const result = await importZip({
+      'board.GKO': outline,
+      'top.GTP': flash([0.55, 5], [39.45, 15], [2.2, 28], [0.4, 29.6]),
+      'bottom.GBP': flash([16.1, 13], [19.4, 0.5], [30, 29.45]),
+    });
+
+    expect(result.outlineSource).toBe('gerber');
+    expect(result.isPanel).toBe(false);
+    expect(result.width).toBeCloseTo(40, 4);
+    expect(result.height).toBeCloseTo(30, 4);
+    expect(result.outlinePoints[result.outlinePoints.length - 1]).toEqual(result.outlinePoints[0]);
+    const cornerOffset = 3 - 3 / Math.SQRT2;
+    for (const x of [-20 + cornerOffset, 20 - cornerOffset]) {
+      for (const y of [-15 + cornerOffset, 15 - cornerOffset]) {
+        expect(result.outlinePoints.some(point => Math.hypot(point[0] - x, point[1] - y) < 0.03)).toBe(true);
+      }
+    }
+    expect(result.outlineHoles).toHaveLength(1);
+    const [slot] = result.outlineHoles;
+    expect(slot[slot.length - 1]).toEqual(slot[0]);
+    expect(Math.max(...slot.map(([x]) => x)) - Math.min(...slot.map(([x]) => x))).toBeCloseTo(1.2, 4);
+    expect(Math.max(...slot.map(([, y]) => y)) - Math.min(...slot.map(([, y]) => y))).toBeCloseTo(9.9, 4);
+    // Retain pads near the perimeter and exclude those outside a rounded corner or within the slot.
+    const centers = (pads: typeof result.topPads) => pads.map(({ cx, cy }) => [+cx.toFixed(2), +cy.toFixed(2)]);
+    expect(centers(result.topPads)).toEqual([[-19.45, -10], [19.45, 0], [-17.8, 13]]);
+    expect(centers(result.bottomPads)).toEqual([[-0.6, -14.5], [10, 14.45]]);
+  });
+});

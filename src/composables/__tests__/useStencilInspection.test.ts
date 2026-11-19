@@ -16,19 +16,36 @@ function setup(fetch: (request: InspectionRequest<{}>, signal: AbortSignal) => P
 }
 
 describe('inspection request lifetime', () => {
-  it('is lazy and reuses an unchanged result after reopening', async () => {
+  it('opens immediately and restores a cached board without a loading frame on re-entry', async () => {
     vi.useFakeTimers();
     const fetch = vi.fn(async () => result(1));
     const state = setup(fetch);
-    await vi.advanceTimersByTimeAsync(200);
     expect(fetch).not.toHaveBeenCalled();
     state.active.value = true;
-    await vi.advanceTimersByTimeAsync(200);
-    expect(state.data.value?.summary.openings).toBe(1);
-    state.active.value = false;
-    state.active.value = true;
-    await vi.advanceTimersByTimeAsync(200);
+    await nextTick();
+    expect(fetch).toHaveBeenCalledOnce();
+    await nextTick();
+    const displayed = state.data.value;
+    expect(displayed?.summary.openings).toBe(1);
+    state.active.value = false; await nextTick();
+    expect(state.ready.value).toBe(false);
+    state.active.value = true; await nextTick();
+    expect(state.ready.value).toBe(true);
+    expect(state.loading.value).toBe(false);
+    expect(state.data.value).toBe(displayed);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches sides immediately even when a same-side edit is waiting for debounce', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async (_request: InspectionRequest<{}>, _signal: AbortSignal) => result(1));
+    const state = setup(fetch);
+    state.active.value = true; await nextTick();
+    state.request.value = snapshot('edited'); await nextTick();
+    state.request.value = { ...snapshot('other-side'), part: 'stencil_bottom' }; await nextTick();
+    expect(fetch.mock.calls.map(([r]) => r.key)).toEqual(['one', 'other-side']);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
   it('invalidates stale results before rendering and ignores superseded replies', async () => {
     vi.useFakeTimers();
@@ -149,10 +166,12 @@ describe('inspection request lifetime', () => {
   it('replaces a queued refresh with an explicit retry without duplicating work', async () => {
     vi.useFakeTimers();
     let resolve!: (value: StencilInspection) => void;
-    const fetch = vi.fn(() => new Promise<StencilInspection>(done => { resolve = done; }));
+    const fetch = vi.fn(async () => result(1));
     const state = setup(fetch);
-    state.active.value = true;
-    await nextTick();
+    state.active.value = true; await nextTick();
+    fetch.mockClear();
+    fetch.mockImplementationOnce(() => new Promise<StencilInspection>(done => { resolve = done; }));
+    state.request.value = snapshot('edited'); await nextTick();
     const retry = state.retry();
     await vi.advanceTimersByTimeAsync(220);
     expect(fetch).toHaveBeenCalledTimes(1);

@@ -49,7 +49,7 @@ async function installDeps() {
   try {
     await invoke("install_deps", { pythonPath: store.pythonPath });
     ElMessage.success(t("python.installDone"));
-    await store.detectPython();
+    await store.detectPython(true);
   } catch (e) {
     ElMessage.error(`${t("python.installFailed")}: ${e}`);
   } finally {
@@ -66,7 +66,7 @@ async function installAll() {
     phase.value = "install-deps";
     await invoke("install_deps", { pythonPath: pyPath });
     ElMessage.success(t("python.installDone"));
-    await store.detectPython();
+    await store.detectPython(true);
   } catch (e) {
     ElMessage.error(`${t("python.installFailed")}: ${e}`);
   } finally {
@@ -82,7 +82,7 @@ async function pickFile() {
   if (!selected || Array.isArray(selected)) return;
   try {
     await invoke<string>("set_python_path", { path: selected });
-    await store.detectPython();
+    await store.detectPython(true);
   } catch (e) {
     ElMessage.error(String(e));
   }
@@ -120,7 +120,7 @@ function openPythonDownload() {
       </div>
       <div class="path-row">
         <code class="path">{{ store.pythonPath }}</code>
-        <button class="link-btn" @click="store.detectPython">{{ t('python.reDetect') }}</button>
+        <button class="link-btn" @click="store.detectPython()">{{ t('python.reDetect') }}</button>
       </div>
     </template>
 
@@ -151,7 +151,7 @@ function openPythonDownload() {
       </button>
       <p v-if="view === 'missing' && !store.bundledEngine" class="footnote">{{ t('python.pipHint') }}</p>
       <div class="alt-actions">
-        <button class="link-btn" :disabled="busy" @click="store.detectPython">{{ t('python.reDetect') }}</button>
+        <button class="link-btn" :disabled="busy" @click="store.detectPython()">{{ t('python.reDetect') }}</button>
         <button class="link-btn" :disabled="busy" @click="pickFile">{{ t('python.pickFile') }}</button>
       </div>
     </template>

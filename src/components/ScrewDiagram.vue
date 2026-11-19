@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useConfigStore, positioningPostLayoutFor, windowHalfXY, SCREW_SPECS } from "../stores/config";
 import MotionCollapse from "./MotionCollapse.vue";
+import { focusParameterControl } from "../lib/focus-parameter-control";
 import InlineHelp from "./InlineHelp.vue";
 import AssemblyHardware from "./AssemblyHardware.vue";
 
@@ -41,10 +42,13 @@ const alignmentPosts = computed(() =>
 );
 
 // Convert the engine parameter to the actual positioning-post OD.
-const cornerPostDiameter = computed({
-  get: () => c.value.cornerScrewD + 4,
-  set: (diameter: number) => { c.value.cornerScrewD = diameter - 4; },
-});
+const cornerPostDiameter = computed(() => c.value.cornerScrewD + 4);
+
+type NumberKey = 'periScrewD' | 'cornerScrewD' | 'nutAcrossFlats' | 'nutHeight' | 'nutPocketClearance';
+function updateNumber(key: NumberKey, value: number | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  c.value[key] = key === 'cornerScrewD' ? value - 4 : value;
+}
 
 const rect = computed(() => {
   const { scale } = diagramSize.value;
@@ -177,7 +181,7 @@ const showAdvanced = ref(false);
     <div class="section-label">{{ t('config.screwPerimeter') }}</div>
 
     <div class="field">
-      <label class="field-label">
+      <label for="screw-spacing" class="field-label" @click.prevent="focusParameterControl">
         {{ t('config.spacing') }}
         <span class="field-value">
           <template v-if="c.screwSpacing === 0">{{ t('config.off') }}</template>
@@ -185,7 +189,7 @@ const showAdvanced = ref(false);
         </span>
       </label>
       <div class="slider-row">
-        <el-slider
+        <el-slider id="screw-spacing" :aria-label="t('config.spacing')"
           v-model="c.screwSpacing"
           :min="0"
           :max="60"
@@ -196,15 +200,19 @@ const showAdvanced = ref(false);
     </div>
 
     <div class="field">
-      <InlineHelp id="config-screwSpecHint" :label="t('config.screwSpec')" :text="t('config.screwSpecHint')"><span class="field-label">{{ t('config.screwSpec') }}</span></InlineHelp>
-      <el-select v-model="c.screwSpec" style="width: 100%">
-        <el-option
-          v-for="opt in SCREW_SPEC_OPTIONS"
-          :key="opt.value"
-          :label="opt.label"
-          :value="opt.value"
-        />
-      </el-select>
+      <InlineHelp id="config-screwSpecHint" topic="screw" :label="t('config.screwSpec')">
+        <label for="screw-spec" class="field-label">{{ t('config.screwSpec') }}</label>
+        <template #control>
+          <el-select id="screw-spec" v-model="c.screwSpec" style="width: 100%">
+            <el-option
+              v-for="opt in SCREW_SPEC_OPTIONS"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </template>
+      </InlineHelp>
     </div>
 
     <AssemblyHardware />
@@ -220,17 +228,19 @@ const showAdvanced = ref(false);
     <MotionCollapse :open="showAdvanced"><div class="advanced-body">
       <div class="field-row">
         <div class="field">
-          <label class="field-label">{{ t('config.periScrewD') }}</label>
-          <el-input-number
-            v-model="c.periScrewD"
+          <label for="screw-peri-screw-d" class="field-label">{{ t('config.periScrewD') }}</label>
+          <el-input-number id="screw-peri-screw-d"
+            :model-value="c.periScrewD" :value-on-clear="c.periScrewD"
+            @update:model-value="updateNumber('periScrewD', $event)"
             :min="2" :max="6" :step="0.5" :precision="1"
             size="small" style="width: 100%"
           />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('config.cornerScrewD') }}</label>
-          <el-input-number
-            v-model="cornerPostDiameter"
+          <label for="screw-corner-screw-d" class="field-label">{{ t('config.cornerScrewD') }}</label>
+          <el-input-number id="screw-corner-screw-d"
+            :model-value="cornerPostDiameter" :value-on-clear="cornerPostDiameter"
+            @update:model-value="updateNumber('cornerScrewD', $event)"
             :min="7" :max="12" :step="0.5" :precision="1"
             size="small" style="width: 100%"
           />
@@ -238,42 +248,44 @@ const showAdvanced = ref(false);
       </div>
 
       <div class="field checkbox-field">
-        <el-checkbox v-model="c.useHexNut" size="default">
-          <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
-        </el-checkbox>
+        <InlineHelp id="screw-nut-pocket-help" topic="nutPocket" :label="t('config.hexNutPocket')">
+          <el-checkbox v-model="c.useHexNut" size="default">
+            <span class="checkbox-label">{{ t('config.useHexNut') }}</span>
+          </el-checkbox>
+        </InlineHelp>
       </div>
       <div v-if="c.useHexNut" class="field-row">
         <div class="field">
-          <label class="field-label">{{ t('config.nutAcrossFlats') }}</label>
-          <el-input-number
-            v-model="c.nutAcrossFlats"
+          <label for="screw-nut-across-flats" class="field-label">{{ t('config.nutAcrossFlats') }}</label>
+          <el-input-number id="screw-nut-across-flats"
+            :model-value="c.nutAcrossFlats" :value-on-clear="c.nutAcrossFlats"
+            @update:model-value="updateNumber('nutAcrossFlats', $event)"
             :min="3" :max="15" :step="0.1" :precision="2"
             size="small" style="width: 100%"
           />
         </div>
         <div class="field">
-          <label class="field-label">{{ t('config.nutHeight') }}</label>
-          <el-input-number
-            v-model="c.nutHeight"
+          <label for="screw-nut-height" class="field-label">{{ t('config.nutHeight') }}</label>
+          <el-input-number id="screw-nut-height"
+            :model-value="c.nutHeight" :value-on-clear="c.nutHeight"
+            @update:model-value="updateNumber('nutHeight', $event)"
             :min="1.5" :max="6" :step="0.1" :precision="2"
             size="small" style="width: 100%"
           />
         </div>
       </div>
       <div v-if="c.useHexNut" class="field">
-        <InlineHelp id="screw-nutPocketClearanceHint" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')"><span class="field-label">{{ t('config.nutPocketClearance') }}</span></InlineHelp>
-        <el-input-number
-          v-model="c.nutPocketClearance"
-          :min="0" :max="1" :step="0.05" :precision="2"
-          size="small" style="width: 100%"
-        />
-      </div>
-      <div v-if="c.useHexNut" class="auto-hint">
-        <svg viewBox="0 0 16 16" width="14" height="14" class="hint-icon" aria-hidden="true">
-          <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.2" />
-          <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <span>{{ t('config.useHexNutHint') }}</span>
+        <InlineHelp id="screw-nutPocketClearanceHint" topic="nut" :label="t('config.nutPocketClearance')" :text="t('config.nutPocketClearanceHint')">
+          <label for="screw-nut-pocket-clearance" class="field-label">{{ t('config.nutPocketClearance') }}</label>
+          <template #control>
+            <el-input-number id="screw-nut-pocket-clearance"
+              :model-value="c.nutPocketClearance" :value-on-clear="c.nutPocketClearance"
+              @update:model-value="updateNumber('nutPocketClearance', $event)"
+              :min="0" :max="1" :step="0.05" :precision="2"
+              size="small" style="width: 100%"
+            />
+          </template>
+        </InlineHelp>
       </div>
     </div></MotionCollapse>
   </div>

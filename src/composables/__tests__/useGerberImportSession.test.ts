@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
+import JSZip from 'jszip';
+import * as parser from '../../lib/gerber/parser';
 import { useGerberOutline } from '../useGerberOutline';
 import { useGerberStencil, type GerberStencilResult } from '../useGerberStencil';
 import { useGerberImportSession } from '../useGerberImportSession';
@@ -12,6 +14,10 @@ function deferred<T>() {
 const outlineText = '%FSLAX24Y24*%\n%MOMM*%\nG01*\nX0Y0D02*\nX100000Y0D01*\nX100000Y80000D01*\nX0Y80000D01*\nX0Y0D01*\nM02*';
 const pasteText = '%FSLAX24Y24*%\n%MOMM*%\n%ADD10R,2X2*%\nD10*\nX0Y0D03*\nM02*';
 const file = (name: string, text: string) => ({ name, text: async () => text }) as File;
+async function zipFile(name: string, outline = outlineText) {
+  const zip = new JSZip(); zip.file('board.gko', outline); zip.file('board.gtp', pasteText);
+  return Object.assign(await zip.generateAsync({ type: 'nodebuffer' }), { name }) as unknown as File;
+}
 function setup(initialMode: 'jig' | 'stencil' = 'jig') {
   const mode = ref(initialMode), outline = useGerberOutline(), stencil = useGerberStencil(), submit = vi.fn();
   const session = useGerberImportSession({ mode: () => mode.value, outline, stencil, submit });
@@ -19,6 +25,23 @@ function setup(initialMode: 'jig' | 'stencil' = 'jig') {
 }
 
 describe('the entire Gerber import transaction', () => {
+  it.each(['jig', 'stencil'] as const)('opens and analyzes a panel ZIP just once per %s import', async mode => {
+    const { session, submit } = setup(mode);
+    const input = await zipFile('panel.zip', outlineText.replace('G01*', 'G01*\n%SRX2Y1I12.0J0*%').replace('M02*', '%SR*%\nM02*'));
+    const load = vi.spyOn(JSZip, 'loadAsync'), analyze = vi.spyOn(parser, 'extractOutlineScopes');
+    try {
+      await session.processFile(input);
+      expect(load).toHaveBeenCalledTimes(1); expect(analyze).toHaveBeenCalledTimes(1);
+      const payload = submit.mock.calls[0][0];
+      expect(payload).toMatchObject({ isPanel: true, hasPads: true, variants: { panel: { width: 22 }, single: { width: 10 } } });
+      expect(payload.variants.boards).toHaveLength(2);
+      expect(payload.details).toMatchObject({ outline: 'board.gko', topPaste: 'board.gtp', bottomPaste: null });
+      await session.processFile(await zipFile('panel.zip')); // different file with the same name
+      expect(analyze).toHaveBeenCalledTimes(2);
+      expect(submit.mock.calls[1][0]).toMatchObject({ isPanel: false, variants: { panel: { width: 10 } } });
+    } finally { load.mockRestore(); analyze.mockRestore(); }
+  });
+
   it('orders native file reads before parsing, so an earlier slow read cannot start a new import', async () => {
     const { session, submit, stencil } = setup('stencil');
     const oldRead = deferred<File>();
@@ -35,7 +58,7 @@ describe('the entire Gerber import transaction', () => {
     const { session, stencil, submit } = setup();
     const paste = deferred<GerberStencilResult | null>();
     const parse = vi.spyOn(stencil, 'processFile').mockReturnValue(paste.promise);
-    const pending = session.processFile(file('board.gko', outlineText));
+    const pending = session.processFile(await zipFile('board.zip'));
     await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
     expect(session.loading.value).toBe(true);
     session.cancel();
@@ -49,7 +72,7 @@ describe('the entire Gerber import transaction', () => {
     const { session, stencil, submit } = setup();
     const paste = deferred<GerberStencilResult | null>(), nextRead = deferred<File>();
     const parse = vi.spyOn(stencil, 'processFile').mockReturnValueOnce(paste.promise);
-    const old = session.processFile(file('old.gko', outlineText));
+    const old = session.processFile(await zipFile('old.zip'));
     await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
     const next = session.processSource(() => nextRead.promise);
     paste.resolve(null); await old;
@@ -85,10 +108,12 @@ describe('the entire Gerber import transaction', () => {
   it('propagates estimated outline provenance and preserves valid outline-only jig imports', async () => {
     const { session, mode, submit } = setup('stencil');
     await session.processFile(file('pads.gtp', pasteText));
-    expect(submit.mock.calls[0][0]).toMatchObject({ outlineSource: 'pads-bounds', outlineFallbackReason: 'missing' });
+    expect(submit.mock.calls[0][0]).toMatchObject({ outlineSource: 'pads-bounds', outlineFallbackReason: 'missing',
+      details: { outline: null, topPaste: 'pads.gtp', bottomPaste: null } });
     mode.value = 'jig'; session.cancel();
     await session.processFile(file('outline.gko', outlineText));
-    expect(submit.mock.calls[1][0]).toMatchObject({ outlineSource: 'gerber', hasPads: false });
+    expect(submit.mock.calls[1][0]).toMatchObject({ outlineSource: 'gerber', hasPads: false,
+      details: { outline: 'outline.gko', topPaste: null, bottomPaste: null } });
     expect(session.error.value).toBeNull();
   });
 

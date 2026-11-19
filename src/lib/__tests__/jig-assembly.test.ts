@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import * as THREE from "three";
 import * as padTextures from '../gerber-pad-texture';
 import type { PadPolygon } from '../gerber/pads';
-import { buildJigAssembly, disposeJigAssembly, setJigExplosion, setJigVisibility, setJigReliefInspection, ASSEMBLY_STENCIL_THICKNESS, type AssemblyOptions } from "../jig-assembly";
+import { animateJigVisibility, buildJigAssembly, disposeJigAssembly, inheritJigVisibility, setJigExplosion,
+  setJigPartsOpacity, setJigVisibility, setJigReliefInspection, stepJigVisibility, ASSEMBLY_STENCIL_THICKNESS,
+  type AssemblyOptions } from "../jig-assembly";
 
 const options: AssemblyOptions = {
   insertHeight: 8, baseHeight: 4, topCoverHeight: 4, screwSpec: "M3",
@@ -182,6 +184,149 @@ describe("jig assembly", () => {
     expect(sheet.visible).toBe(false);
     expect(bounds(group, "pcb").max.y).toBeCloseTo(8, 5);
     disposeJigAssembly(group);
+  });
+
+  it("fades each requested layer independently and reverses from its last visible amount", () => {
+    const group = buildJigAssembly(fixture(), {
+      ...options, pcbOutlinePoints: [[-30, -20], [30, -20], [30, 20], [-30, 20]],
+      stencilSizeX: 100, stencilSizeY: 90,
+    });
+    const pcb = group.getObjectByName("pcb") as THREE.Mesh<THREE.BufferGeometry, THREE.Material[]>;
+    const sheet = group.getObjectByName("metal-stencil") as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
+    expect(animateJigVisibility(group, true, true, 0)).toBe(false);
+    expect(animateJigVisibility(group, false, true, 10)).toBe(true);
+    expect(stepJigVisibility(group, 70)).toBe(true);
+    expect(pcb.visible).toBe(true);
+    const opacity = pcb.material[0].opacity;
+    expect(opacity).toBeGreaterThan(0);
+    expect(opacity).toBeLessThan(1);
+    expect(pcb.material[1]).toMatchObject({ opacity, transparent: true, depthWrite: false });
+    expect(sheet.material).toMatchObject({ opacity: 1, transparent: false, depthWrite: true });
+
+    expect(animateJigVisibility(group, true, false, 75)).toBe(true);
+    expect(stepJigVisibility(group, 75)).toBe(true);
+    expect(pcb.material[0].opacity).toBe(opacity);
+    expect(stepJigVisibility(group, 110)).toBe(true);
+    expect(pcb.material[0].opacity).toBeGreaterThan(opacity);
+    expect(sheet.material.opacity).toBeLessThan(1);
+    expect(stepJigVisibility(group, 300)).toBe(false);
+    expect(pcb.visible).toBe(true);
+    expect(sheet.visible).toBe(false);
+    for (const material of [...pcb.material, sheet.material]) {
+      expect(material).toMatchObject({ opacity: 1, transparent: false, depthWrite: true });
+    }
+
+    expect(animateJigVisibility(group, true, true, 350)).toBe(true);
+    expect(sheet.visible).toBe(false);
+    expect(stepJigVisibility(group, 405)).toBe(true);
+    expect(sheet.visible).toBe(true);
+    expect(sheet.material.opacity).toBeGreaterThan(0);
+    expect(sheet.material.opacity).toBeLessThan(1);
+    setJigVisibility(group, true, false);
+    expect(sheet.visible).toBe(false);
+    expect(sheet.material).toMatchObject({ opacity: 1, transparent: false, depthWrite: true });
+    expect(stepJigVisibility(group, 500)).toBe(false);
+    disposeJigAssembly(group);
+  });
+
+  it("carries the existing fade and hidden state onto a new assembly", () => {
+    const layerOptions = { ...options, pcbOutlinePoints: [[-30, -20], [30, -20], [30, 20], [-30, 20]] as const,
+      stencilSizeX: 100, stencilSizeY: 90 };
+    const parts = fixture();
+    const previous = buildJigAssembly(parts, { ...layerOptions, stencilSizeX: undefined });
+    const current = buildJigAssembly(parts, layerOptions);
+    try {
+      animateJigVisibility(previous, false, false, 10);
+      expect(stepJigVisibility(previous, 70)).toBe(true);
+      const materials = (group: THREE.Group) => (group.getObjectByName("pcb") as
+        THREE.Mesh<THREE.BufferGeometry, THREE.Material[]>).material;
+      const faded = materials(previous)[0].opacity;
+      expect(inheritJigVisibility(current, previous)).toBe(true);
+      expect(current.getObjectByName("pcb")!.visible).toBe(true);
+      expect(current.getObjectByName("metal-stencil")!.visible).toBe(false);
+      expect(materials(current)[0].opacity).toBe(faded);
+      expect(stepJigVisibility(current, 100)).toBe(true);
+      expect(materials(current)[0].opacity).toBeLessThan(faded);
+      expect(materials(previous)[0].opacity).toBe(faded);
+      expect(stepJigVisibility(current, 200)).toBe(false);
+      expect(current.getObjectByName("pcb")!.visible).toBe(false);
+      expect(materials(current)[0].opacity).toBe(1);
+    } finally {
+      disposeJigAssembly(previous);
+      disposeJigAssembly(current);
+      Object.values(parts).forEach(geometry => geometry.dispose());
+    }
+  });
+
+  it("preserves pad and stencil cutoff, original flags, and relief while fading", () => {
+    const pads: PadPolygon[] = [{ type: "rect", cx: 0, cy: 0, polarity: "D",
+      parts: [{ polarity: "D", points: [[-1, -1], [1, -1], [1, 1], [-1, 1]] }] }];
+    const padMask = new THREE.CanvasTexture();
+    const sheetMask = new THREE.CanvasTexture();
+    const padTexture = vi.spyOn(padTextures, "createPadTexture").mockReturnValue(padMask);
+    const stencilTexture = vi.spyOn(padTextures, "createStencilTexture").mockReturnValue(sheetMask);
+    const group = buildJigAssembly(fixture(), {
+      ...options, pcbOutlinePoints: [[-30, -20], [30, -20], [30, 20], [-30, 20]],
+      stencilSizeX: 100, stencilSizeY: 90, stencilPadsTop: pads,
+    });
+    try {
+      const pad = (group.getObjectByName("pcb-pads-top") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>).material;
+      const sheet = (group.getObjectByName("metal-stencil") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>).material;
+      const materialOf = (name: string) => (group.getObjectByName(name) as
+        THREE.Mesh<THREE.BufferGeometry, THREE.Material>).material;
+      const tray = materialOf("insert");
+      const base = materialOf("base");
+      const cover = materialOf("cover");
+      const hardware = materialOf("screw-heads");
+      pad.opacity = 0.9;
+      pad.transparent = true;
+      pad.depthWrite = false;
+      setJigExplosion(group, 0.5);
+      const pose = group.children.map(object => object.position.y);
+      animateJigVisibility(group, false, false, 0);
+      expect(stepJigVisibility(group, 60)).toBe(true);
+      const layerAmount = sheet.opacity;
+      expect(pad.opacity).toBeCloseTo(0.9 * layerAmount);
+      expect(pad.alphaTest).toBeCloseTo(0.5 * layerAmount);
+      expect(sheet.alphaTest).toBeCloseTo(0.5 * layerAmount);
+      expect(pad.alphaMap).toBe(padMask);
+      expect(sheet.alphaMap).toBe(sheetMask);
+
+      setJigPartsOpacity(group, ["insert", "base"], 0.86);
+      expect(tray).toMatchObject({ opacity: 0.86, transparent: true, depthWrite: true });
+      expect(base).toMatchObject({ opacity: 0.86, transparent: true, depthWrite: true });
+      expect(cover.opacity).toBe(1);
+      expect(hardware.opacity).toBe(1);
+      expect(sheet.opacity).toBe(layerAmount);
+
+      setJigReliefInspection(group, true);
+      expect(pad.opacity).toBeCloseTo(0.9 * 0.18 * layerAmount);
+      expect(sheet.alphaTest).toBeCloseTo(0.5 * 0.18 * layerAmount);
+      expect(tray.opacity).toBe(0.86);
+      expect(base.opacity).toBeCloseTo(0.86 * 0.18);
+      expect(base.depthWrite).toBe(false);
+      expect(cover.opacity).toBeCloseTo(0.18);
+      expect(hardware.opacity).toBeCloseTo(0.18);
+      setJigPartsOpacity(group, ["base"], 1);
+      expect(base.opacity).toBeCloseTo(0.18);
+      expect(tray.opacity).toBe(0.86);
+
+      expect(stepJigVisibility(group, 200)).toBe(false);
+      expect(group.getObjectByName("pcb")!.visible).toBe(false);
+      expect(group.getObjectByName("metal-stencil")!.visible).toBe(false);
+      setJigPartsOpacity(group, ["insert"], 1);
+      expect(tray).toMatchObject({ opacity: 1, transparent: false, depthWrite: true });
+      expect(pad.opacity).toBeCloseTo(0.9 * 0.18);
+      expect(sheet.alphaTest).toBeCloseTo(0.5 * 0.18);
+      setJigReliefInspection(group, false);
+      expect(pad).toMatchObject({ opacity: 0.9, alphaTest: 0.5, transparent: true, depthWrite: false });
+      expect(sheet).toMatchObject({ opacity: 1, alphaTest: 0.5, transparent: false, depthWrite: true });
+      expect(group.children.map(object => object.position.y)).toEqual(pose);
+    } finally {
+      disposeJigAssembly(group);
+      padTexture.mockRestore();
+      stencilTexture.mockRestore();
+    }
   });
 
   it("omits hardware when perimeter screws are disabled and nuts for self-tapping screws", () => {

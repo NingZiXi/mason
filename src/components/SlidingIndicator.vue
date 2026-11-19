@@ -6,32 +6,31 @@ import { onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 const element = ref<HTMLElement | null>(null);
 const bounds = shallowRef({ x: 0, y: 0, width: 0, height: 0 });
 const visible = ref(false);
-const ready = ref(false);
+const sliding = ref(false);
+let previous: HTMLButtonElement | null = null;
 let host: HTMLElement | null = null;
 let resize: ResizeObserver | undefined;
 let mutations: MutationObserver | undefined;
 let measureFrame = 0;
-let readyFrame = 0;
-let placed = false;
 let disposed = false;
 
 function measure() {
   measureFrame = 0;
   const selected = host?.querySelector<HTMLButtonElement>(':scope > button[aria-pressed="true"]');
   if (!selected || !selected.offsetWidth || !selected.offsetHeight) {
+    previous = null;
+    sliding.value = false;
     visible.value = false;
     return;
   }
-  bounds.value = { x: selected.offsetLeft, y: selected.offsetTop,
-    width: selected.offsetWidth, height: selected.offsetHeight };
+  const { offsetLeft: x, offsetTop: y, offsetWidth: width, offsetHeight: height } = selected;
+  const old = bounds.value;
+  if (previous === selected && x === old.x && y === old.y && width === old.width && height === old.height) return;
+  // Animate a new choice, but track resizing/translated labels without trailing the button.
+  sliding.value = previous !== null && previous !== selected;
+  previous = selected;
+  bounds.value = { x, y, width, height };
   visible.value = true;
-  if (!placed) {
-    placed = true;
-    // Place the first selection without flying in from the group's origin.
-    readyFrame = requestAnimationFrame(() => {
-      readyFrame = requestAnimationFrame(() => { ready.value = true; });
-    });
-  }
 }
 
 function scheduleMeasure() {
@@ -67,12 +66,11 @@ onBeforeUnmount(() => {
   resize?.disconnect();
   mutations?.disconnect();
   cancelAnimationFrame(measureFrame);
-  cancelAnimationFrame(readyFrame);
 });
 </script>
 
 <template>
-  <span ref="element" class="sliding-indicator" :class="{ 'is-visible': visible, 'is-ready': ready }"
+  <span ref="element" class="sliding-indicator" :class="{ 'is-visible': visible, 'is-sliding': sliding }"
     aria-hidden="true" :style="{ width: `${bounds.width}px`, height: `${bounds.height}px`,
       transform: `translate(${bounds.x}px, ${bounds.y}px)` }" />
 </template>
@@ -91,7 +89,7 @@ onBeforeUnmount(() => {
   opacity: 0;
   pointer-events: none;
 }
-.sliding-indicator.is-ready {
+.sliding-indicator.is-sliding {
   transition: transform var(--motion-selection) var(--ease-selection),
     width var(--motion-selection) var(--ease-selection),
     height var(--motion-selection) var(--ease-selection),

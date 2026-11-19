@@ -11,8 +11,10 @@
  * 不依赖 Node stream / readable-stream,纯字符串解析。
  */
 
+import { arcSweep, computeBbox, type BoundingBox } from "./bbox";
+export type { BoundingBox } from "./bbox";
 import { pointInPolygon } from "./geometry";
-import { stitchOutline } from "./outline-stitching";
+import { stitchOutline, type OutlineStroke } from "./outline-stitching";
 import { splitBridgedOutline } from "./bridges";
 import { decodeGerberCoordinate } from './coordinate';
 
@@ -57,7 +59,7 @@ export interface ParsedCommand {
   j?: number;
   /** 本命令生效时的光圈变换(恒等时省略),不作用于轮廓坐标 */
   tf?: LayerTransform;
-  /** 所属 %SR 块(块外命令省略);同块命令共享同一对象引用 */
+  /** 所属 %SR 块(块外命令省略);展开后每个单元独立共享同一对象引用 */
   sr?: StepRepeat;
   raw?: string;
   [key: string]: unknown;
@@ -71,7 +73,6 @@ export interface ParseResult {
   srGrid?: { nx: number; ny: number };
 }
 
-const TWO_PI = Math.PI * 2;
 const ARC_PRECISION_MM = 0.1;
 const ARC_MIN_SEGMENTS = 8;
 const ARC_MAX_SEGMENTS = 200;
@@ -228,7 +229,8 @@ export function parseGerber(text: string): ParseResult {
     const yMatch = line.match(/Y([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
     const iMatch = line.match(/I([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
     const jMatch = line.match(/J([+-]?(?:\d+(?:\.\d*)?|\.\d+))/);
-    if (!xMatch && !yMatch) continue;
+    // A full-circle D01 may omit both unchanged endpoint coordinates.
+    if (!xMatch && !yMatch && !((iMatch || jMatch) && arcModeCCW !== undefined && /D01\*/.test(line))) continue;
 
     // 缺省行为:Gerber spec 规定 X/Y 省略时保留上一次的值
     const x = xMatch ? decodeGerberCoordinate(xMatch[1], format.places, format.zero) : prevX;
@@ -281,6 +283,7 @@ export function parseGerber(text: string): ParseResult {
 /** 把 %SR 块内的命令按 nx × ny 阵列展开(块外命令原样保留) */
 function expandStepRepeat(commands: ParsedCommand[]): ParsedCommand[] {
   const out: ParsedCommand[] = [];
+  const instances = new Map<string, StepRepeat>();
   let i = 0;
   while (i < commands.length) {
     const sr = commands[i].sr;
@@ -296,8 +299,16 @@ function expandStepRepeat(commands: ParsedCommand[]): ParsedCommand[] {
       for (let ix = 0; ix < sr.nx; ix++) {
         const dx = ix * sr.dxRaw;
         const dy = iy * sr.dyRaw;
+        // Complementary strokes can be distributed across multiple SR blocks.
+        // Share identity on the same grid and cell, never across neighbouring copies.
+        const key = [sr.nx, sr.ny, sr.nx > 1 ? sr.dxRaw : 0, sr.ny > 1 ? sr.dyRaw : 0, ix, iy].join(',');
+        let instance = instances.get(key);
+        if (!instance) {
+          instance = { ...sr };
+          instances.set(key, instance);
+        }
         for (const cmd of block) {
-          out.push({ ...cmd, x: (cmd.x as number) + dx, y: (cmd.y as number) + dy });
+          out.push({ ...cmd, sr: instance, x: (cmd.x as number) + dx, y: (cmd.y as number) + dy });
         }
       }
     }
@@ -314,10 +325,18 @@ function expandStepRepeat(commands: ParsedCommand[]): ParsedCommand[] {
  *   - false 只取其中一块单板(面积最大的闭合轮廓)
  *   非拼版文件两种口径结果相同。
  */
-export function extractOutline(
-  text: string,
-  opts?: { panel?: boolean }
-): GerberOutline {
+export function extractOutline(text: string, opts?: { panel?: boolean }): GerberOutline {
+  return analyzeOutline(text)(opts?.panel !== false);
+}
+
+export function extractOutlineScopes(text: string) {
+  const select = analyzeOutline(text);
+  const panel = select(true);
+  return { panel, single: panel.isPanel ? select(false) : panel };
+}
+
+/** Decode, stitch and classify contours once; only the final boundary depends on scope. */
+function analyzeOutline(text: string) {
   const parsed = parseGerber(text);
   const { format, units, commands } = parsed;
   const inToMm = 25.4;
@@ -330,9 +349,13 @@ export function extractOutline(
   };
 
   // 轮廓集合:D02(move)= 提笔,开启新轮廓;板内开槽的板框会有多条轮廓
-  const contours: Array<Array<[number, number]>> = [];
-  const repeatedContours = new Set<Array<[number, number]>>();
-  let cur: Array<[number, number]> | null = null;
+  const contours: OutlineStroke[] = [];
+  let cur: OutlineStroke | null = null;
+  const startStroke = (group: StepRepeat | undefined, points: OutlineStroke['points']) => {
+    const stroke = { group, points };
+    contours.push(stroke);
+    return stroke;
+  };
   // X/Y 在命令列表里已经是缺省保留后的最终值,直接用
   let prevX = 0;
   let prevY = 0;
@@ -348,9 +371,7 @@ export function extractOutline(
 
     if (cmd.op === "move") {
       // D02 = 提笔:结束当前轮廓,下一点开启新轮廓
-      cur = [[toMm(currX), toMm(currY)]];
-      contours.push(cur);
-      if (cmd.sr) repeatedContours.add(cur);
+      cur = startStroke(cmd.sr, [[toMm(currX), toMm(currY)]]);
       prevX = currX;
       prevY = currY;
     } else if (cmd.op === "interpolate") {
@@ -360,11 +381,7 @@ export function extractOutline(
       const j = cmd.j !== undefined ? toMm(cmd.j as number) : 0;
 
       // 文件以 D01 起始(无 D02):自动开一条轮廓
-      if (!cur) {
-        cur = [];
-        contours.push(cur);
-        if (cmd.sr) repeatedContours.add(cur);
-      }
+      if (!cur) cur = startStroke(cmd.sr, []);
 
       if (cmd.isArc && (Math.abs(i) > 1e-9 || Math.abs(j) > 1e-9)) {
         const prevXmm = toMm(prevX);
@@ -374,21 +391,16 @@ export function extractOutline(
         const radius = Math.sqrt(i * i + j * j);
         const ccw = cmd.ccw === true;
 
-        if (radius < 1e-9) {
-          cur.push([x, y]);
-          continue;
-        }
-
         const startAngle = Math.atan2(prevYmm - cy, prevXmm - cx);
         const endAngle = Math.atan2(y - cy, x - cx);
-
-        let delta = endAngle - startAngle;
-        if (ccw) {
-          while (delta <= 0) delta += TWO_PI;
-        } else {
-          while (delta >= 0) delta -= TWO_PI;
+        const sign = ccw ? 1 : -1;
+        // Use the true tangent: chords from arc tessellation bias the join direction.
+        if (cur.points.every(([px, py]) => px === prevXmm && py === prevYmm)) {
+          cur.startTangent = [Math.sin(startAngle) * sign, -Math.cos(startAngle) * sign];
         }
+        cur.endTangent = [-Math.sin(endAngle) * sign, Math.cos(endAngle) * sign];
 
+        const delta = arcSweep(startAngle, endAngle, ccw);
         const arcLen = Math.abs(delta) * radius;
         const segs = Math.max(
           ARC_MIN_SEGMENTS,
@@ -398,13 +410,14 @@ export function extractOutline(
 
         for (let s = 1; s < segs; s++) {
           const a = startAngle + stepAngle * s;
-          cur.push([cx + radius * Math.cos(a), cy + radius * Math.sin(a)]);
+          cur.points.push([cx + radius * Math.cos(a), cy + radius * Math.sin(a)]);
         }
         // X/Y is the declared endpoint; rounded I/J may project it off the next stroke.
-        cur.push([x, y]);
+        cur.points.push([x, y]);
         arcs++;
       } else {
-        cur.push([x, y]);
+        if (currX !== prevX || currY !== prevY) cur.endTangent = undefined;
+        cur.points.push([x, y]);
       }
       // 无论直线还是弧线,interpolate 后 prevX/prevY 更新到当前点(给下一条命令用)
       prevX = currX;
@@ -412,10 +425,7 @@ export function extractOutline(
     }
   }
 
-  const ordinary = stitchOutline(contours.filter(c => !repeatedContours.has(c)));
-  const repeated = stitchOutline(contours.filter(c => repeatedContours.has(c)));
-  const valid = [...ordinary.closed, ...repeated.closed];
-  const repeatedLoops = new Set(repeated.closed);
+  const { closed, open, groups } = stitchOutline(contours);
 
   const areaOf = (c: Array<[number, number]>): number => Math.abs(signedArea(c));
   const contourBbox = (c: Array<[number, number]>) => {
@@ -428,10 +438,9 @@ export function extractOutline(
     }
     return { x0, y0, x1, y1 };
   };
-  const contourEntries = valid
-    .map((c) => ({ c, area: areaOf(c), bbox: contourBbox(c) }))
-    .filter((entry) => entry.area > 1e-6);
-  type ContourEntry = typeof contourEntries[number];
+  const describeContour = (c: OutlineStroke['points']) => ({ c, area: areaOf(c), bbox: contourBbox(c) });
+  type ContourEntry = ReturnType<typeof describeContour>;
+  const contourEntries = closed.map(describeContour).filter((entry) => entry.area > 1e-6);
   const contourContains = (outer: ContourEntry, inner: ContourEntry) => {
     const a = outer.bbox, b = inner.bbox;
     if (outer.area <= inner.area || b.x0 < a.x0 - 1e-6 || b.x1 > a.x1 + 1e-6 ||
@@ -445,10 +454,33 @@ export function extractOutline(
   const topLevel = (entries: ContourEntry[]) => entries.filter((entry) =>
     !entries.some((parent) => parent !== entry && contourContains(parent, entry))
   );
-  // A nested outline alone is indistinguishable from a board cutout. Only
-  // exclude a surrounding process frame when SR explicitly identifies boards.
-  const repeatedEntries = contourEntries.filter((entry) => repeatedLoops.has(entry.c));
-  const boardEntries = topLevel(repeatedEntries.length ? repeatedEntries : contourEntries)
+  // Do not promote closed cutouts to boards when their perimeter could not be
+  // repaired. Use the open chain only as containment evidence, never as a board
+  // or hole. Compare inside each repeated cell so tooling frames outside SR do
+  // not disqualify valid repeated boards.
+  const unfinished = new Map<object | undefined, ContourEntry[]>();
+  for (const path of open) {
+    if (path.length < 3) continue;
+    const entry = describeContour([...path, path[0]]);
+    if (entry.area <= 1e-6) continue;
+    const group = groups.get(path);
+    const perimeters = unfinished.get(group);
+    if (perimeters) perimeters.push(entry);
+    else unfinished.set(group, [entry]);
+  }
+  const cutoutCandidates = new Set<OutlineStroke['points']>();
+  const incompleteBoards = new Set<ContourEntry>();
+  for (const entry of contourEntries) {
+    for (const perimeter of unfinished.get(groups.get(entry.c)) ?? []) {
+      if (!contourContains(perimeter, entry)) continue;
+      cutoutCandidates.add(entry.c);
+      incompleteBoards.add(perimeter);
+    }
+  }
+  const boardCandidates = contourEntries.filter(entry => !cutoutCandidates.has(entry.c));
+  // With SR, an explicit repeated board is better evidence than a surrounding frame.
+  const repeatedEntries = boardCandidates.filter((entry) => groups.has(entry.c));
+  const boardEntries = topLevel(repeatedEntries.length ? repeatedEntries : boardCandidates)
     .sort((a, b) => b.bbox.y1 - a.bbox.y1 || a.bbox.x0 - b.bbox.x0);
   let boardContours: GerberBoardOutline[] = boardEntries.map((entry) => {
     const { x0, y0, x1, y1 } = entry.bbox;
@@ -459,8 +491,14 @@ export function extractOutline(
       bbox: { minX: x0, minY: y0, maxX: x1, maxY: y1 },
     };
   });
+  // A disjoint incomplete perimeter with a cutout is evidence of another
+  // board. Keep the whole panel and its pads, but only offer verified children.
+  const hasIncompleteNeighbor = boardEntries.length === 1 && [...incompleteBoards].some(({ bbox: b }) => {
+    const { bbox: a } = boardEntries[0];
+    return b.x1 < a.x0 || a.x1 < b.x0 || b.y1 < a.y0 || a.y1 < b.y0;
+  });
   let connectedPanel = false;
-  if (boardContours.length === 1 && !parsed.srGrid) {
+  if (boardContours.length === 1 && !parsed.srGrid && !hasIncompleteNeighbor) {
     const board = boardContours[0];
     const separated = splitBridgedOutline(board.points, board.holes);
     if (separated.length > 1) {
@@ -469,170 +507,85 @@ export function extractOutline(
     }
   }
 
-  // 拼版判定:
-  // 1) %SR 阵列复制了多份图形(最可靠)
-  // 2) 多块面积相当且包围盒互不重叠的闭合轮廓(未用 SR 的拼版)
   const srCols = parsed.srGrid?.nx ?? 1;
   const srRows = parsed.srGrid?.ny ?? 1;
-  let disjointPanel = false;
-  if (valid.length >= 2) {
-    const ranked = valid
-      .map((c) => ({ c, a: areaOf(c) }))
-      .sort((p, q) => q.a - p.a);
-    if (ranked[1].a > 1 && ranked[1].a >= ranked[0].a * 0.5) {
-      const b0 = contourBbox(ranked[0].c);
-      const b1 = contourBbox(ranked[1].c);
-      const overlap =
-        b0.x0 <= b1.x1 && b1.x0 <= b0.x1 && b0.y0 <= b1.y1 && b1.y0 <= b0.y1;
-      disjointPanel = !overlap;
-    }
-  }
-  const isPanel = srCols * srRows > 1 || disjointPanel || boardContours.length >= 2;
+  const repeatedPanel = srCols * srRows > 1 && repeatedEntries.length > 0;
+  const isPanel = repeatedPanel || hasIncompleteNeighbor || boardContours.length >= 2;
 
-  // 拼版:外框取全部图形(含工艺边 / V-CUT 框)的整体包围盒,内孔不适用
-  let outer: Array<[number, number]> | null = null;
-  let totalPoints = 0;
-  const holes: Array<Array<[number, number]>> = [];
+  return (wholePanel: boolean): GerberOutline => {
+    // 拼版:外框取全部图形(含工艺边 / V-CUT 框)的整体包围盒,内孔不适用
+    let outer: Array<[number, number]> | null = null;
+    let totalPoints = 0;
+    const holes: Array<Array<[number, number]>> = [];
 
-  if (isPanel && opts?.panel !== false && !connectedPanel) {
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    const add = (x: number, y: number) => {
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-    };
-    let prevMmX = 0;
-    let prevMmY = 0;
-    for (const cmd of commands) {
-      if (cmd.type !== "op") continue;
-      const x = toMm(cmd.x as number);
-      const y = toMm(cmd.y as number);
-      add(x, y);
-      if (cmd.op === "interpolate" && cmd.isArc) {
-        const i = cmd.i !== undefined ? toMm(cmd.i as number) : 0;
-        const j = cmd.j !== undefined ? toMm(cmd.j as number) : 0;
-        if (Math.abs(i) > 1e-9 || Math.abs(j) > 1e-9) {
-          const tcx = prevMmX + i;
-          const tcy = prevMmY + j;
-          const r = Math.hypot(i, j);
-          add(tcx - r, tcy - r);
-          add(tcx + r, tcy + r);
+    if (isPanel && wholePanel && !connectedPanel) {
+      const { minX: x0, minY: y0, maxX: x1, maxY: y1, commandCount } = computeBbox(parsed);
+      for (const c of closed) totalPoints += c.length;
+      if (commandCount > 0) {
+        outer = [
+          [x0, y0],
+          [x1, y0],
+          [x1, y1],
+          [x0, y1],
+          [x0, y0],
+        ];
+      }
+    } else {
+      // In single-board scope, use known children of a panel. In particular a
+      // cutout, an open perimeter, and a surrounding frame are not substitutes.
+      const useChildBoards = !wholePanel && isPanel;
+      const candidates = useChildBoards ? boardContours.map(board => board.points)
+        : closed.filter(path => !cutoutCandidates.has(path));
+      let outerArea = -1;
+      for (const c of candidates) {
+        totalPoints += c.length;
+        const a = areaOf(c);
+        if (a > outerArea) {
+          outerArea = a;
+          outer = c;
         }
       }
-      prevMmX = x;
-      prevMmY = y;
-    }
-    for (const c of valid) totalPoints += c.length;
-    if (isFinite(x0)) {
-      outer = [
-        [x0, y0],
-        [x1, y0],
-        [x1, y1],
-        [x0, y1],
-        [x0, y0],
-      ];
-    }
-  } else {
-    // 单板:外框 = 面积最大的轮廓(area 初值 -1:自交蝴蝶结等零面积轮廓也能被选中,保持旧行为);
-    // 其余落在外框内部的 = 内孔;外部独立小轮廓(杂线)忽略
-    //
-    // 拼版取单板时不能直接挑最大轮廓 —— 整版外框(若为闭合轮廓)通常比单块板大得多。
-    // 有 %SR 阵列时先按单个阵列单元的尺寸筛掉整版外框,再在剩余轮廓里取最大。
-    let candidates = connectedPanel && opts?.panel === false ? boardContours.map((board) => board.points) : valid;
-    if (isPanel && srCols * srRows > 1 && valid.length > 0) {
-      const panelBox = contourBbox(valid[0]);
-      for (const c of valid) {
-        const b = contourBbox(c);
-        panelBox.x0 = Math.min(panelBox.x0, b.x0);
-        panelBox.y0 = Math.min(panelBox.y0, b.y0);
-        panelBox.x1 = Math.max(panelBox.x1, b.x1);
-        panelBox.y1 = Math.max(panelBox.y1, b.y1);
-      }
-      const cellW = ((panelBox.x1 - panelBox.x0) / srCols) * 1.2;
-      const cellH = ((panelBox.y1 - panelBox.y0) / srRows) * 1.2;
-      const fit = valid.filter((c) => {
-        const b = contourBbox(c);
-        return b.x1 - b.x0 <= cellW && b.y1 - b.y0 <= cellH;
-      });
-      if (fit.length > 0) candidates = fit;
-    }
-    let outerArea = -1;
-    for (const c of candidates) {
-      totalPoints += c.length;
-      const a = areaOf(c);
-      if (a > outerArea) {
-        outerArea = a;
-        outer = c;
-      }
-    }
-    // If an unfinished perimeter surrounds the only candidate, that candidate
-    // may be a cutout. Let the importer report/fall back on an invalid outline.
-    if (outer && !isPanel) {
-      const candidate = outer;
-      const b = contourBbox(candidate);
-      if (ordinary.open.some(path => {
-        if (path.length < 3) return false;
-        const p = contourBbox(path);
-        return p.x0 <= b.x0 && p.y0 <= b.y0 && p.x1 >= b.x1 && p.y1 >= b.y1 &&
-          candidate.every(([x, y]) => pointInPolygon(x, y, path));
-      })) outer = null;
-    }
-    if (outer) {
-      if (connectedPanel && opts?.panel === false) {
-        holes.push(...boardContours.find((board) => board.points === outer)!.holes);
-      } else {
-        for (const c of valid) {
-          if (c === outer) continue;
-          const [px, py] = c[0];
-          if (pointInPoly(px, py, outer)) holes.push(c);
+      if (outer) {
+        if (useChildBoards) {
+          holes.push(...boardContours.find((board) => board.points === outer)!.holes);
+        } else {
+          for (const c of closed) {
+            if (c === outer) continue;
+            const [px, py] = c[0];
+            if (pointInPoly(px, py, outer)) holes.push(c);
+          }
         }
       }
     }
-  }
 
-  const rawPoints = outer ?? [];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [x, y] of rawPoints) {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
+    const rawPoints = outer ?? [];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of rawPoints) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
 
-  return {
-    points: rawPoints,
-    holes,
-    bbox: {
-      minX: isFinite(minX) ? minX : 0,
-      minY: isFinite(minY) ? minY : 0,
-      maxX: isFinite(maxX) ? maxX : 0,
-      maxY: isFinite(maxY) ? maxY : 0,
+    return {
+      points: rawPoints,
+      holes,
+      bbox: {
+        minX: isFinite(minX) ? minX : 0,
+        minY: isFinite(minY) ? minY : 0,
+        maxX: isFinite(maxX) ? maxX : 0,
+        maxY: isFinite(maxY) ? maxY : 0,
+        units,
+        commandCount: totalPoints,
+      },
       units,
-      commandCount: totalPoints,
-    },
-    units,
-    arcsLinearized: arcs,
-    totalCommands,
-    isPanel,
-    panelGrid: srCols * srRows > 1 ? { nx: srCols, ny: srRows } : undefined,
-    boards: boardContours.length > 1 ? boardContours : undefined,
+      arcsLinearized: arcs,
+      totalCommands,
+      isPanel,
+      panelGrid: repeatedPanel ? { nx: srCols, ny: srRows } : undefined,
+      boards: boardContours.length > 1 ? boardContours : undefined,
+    };
   };
-}
-
-export interface BoundingBox {
-  /** mm */
-  minX: number;
-  /** mm */
-  minY: number;
-  /** mm */
-  maxX: number;
-  /** mm */
-  maxY: number;
-  /** 原始单位 */
-  units: "mm" | "in" | null;
-  /** 检测到的命令数 */
-  commandCount: number;
 }
 
 export interface GerberOutline {

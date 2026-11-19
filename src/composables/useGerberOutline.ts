@@ -11,9 +11,10 @@
  */
 import { ref, computed, shallowRef } from "vue";
 import { GerberImportError, formatImportError } from '../lib/gerber/import-error';
-import { extractOutline, type GerberOutline } from "../lib/gerber/parser";
-import { makePanelVariant, type PanelVariant } from "../lib/gerber/panel";
-import { detectOutlineFiles, type OutlineCandidate } from "../lib/gerber/outline-detect";
+import { extractOutlineScopes, type GerberOutline } from "../lib/gerber/parser";
+import { openGerberArchive, type GerberArchive } from "../lib/gerber/import-archive";
+import { makePanelVariants, type PanelVariant } from "../lib/gerber/panel";
+import type { OutlineCandidate } from "../lib/gerber/outline-detect";
 
 export interface GerberOutlineResult {
   bbox: GerberOutline["bbox"];
@@ -44,7 +45,7 @@ export function useGerberOutline() {
   /**
    * 处理用户上传的文件(支持 .zip,或单个 .gko/.gbr)
    */
-  async function processFile(file: File): Promise<GerberOutlineResult | null> {
+  async function processFile(file: File, archive?: GerberArchive): Promise<GerberOutlineResult | null> {
     const token = ++revision;
     loading.value = true;
     failure.value = null;
@@ -55,7 +56,7 @@ export function useGerberOutline() {
       const lower = file.name.toLowerCase();
       let parsed: { result: GerberOutlineResult; candidates: OutlineCandidate[] };
       if (lower.endsWith(".zip")) {
-        parsed = await processZip(file);
+        parsed = await processZip(archive ?? openGerberArchive(file));
       } else if (
         lower.endsWith(".gko") ||
         lower.endsWith(".gm1") ||
@@ -78,50 +79,27 @@ export function useGerberOutline() {
     }
   }
 
-  async function processZip(file: File): Promise<{ result: GerberOutlineResult; candidates: OutlineCandidate[] }> {
-    const { default: JSZip } = await import("jszip");
-    const zip = await JSZip.loadAsync(file);
-    const filenames = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
-    const detected = detectOutlineFiles(filenames);
-
-    if (detected.length === 0) {
-      throw new GerberImportError('gerber.outlineNotFound');
-    }
-
-    const top = detected[0];
-    const content = await zip.files[top.filename].async("string");
-    return { result: finalize(top.filename, content), candidates: detected };
+  async function processZip(archive: GerberArchive): Promise<{ result: GerberOutlineResult; candidates: OutlineCandidate[] }> {
+    const shared = await archive;
+    const detected = shared.candidates;
+    const scopes = await shared.outline();
+    if (!scopes) throw new GerberImportError('gerber.outlineNotFound');
+    return { result: finalize(detected[0].filename, scopes), candidates: detected };
   }
 
   async function processSingleGerber(file: File): Promise<{ result: GerberOutlineResult; candidates: OutlineCandidate[] }> {
     const text = await file.text();
-    return { result: finalize(file.name, text), candidates: [
+    return { result: finalize(file.name, extractOutlineScopes(text)), candidates: [
       { filename: file.name, priority: 100, reason: "用户指定" },
     ] };
   }
 
-  function finalize(filename: string, gerberText: string): GerberOutlineResult {
-    const outline = extractOutline(gerberText, { panel: true });
-
+  function finalize(filename: string, { panel: outline, single: singleOutline }: ReturnType<typeof extractOutlineScopes>): GerberOutlineResult {
     if (outline.points.length < 3) {
       throw new GerberImportError('gerber.invalidOutline', { name: filename, n: outline.points.length });
     }
 
-    // 拼版文件再按「单板」口径解析一次;非拼版两种口径相同
-    const singleOutline = outline.isPanel
-      ? extractOutline(gerberText, { panel: false })
-      : outline;
-
-    const variants = {
-      panel: makePanelVariant(outline),
-      single: makePanelVariant(singleOutline),
-      boards: outline.boards?.map((board, index) =>
-        makePanelVariant(board, undefined, undefined, {
-          id: `board-${index + 1}`,
-          label: `#${index + 1}`,
-        })
-      ),
-    };
+    const variants = makePanelVariants({ panel: outline, single: singleOutline });
     const applied = variants.panel;
 
     return {

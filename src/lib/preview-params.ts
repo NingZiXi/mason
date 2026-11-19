@@ -2,14 +2,25 @@ import { computed, watch, type ComputedRef, type WatchStopHandle } from 'vue';
 import type { AppConfig } from '../stores/config';
 import { activeReliefRegions } from './component-relief';
 import { apertureSnapshot } from './pad-overrides';
-import { buildScadParams, modelParamsHash, scadPartHash } from './model-params';
+import { buildScadParams, enginePads, modelParamsHash, scadPartHash, type ImportedGeometryKeys } from './model-params';
 
 /** Rendering, preloading and metrics repeatedly check the same geometry while
  * asynchronous work completes. Serialize each reactive snapshot once instead
  * of rescanning thousands of pad vertices for every freshness check. */
 export function createPreviewParameterCache(config: () => AppConfig) {
-  const params = computed(() => buildScadParams(config()));
-  const hash = computed(() => modelParamsHash(config()));
+  const top = computed(() => enginePads(config().stencilPadsTop));
+  const bottom = computed(() => enginePads(config().stencilPadsBottom));
+  const outlineKey = computed(() => JSON.stringify(config().pcbOutlinePoints));
+  const holesKey = computed(() => JSON.stringify(config().pcbOutlineHoles));
+  const topKey = computed(() => JSON.stringify(top.value));
+  const bottomKey = computed(() => JSON.stringify(bottom.value));
+  // Getters keep part keys subscribed only to geometry used by that part.
+  const keys: ImportedGeometryKeys = {
+    get outline() { return outlineKey.value; }, get holes() { return holesKey.value; },
+    get top() { return topKey.value; }, get bottom() { return bottomKey.value; },
+  };
+  const params = computed(() => buildScadParams(config(), top.value, bottom.value));
+  const hash = computed(() => modelParamsHash(config(), keys));
   const parts = new Map<string, ComputedRef<string>>();
   function partHash(part: string, snapshot = params.value) {
     // Exports and in-flight requests may carry an older, captured snapshot.
@@ -17,7 +28,7 @@ export function createPreviewParameterCache(config: () => AppConfig) {
     if (snapshot !== params.value) return scadPartHash(snapshot, part);
     let key = parts.get(part);
     if (!key) {
-      key = computed(() => scadPartHash(params.value, part));
+      key = computed(() => scadPartHash(params.value, part, keys));
       parts.set(part, key);
     }
     return key.value;

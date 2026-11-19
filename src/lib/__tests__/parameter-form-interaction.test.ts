@@ -6,12 +6,14 @@ import { readFileSync } from 'node:fs';
 import { compileScript, parse } from '@vue/compiler-sfc';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 import * as config from '../../stores/config';
+import * as focusParameter from '../focus-parameter-control';
 import * as ejectHole from '../eject-hole';
+import * as componentRelief from '../component-relief';
 import { useConfigStore, type AppMode } from '../../stores/config';
 
 // Compile actual browser templates rather than Vitest's SSR-only SFC output.
 const empty = defineComponent({ render: () => null });
-const passSlots = defineComponent({ setup: (_props, { slots }) => () => h('section', slots.default?.()) });
+const passSlots = defineComponent({ setup: (_props, { slots }) => () => h('section', [slots.default?.(), slots.trailing?.(), slots.control?.()]) });
 function loadForm(name: 'ConfigForm' | 'StencilForm'): Component {
   const source = readFileSync(new URL(`../../components/${name}.vue`, import.meta.url), 'utf8');
   const script = compileScript(parse(source).descriptor, { id: name, inlineTemplate: true });
@@ -24,7 +26,9 @@ function loadForm(name: 'ConfigForm' | 'StencilForm'): Component {
     if (dependency === 'element-plus') return { ElSwitch: empty };
     if (dependency === 'vue-i18n') return { useI18n: () => ({ t: (key: string) => key }) };
     if (dependency.endsWith('/stores/config')) return config;
+    if (dependency.endsWith('/lib/focus-parameter-control')) return focusParameter;
     if (dependency.endsWith('/lib/eject-hole')) return ejectHole;
+    if (dependency.endsWith('/lib/component-relief')) return componentRelief;
     if (dependency.endsWith('/directives/app-tooltip')) return { vAppTooltip: {} };
     if (dependency.endsWith('.vue')) return { __esModule: true, default:
       /\/(MotionCollapse|InlineHelp)\.vue$/.test(dependency) ? passSlots : empty };
@@ -69,11 +73,10 @@ afterEach(() => { mounted.splice(0).forEach(unmount => unmount()); disposePinia(
 function mountForms(initialMode: AppMode) {
   const mode = ref(initialMode);
   const advancedOpen = ref({ jig: false, stencil: false });
-  const focusValues: unknown[] = [];
   const input = defineComponent({ props: ['modelValue'], emits: ['focus', 'blur', 'update:modelValue'],
-    setup(props, { emit, expose }) {
-      expose({ focus: () => { focusValues.push(props.modelValue); emit('focus'); } });
-      return () => h('input', { 'data-value': props.modelValue, onBlur: () => emit('blur') });
+    setup(_props, { emit }) {
+      return () => h('input', { onFocus: () => emit('focus'), onBlur: () => emit('blur'),
+        onInput: (value: number | null) => emit('update:modelValue', value) });
     },
   });
   const parent = defineComponent({ setup: () => () => h(mode.value === 'jig' ? ConfigForm : StencilForm, {
@@ -88,36 +91,84 @@ function mountForms(initialMode: AppMode) {
   app.mount(root);
   mounted.push(() => app.unmount());
   const button = (label: string) => all(root).find(element => element.tag === 'button' && text(element).includes(label))!;
+  const numberInput = (id: string) => all(root).find(element => element.tag === 'input' && element.props.id === id)!;
+  const pressedThickness = () => all(root).find(element => element.props.class === 'preset-row')!.children
+    .filter(element => element.props['aria-pressed'] === true).map(text);
   const advancedButton = () => all(root).find(element => element.tag === 'button' && element.props.class === 'advanced-toggle')!;
-  return { mode, advancedOpen, focusValues, root, button, advancedButton };
+  return { mode, advancedOpen, root, button, numberInput, pressedThickness, advancedButton };
 }
 
 describe('parameter form editing', () => {
-  it.each([0.2, 0.25])('focuses custom thickness without replacing the existing %s mm value', async value => {
+  it('keeps the selected thickness preset when the input is focused or cleared', async () => {
     const store = useConfigStore();
-    store.config.stencilThickness = value;
+    store.config.stencilThickness = 0.2;
     const form = mountForms('stencil');
-    click(form.button('stencil.presetCustom'));
+    const input = form.numberInput('stencil-thickness');
+    expect(form.button('stencil.presetStandard').props['aria-pressed']).toBe(true);
+    (input.props.onFocus as () => void)();
     await nextTick();
-    expect(store.config.stencilThickness).toBe(value);
-    expect(form.focusValues).toEqual([value]);
-    expect(form.button('stencil.presetCustom').props['aria-pressed']).toBe(true);
-    expect(form.button('stencil.presetStandard').props['aria-pressed']).toBe(false);
-    const focusedInput = all(form.root).find(element => element.tag === 'input' && element.props['data-value'] === value)!;
-    (focusedInput.props.onBlur as () => void)();
+    expect(form.button('stencil.presetStandard').props['aria-pressed']).toBe(true);
+    (input.props.onInput as (value: null) => void)(null);
     await nextTick();
-    expect(form.button('stencil.presetCustom').props['aria-pressed']).toBe(value === 0.25);
+    expect(form.button('stencil.presetStandard').props['aria-pressed']).toBe(true);
+    expect(store.config.stencilThickness).toBe(0.2);
+    (input.props.onBlur as () => void)();
+    await nextTick();
+    expect(form.button('stencil.presetStandard').props['aria-pressed']).toBe(true);
   });
 
-  it('returns from custom editing to a thickness preset with one click', async () => {
+  it.each([0.25, 0.3])('treats a manual %s mm adjustment separately from picking a preset', async value => {
+    const store = useConfigStore();
+    store.config.stencilThickness = 0.2;
     const form = mountForms('stencil');
-    click(form.button('stencil.presetCustom'));
+    const input = form.numberInput('stencil-thickness');
+    (input.props.onInput as (value: number) => void)(value);
     await nextTick();
+    expect(store.config.stencilThickness).toBe(value);
+    expect(form.pressedThickness()).toEqual([]);
     click(form.button('stencil.presetFdm'));
     await nextTick();
-    expect(useConfigStore().config.stencilThickness).toBe(0.3);
+    expect(store.config.stencilThickness).toBe(0.3);
     expect(form.button('stencil.presetFdm').props['aria-pressed']).toBe(true);
-    expect(form.button('stencil.presetCustom').props['aria-pressed']).toBe(false);
+  });
+
+  it.each([
+    ['jig', 'jig-length', 'pcbSizeX', 60],
+    ['jig', 'jig-width', 'pcbSizeY', 65],
+    ['jig', 'jig-thickness', 'pcbThickness', 1.4],
+    ['stencil', 'stencil-pcb-thickness', 'pcbThickness', 1.4],
+  ] as const)('keeps the model dimensions valid in %s when %s is cleared', async (mode, id, key, value) => {
+    const store = useConfigStore();
+    const form = mountForms(mode);
+    const initial = store.config[key];
+    const edit = form.numberInput(id).props.onInput as (next: number | null) => void;
+
+    edit(null);
+    await nextTick();
+    expect(store.config[key]).toBe(initial);
+    edit(value);
+    await nextTick();
+    expect(store.config[key]).toBe(value);
+  });
+
+  it.each([
+    ['stencil-length', 'stencilSizeX'],
+    ['stencil-width', 'stencilSizeY'],
+  ] as const)('requires another size review after a numeric change to %s', async (id, key) => {
+    const store = useConfigStore();
+    const form = mountForms('jig');
+    const initial = store.config[key];
+    const edit = form.numberInput(id).props.onInput as (next: number | null) => void;
+    store.confirmStencilSizeReview();
+
+    edit(null);
+    await nextTick();
+    expect(store.config[key]).toBe(initial);
+    expect(store.stencilSizeReviewed).toBe(true);
+    edit(initial + 5);
+    await nextTick();
+    expect(store.config[key]).toBe(initial + 5);
+    expect(store.stencilSizeReviewed).toBe(false);
   });
 
   it('retains separate advanced sections when the actual mode forms unmount and remount', async () => {
@@ -132,12 +183,12 @@ describe('parameter form editing', () => {
     expect(form.advancedOpen.value).toEqual({ jig: true, stencil: true });
     form.mode.value = 'jig';
     await nextTick();
-    expect(all(form.advancedButton()).some(element => String(element.props.class).includes('is-open'))).toBe(true);
+    expect(form.advancedButton().props['aria-expanded']).toBe(true);
     click(form.advancedButton());
     await nextTick();
     expect(form.advancedOpen.value).toEqual({ jig: false, stencil: true });
     form.mode.value = 'stencil';
     await nextTick();
-    expect(all(form.advancedButton()).some(element => String(element.props.class).includes('is-open'))).toBe(true);
+    expect(form.advancedButton().props['aria-expanded']).toBe(true);
   });
 });

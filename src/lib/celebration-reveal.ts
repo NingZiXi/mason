@@ -44,6 +44,26 @@ function clipPolygon(points: Point[], rect: Rect): Point[] {
   return polygon;
 }
 
+// Leave a control in the old skin until its own worker places the swatch.
+// Four disjoint strips keep the brush union intact even across repeated passes.
+function outsideControl(polygon: Point[], hole: Rect, viewport: Rect): Point[][] {
+  const x = hole.left, y = hole.top, right = x + hole.width, bottom = y + hole.height;
+  if (polygon.every(p => p.x <= x) || polygon.every(p => p.x >= right) ||
+      polygon.every(p => p.y <= y) || polygon.every(p => p.y >= bottom)) return [polygon];
+  if (polygon.every(p => p.x >= x && p.x <= right && p.y >= y && p.y <= bottom)) return [];
+  return [
+    { ...viewport, width: x }, { ...viewport, left: right, width: viewport.width - right },
+    { left: x, top: 0, width: hole.width, height: y },
+    { left: x, top: bottom, width: hole.width, height: viewport.height - bottom },
+  ].filter(r => r.width > 0 && r.height > 0).map(r => clipPolygon(polygon, r)).filter(p => p.length >= 3);
+}
+
+function validJob(job: RevealJob): boolean {
+  return [job.start, job.duration, job.width, job.rect.left, job.rect.top, job.rect.width, job.rect.height].every(Number.isFinite)
+    && job.duration > 0 && job.rect.width > 0 && job.rect.height > 0
+    && job.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+}
+
 function rectangle(rect: Rect): Point[] {
   return [
     { x: rect.left, y: rect.top },
@@ -74,15 +94,23 @@ export function celebrationClipPath(
     || viewport.width <= 0 || viewport.height <= 0) return EMPTY_PATH;
   const viewportRect = { left: 0, top: 0, width: viewport.width, height: viewport.height };
   const polygons: Point[][] = [];
-  const add = (points: Point[], bounds: Rect) => {
+  const valid = jobs.filter(validJob);
+  const reserved = valid.filter(j => j.kind === 'accent' && elapsed < j.start + j.duration);
+  const add = (points: Point[], bounds: Rect, ownSwatch = false) => {
     const clipped = clipPolygon(clipPolygon(points, bounds), viewportRect);
-    if (clipped.length >= 3) polygons.push(clipped);
+    if (clipped.length < 3) return;
+    if (ownSwatch || !reserved.length) { polygons.push(clipped); return; }
+    let pieces = [clipped];
+    for (const { rect } of reserved) {
+      if (rect.left >= bounds.left + bounds.width || rect.left + rect.width <= bounds.left ||
+          rect.top >= bounds.top + bounds.height || rect.top + rect.height <= bounds.top) continue;
+      pieces = pieces.flatMap(p => outsideControl(p, rect, viewportRect));
+    }
+    polygons.push(...pieces);
   };
 
-  for (const job of jobs) {
-    if (![job.start, job.duration, job.width, job.rect.left, job.rect.top, job.rect.width, job.rect.height].every(Number.isFinite)
-      || job.points.some(point => !Number.isFinite(point.x) || !Number.isFinite(point.y))
-      || elapsed <= job.start || job.duration <= 0 || job.rect.width <= 0 || job.rect.height <= 0) continue;
+  for (const job of valid) {
+    if (elapsed <= job.start) continue;
     const progress = clamp((elapsed - job.start) / job.duration);
     if (job.kind === 'accent') {
       const width = job.rect.width * progress, height = job.rect.height * progress;
@@ -90,7 +118,7 @@ export function celebrationClipPath(
         left: job.rect.left + (job.rect.width - width) / 2,
         top: job.rect.top + (job.rect.height - height) / 2,
         width, height,
-      }), job.rect);
+      }), job.rect, true);
       continue;
     }
 

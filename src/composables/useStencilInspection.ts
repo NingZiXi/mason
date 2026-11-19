@@ -21,6 +21,12 @@ export function useStencilInspection<P>(
   let controller: AbortController | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  function publish(key: string, result: StencilInspection) {
+    cache.delete(key); cache.set(key, result);
+    while (cache.size > 4) cache.delete(cache.keys().next().value!);
+    data.value = result; resolvedKey.value = key;
+  }
+
   async function load() {
     // A manual retry replaces a debounced refresh instead of starting it twice.
     clearTimeout(timer); timer = undefined;
@@ -32,12 +38,9 @@ export function useStencilInspection<P>(
     const signal = controller.signal;
     error.value = ''; loading.value = true;
     try {
-      const result = cache.get(snapshot.key) ?? await fetch(snapshot, signal);
+      const result = await fetch(snapshot, signal);
       if (token !== revision || signal.aborted || !active.value || snapshot.key !== request.value?.key) return;
-      cache.delete(snapshot.key); cache.set(snapshot.key, result);
-      while (cache.size > 4) cache.delete(cache.keys().next().value!);
-      data.value = result;
-      resolvedKey.value = snapshot.key;
+      publish(snapshot.key, result);
     } catch (e) {
       if (token === revision && !signal.aborted && active.value && snapshot.key === request.value?.key
         && !isGenerationCancelled(e)) error.value = String(e);
@@ -50,12 +53,15 @@ export function useStencilInspection<P>(
     revision++; controller?.abort(); controller = null;
     clearTimeout(timer); data.value = null; resolvedKey.value = ''; error.value = ''; loading.value = false;
   }
-  watch([active, () => request.value?.key], () => {
+  watch([active, () => request.value?.part, () => request.value?.key], ([visible, part, key], [wasVisible, lastPart]) => {
     invalidate();
-    if (active.value && request.value) {
-      loading.value = true;
-      timer = setTimeout(() => void load(), 180);
-    }
+    if (!visible || key === undefined) return;
+    const cached = cache.get(key);
+    if (cached) { publish(key, cached); return; }
+    // Navigation is deliberate. Only repeated edits to the same side need a debounce.
+    if (!wasVisible || part !== lastPart) { void load(); return; }
+    loading.value = true;
+    timer = setTimeout(() => void load(), 180);
   }, { immediate: true });
   onScopeDispose(() => { invalidate(); cache.clear(); });
   return { data, resolvedKey, loading, error, ready, retry: load };

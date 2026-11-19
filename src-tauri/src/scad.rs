@@ -278,12 +278,9 @@ pub async fn check_packaged_engine(root: &std::path::Path) -> Result<(), AppErro
     let script = packaged_asset(root, "scripts", "jig_generator.py")
         .ok_or_else(|| AppError::Other(format!("No packaged CAD script under {}", root.display())))?;
     let python = python.to_string_lossy();
-    let missing = crate::commands::check_deps_blocking(&python).map_err(AppError::Other)?;
-    if !missing.is_empty() { return Err(AppError::Other(format!("Missing: {}", missing.join(", ")))); }
     let log = TempArtifact::new("log");
-    let mut server = spawn_server(&python, &script, &log.0).await?;
-    let reply = server.request("ping", None, None, None, None, None, None).await?;
-    if !reply.ok || !reply.pong { return Err(AppError::Other("Invalid CAD ping response".into())); }
+    let mut worker = None;
+    ensure_server(&mut worker, &python, &script, &log.0).await?;
     println!("Bundled CAD engine OK: {}", python);
     Ok(())
 }
@@ -374,16 +371,27 @@ async fn ensure_server(
     script_path: &std::path::Path,
     log_path: &std::path::Path,
 ) -> Result<(), AppError> {
-    if guard.is_none() {
-        let mut server = spawn_server(python, script_path, log_path).await?;
-        // 启动 ping:快速暴露依赖缺失(import 失败 → 进程退出 → 响应通道关闭)
-        if let Err(e) = server.request("ping", None, None, None, None, None, None).await {
-            let _ = server.child.kill().await;
-            return Err(e);
-        }
-        *guard = Some(server);
+    if let Some(server) = guard {
+        if server.python == python && server.child.try_wait()?.is_none() { return Ok(()); }
     }
-    Ok(())
+    if let Some(mut old) = guard.take() { let _ = old.child.kill().await; }
+    let mut server = spawn_server(python, script_path, log_path).await?;
+    let handshake = timeout(Duration::from_secs(45),
+        server.request("ping", None, None, None, None, None, None)).await;
+    let error = match handshake {
+        Ok(Ok(reply)) if reply.ok && reply.pong => { *guard = Some(server); return Ok(()); }
+        Ok(Ok(reply)) => AppError::Other(reply.error.unwrap_or_else(|| "Invalid CAD ping response".into())),
+        Ok(Err(err)) => err,
+        Err(_) => AppError::Timeout("CAD engine startup (45s)".into()),
+    };
+    let _ = server.child.kill().await;
+    Err(error)
+}
+
+/// A worker is cached only after the real CAD script has imported its runtime and answered ping.
+pub(crate) async fn verify_preview_engine(app: &AppHandle, python: &str) -> Result<(), AppError> {
+    let mut guard = server_cell().lock().await;
+    ensure_server(&mut guard, python, &find_script(app), &log_path_for(app)).await
 }
 
 /// 解析 Python 可执行文件、脚本路径与诊断日志路径(生成类命令共用)
@@ -466,13 +474,6 @@ async fn run_server_request(
 ) -> Result<ServerResponse, AppError> {
     let work = async {
         ensure_server(guard, python, script_path, log_path).await?;
-        // Runtime settings may change while the application is open.
-        if guard.as_ref().is_some_and(|s| s.python != python) {
-            if let Some(mut server) = guard.take() {
-                let _ = server.child.kill().await;
-            }
-            ensure_server(guard, python, script_path, log_path).await?;
-        }
         if let Some(ticket) = ticket {
             ticket.check()?;
         }
@@ -655,6 +656,31 @@ mod worker_tests {
     use super::*;
 
     #[tokio::test]
+    async fn only_cache_a_worker_after_a_real_pong_and_recheck_after_exit() {
+        let python = python_detect::find_python_in_path().expect("Python on test host");
+        let script = TempArtifact::new("py");
+        let log = TempArtifact::new("startup.log");
+        let mut worker = None;
+        std::fs::write(&script.0, "raise ImportError('missing native CAD library')").unwrap();
+        let err = ensure_server(&mut worker, &python, &script.0, &log.0).await.unwrap_err();
+        assert!(err.to_string().contains("missing native CAD library"), "{err}");
+        assert!(worker.is_none());
+        let serve = "import sys,json\nfor line in sys.stdin:\n print(json.dumps({'id':json.loads(line)['id'],'ok':True,'pong':False}),flush=True)";
+        std::fs::write(&script.0, serve).unwrap();
+        assert!(ensure_server(&mut worker, &python, &script.0, &log.0).await.is_err());
+        assert!(worker.is_none());
+        std::fs::write(&script.0, serve.replace("False", "True")).unwrap();
+        ensure_server(&mut worker, &python, &script.0, &log.0).await.unwrap();
+        let pid = worker.as_ref().unwrap().child.id();
+        ensure_server(&mut worker, &python, &script.0, &log.0).await.unwrap();
+        assert_eq!(pid, worker.as_ref().unwrap().child.id());
+        worker.as_mut().unwrap().child.kill().await.unwrap();
+        std::fs::write(&script.0, "raise ImportError('runtime changed')").unwrap();
+        assert!(ensure_server(&mut worker, &python, &script.0, &log.0).await.is_err());
+        assert!(worker.is_none());
+    }
+
+    #[tokio::test]
     async fn python_worker_does_not_write_bytecode_into_bundled_resources() {
         let Some(python) = bundled_python(None).or_else(python_detect::find_python_in_path) else { return; };
         let script = TempArtifact::new("py");
@@ -701,7 +727,7 @@ for line in sys.stdin:
     if r['cmd'] == 'generate':
         Path(r['output']).write_text('started')
         time.sleep(1 if r.get('part') == 'export' else 30)
-    print(json.dumps({'id': r['id'], 'ok': True}), flush=True)
+    print(json.dumps({'id': r['id'], 'ok': True, 'pong': r['cmd'] == 'ping'}), flush=True)
 "#).unwrap();
         let preview_log = TempArtifact::new("preview.log");
         let export_log = TempArtifact::new("export.log");

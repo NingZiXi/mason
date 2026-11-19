@@ -116,6 +116,8 @@
   --brand-accent: #E07A3C;
   --brand-accent-hover: #C9682C;
   --brand-accent-surface: rgba(224, 122, 60, 0.10);
+  --pcb-fill: #D2DFE9;
+  --pcb-ink: #718FA7;
 
   /* Text */
   --text-default: #171717;
@@ -566,6 +568,8 @@ html.dark {
   --brand-accent: #ED8E50;
   --brand-accent-hover: #F0A068;
   --brand-accent-surface: rgba(237, 142, 80, 0.14);
+  --pcb-fill: #344B60;
+  --pcb-ink: #8FA9BF;
 
   --text-default: #E8E8E8;
   --text-secondary: #B8B8BA;

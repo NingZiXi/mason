@@ -20,6 +20,7 @@ import { vAppTooltip } from '../directives/app-tooltip';
 const OnboardingTour = defineAsyncComponent(() => import('./OnboardingTour.vue'));
 
 const props = defineProps<{ active: boolean; side: 'top' | 'bottom' }>();
+const emit = defineEmits<{ presentable: [] }>();
 const { t, locale } = useI18n();
 const store = useConfigStore();
 const ui = useUiStore();
@@ -131,6 +132,9 @@ watch(mode, () => interaction.finish(), { flush: 'sync' });
 watch([enabled, () => request.value?.key, error], resetCheck);
 watch(enabled, () => { interaction.finish(); interaction.refresh(); });
 watch(svgEl, () => interaction.refresh());
+// Signal after the SVG (or an actionable error state) has reached the DOM.
+watch(() => props.active && ((resultReady.value && !!svgEl.value) || !!error.value || !store.pythonDetected),
+  ready => { if (ready) emit('presentable'); }, { flush: 'post', immediate: true });
 const tourReady = computed(() => props.active && !!latest.value && !!svgEl.value
   && store.pythonDetected && !loading.value && !error.value);
 const { open: tourOpen, start: replayTour, close: finishTour } = useFirstUseTour({
@@ -241,7 +245,7 @@ onBeforeUnmount(() => { interaction.dispose(); tasks.cancel(['preview']); });
         :key="error ? 'error' : !store.pythonDetected ? 'unavailable' : 'progress'"
         :class="{ compact: data && store.pythonDetected, 'has-error': !!error, 'is-complete': checkCompleted && resultReady }" role="status">
         <template v-if="error"><strong>{{ t('inspection.failed') }}</strong><span v-if="!data" class="error-detail">{{ error }}</span><button @click="retry">{{ t('inspection.retry') }}</button></template>
-        <template v-else-if="!store.pythonDetected">{{ t('preview.noPythonPreview') }}</template>
+        <template v-else-if="!store.pythonDetected">{{ t(store.engineLoading ? 'preview.checkingEngine' : store.pythonError ? 'python.unavailable' : 'preview.noPythonPreview') }}</template>
         <template v-else>
           <ActionStatusIcon :state="loading ? 'busy' : 'success'" :size="data ? 14 : 22" />
           <span>{{ t(loading ? 'inspection.loading' : 'preview.refreshed') }}</span>

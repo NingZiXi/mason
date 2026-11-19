@@ -3,6 +3,7 @@ import { nextTick, ref, watch } from 'vue';
 import { readFileSync } from 'node:fs';
 import { createSourceFile, isArrowFunction, isCallExpression, isExpressionStatement, isFunctionDeclaration,
   isIdentifier, ScriptKind, ScriptTarget, transpileModule } from 'typescript';
+import { previewPartParams } from '../model-params';
 import { GenerationTasks, isGenerationCancelled } from '../generation-tasks';
 
 // Exercise the actual debounce, render pipeline and transition watchers while
@@ -40,7 +41,7 @@ function setup() {
   const tasks = new GenerationTasks(invoke as <T>(command: string, args?: Record<string, unknown>) => Promise<T>);
   const activePart = ref('insert'), inspectionOpen = ref(false);
   const localStops: Array<() => void> = [];
-  const create = new Function('generationTasks', 'isGenerationCancelled', 'activePart', 'inspectionOpen', 'watch', 'window', `
+  const create = new Function('previewPartParams', 'generationTasks', 'isGenerationCancelled', 'activePart', 'inspectionOpen', 'watch', 'window', `
     let disposed = false, renderSeq = 0, cacheGeneration = 0, renderTimer = null, preloadTimer = null, metricsTimer = null;
     let revision = 1;
     const scene = { value: {} }, store = { pythonDetected: true, gerberImporting: false }, hasData = { value: true };
@@ -55,7 +56,7 @@ function setup() {
     const applyStlToMesh = geometry => { currentMesh.value = { geometry }; currentMeshPart = activePart.value; };
     const applyAssembly = () => { currentAssembly.value = {}; };
     const t = key => key, disposeMesh = () => {}, schedulePreload = () => {}, scheduleMetrics = () => {};
-    const cancelCameraMotion = () => {}, resetRefresh = () => {}, setMeasureMode = () => {};
+    const cancelCameraMotion = () => {}, finishParameterSettle = () => {}, resetRefresh = () => {}, setMeasureMode = () => {};
     const onCanvasPointerLeave = () => {}, onResize = () => {};
     ${javascript}
     return { render: renderCurrent, schedule: scheduleRender,
@@ -63,7 +64,7 @@ function setup() {
       inspect: () => ({ loading: loading.value, error: errorMsg.value, part: currentMeshPart, timer: renderTimer,
         geometry: currentMesh.value?.geometry, pending: pendingParts.size }) };
   `);
-  const harness = create(tasks, isGenerationCancelled, activePart, inspectionOpen,
+  const harness = create(previewPartParams, tasks, isGenerationCancelled, activePart, inspectionOpen,
     (...args: Parameters<typeof watch>) => { const stop = watch(...args); localStops.push(stop); return stop; },
     { setTimeout, clearTimeout }) as {
     render: (force?: boolean) => Promise<boolean>;

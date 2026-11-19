@@ -53,7 +53,7 @@ export interface GerberImportPayload {
   boards?: PanelVariant[];
 }
 
-interface PanelVariantSet {
+export interface PanelVariantSet {
   panel: PanelVariant;
   single: PanelVariant; // Legacy automatic selection; never shown as a third scope.
   boards?: PanelVariant[];
@@ -129,4 +129,16 @@ export function makePanelVariant(
     height: maxY - minY,
     center: { x: cx, y: cy },
   };
+}
+
+/** Ordinary boards share one scope. For panels, reuse an explicitly selected
+ * child's pad filtering when its contour and holes match the legacy single. */
+export function makePanelVariants({ panel, single }: { panel: GerberOutline; single: GerberOutline },
+  top?: PadPolygon[], bottom?: PadPolygon[]): PanelVariantSet {
+  const whole = makePanelVariant(panel, top, bottom);
+  const boards = panel.boards?.map((board, index) => makePanelVariant(board, top, bottom,
+    { id: `board-${index + 1}`, label: `#${index + 1}` }));
+  const index = panel.boards?.findIndex(b => b.points === single.points && b.holes.length === single.holes.length &&
+    b.holes.every((ring, i) => ring === single.holes[i])) ?? -1;
+  return { panel: whole, boards, single: single === panel ? whole : boards?.[index] ?? makePanelVariant(single, top, bottom) };
 }

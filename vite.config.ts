@@ -22,9 +22,12 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // Film projects and the website have their own servers. Their generated
-      // files must not trigger desktop reloads or expand the watcher tree.
-      ignored: ["**/src-tauri/**", "**/films/**", "**/docs/**"],
+      // Local QA exports can contain entire unpacked releases and Python runtimes.
+      // Walking these trees delays the desktop's first render even on a cache hit.
+      ignored: [
+        "**/src-tauri/**", "**/films/**", "**/docs/**",
+        "**/test_out/**", "**/artifacts/**", "**/.npm-cache/**", "**/.tauri/**",
+      ],
     },
   },
   // Scan only the desktop entry; nested video projects contain many unrelated
