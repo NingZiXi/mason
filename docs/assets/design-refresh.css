@@ -1,0 +1,246 @@
+/* Design refresh: drafting-sheet hierarchy on top of the existing green/paper system.
+   Loaded last. Presentation only — no interaction, timeline or content changes. */
+:root{
+  --ink:#17241E;
+  --ink-2:#55655D;
+  --ink-3:#8A9890;
+  --rule:#DCE5DE;
+  --rule-strong:#C4D2C8;
+  --panel:#13231C;
+  --panel-2:#1A3026;
+  --type-mono:ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+  --type-display:"Segoe UI Variable Display","SF Pro Display",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --surface-edge:#D5E0D7;
+  --radius:12px;
+}
+body{counter-reset:sec}
+::selection{background:#3E7D6233}
+.wrap{max-width:1200px}
+
+/* ---------- Nav ---------- */
+nav{border-bottom-color:transparent;background:#fdfefdcc}
+nav.is-scrolled{border-bottom-color:var(--rule);box-shadow:none;background:#fdfefdf0}
+.nav-inner{height:60px}
+.nav-links{color:var(--ink-2);font-weight:500}
+.nav-links a:not(.btn)::after{bottom:-6px;height:1.5px}
+.nav-links a:not(.btn):hover{color:var(--ink)}
+.btn-github{border-radius:999px;padding:7px 14px;font-size:13px;border-color:var(--rule-strong)}
+
+/* ---------- Buttons ---------- */
+.btn{border-radius:10px}
+.btn-primary{
+  padding:14px 26px;font-size:15px;
+  background:linear-gradient(#458A6C,#37735A);
+  box-shadow:inset 0 1px 0 #ffffff38,0 1px 2px #1c3a2c40,0 10px 24px -8px #2f6a5080;
+}
+.btn-primary:hover{background:linear-gradient(#4C9274,#3C7A60);animation:none;
+  box-shadow:inset 0 1px 0 #ffffff40,0 1px 2px #1c3a2c40,0 14px 30px -8px #2f6a5099}
+.btn-ghost{color:var(--ink);border-color:var(--rule-strong);background:#ffffffb3;font-weight:550;font-size:14px;padding:13px 17px}
+.btn-ghost:hover{background:#fff;border-color:var(--green-accent);color:var(--green-active)}
+
+/* ---------- Hero ---------- */
+.hero{
+  background:
+    radial-gradient(ellipse 60% 70% at 78% 38%,#dfece3 0%,#eef5f0 38%,transparent 70%),
+    var(--paper);
+}
+.hero-canvas{opacity:.09}
+.hero .pcb-trace{opacity:.12}
+.hero-grid-overlay{
+  opacity:.09;
+  background-image:
+    linear-gradient(#3E7D62 1px,transparent 1px),
+    linear-gradient(90deg,#3E7D62 1px,transparent 1px),
+    linear-gradient(#3E7D6259 1px,transparent 1px),
+    linear-gradient(90deg,#3E7D6259 1px,transparent 1px);
+  background-size:120px 120px,120px 120px,24px 24px,24px 24px;
+  -webkit-mask-image:radial-gradient(ellipse 52% 72% at 76% 44%,#000 0%,transparent 100%);
+  mask-image:radial-gradient(ellipse 52% 72% at 76% 44%,#000 0%,transparent 100%);
+}
+.hero-inner{padding:88px 32px 64px;gap:40px}
+.hero-text{flex:1.14}
+.hero-visual{flex:.86}
+.eyebrow{
+  font-size:12px;font-weight:600;letter-spacing:1px;
+  background:#ffffffb3;border-color:var(--rule-strong);color:var(--green-active);
+  padding:6px 13px;
+}
+.hero h1{
+  font-family:var(--type-display);
+  font-size:clamp(38px,4.5vw,58px);font-weight:800;line-height:1.16;letter-spacing:-.035em;
+  margin:26px 0 24px;
+}
+html:lang(en) .hero h1{font-size:clamp(36px,4vw,52px);line-height:1.1}
+.hero h1 .hl{
+  background:linear-gradient(100deg,#2C6149 0%,#3E7D62 30%,#5FA586 50%,#3E7D62 70%,#2C6149 100%);
+  background-size:220% 100%;-webkit-background-clip:text;background-clip:text;
+}
+.hero-sub{font-size:16px;line-height:1.9;max-width:30em;color:var(--ink-2)}
+.hero-cta{margin-top:34px}
+.os-row{margin-top:22px;gap:8px}
+.os-chip{border-radius:999px;font-size:12.5px;padding:6px 13px;border-color:var(--rule);background:#ffffff99}
+.os-chip.active{background:#fff;border-color:var(--green-accent)}
+.hero-ver{font-family:var(--type-mono);font-size:11px;color:var(--ink-3);letter-spacing:.02em}
+
+/* Spec strip under the hero */
+.hero-specs{
+  position:relative;z-index:1;
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  border-top:1px solid var(--rule-strong);
+  margin:0;
+}
+.hero-specs>div{padding:22px 24px 30px;border-left:1px solid var(--rule)}
+.hero-specs>div:first-child{border-left:0;padding-left:0}
+.hero-specs dt{
+  font:650 21px/1.3 var(--type-mono);letter-spacing:-.02em;color:var(--ink);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.hero-specs dt small{font-size:13px;font-weight:550;color:var(--green);margin-left:3px;letter-spacing:0}
+.hero-specs dd{font-size:12.5px;line-height:1.7;color:var(--ink-2);margin-top:4px}
+
+/* ---------- Section heads: numbered, left-aligned, split ---------- */
+section{padding-block:104px}
+.sec-tag{
+  counter-increment:sec;
+  display:flex;align-items:center;gap:12px;
+  font:600 11px/1.5 var(--type-mono);letter-spacing:2.2px;color:var(--green);
+}
+.sec-tag::before{content:counter(sec,decimal-leading-zero);color:var(--ink);letter-spacing:.5px;order:-2}
+.sec-tag::after{content:"";order:-1;width:32px;height:1px;background:var(--rule-strong)}
+.sec-head{
+  display:grid;grid-template-columns:minmax(0,1fr) minmax(0,380px);column-gap:56px;align-items:end;
+  text-align:left;max-width:none;margin:0 0 48px;
+}
+.sec-head .sec-tag{grid-column:1/-1}
+.sec-head h2,.story-heading h2{
+  font-family:var(--type-display);
+  font-size:clamp(28px,3.1vw,42px);font-weight:750;line-height:1.25;letter-spacing:-.03em;
+}
+.sec-head h2{grid-column:1;margin:18px 0 0}
+.story-heading h2{margin-top:18px}
+.sec-head p{grid-column:2;margin:0 0 6px;max-width:none;font-size:14px;line-height:1.9;color:var(--ink-2)}
+.story-heading>p{font-size:14px;max-width:380px;margin-bottom:6px;color:var(--ink-2)}
+
+/* ---------- Surfaces ---------- */
+.mode,.feat,.shot-item,.wf-stage{border-radius:14px}
+.story-walk,.shot-frame{border-radius:16px}
+.mode,.feat{
+  border-color:var(--surface-edge);
+  box-shadow:inset 0 1px 0 #fff,0 1px 2px #1f382c0a,0 12px 28px -18px #1f382c2e;
+}
+.shot-frame{box-shadow:inset 0 1px 0 #fff,0 2px 4px #1f382c0a,0 32px 64px -32px #1f382c4d}
+.shot-item{border-radius:12px}
+.shot-item.is-active{background:#fff;border-color:var(--green-accent)}
+
+/* ---------- Workflow: timeline instead of stacked cards ---------- */
+#workflow .steps-v{gap:0;position:relative}
+#workflow .steps-v .step{
+  background:transparent;border:0;border-radius:0;box-shadow:none;
+  padding:6px 0 34px;gap:22px;overflow:visible;
+}
+#workflow .steps-v .step:last-child{padding-bottom:0}
+#workflow .steps-v .step::before{
+  content:"";position:absolute;inset:44px auto 2px 17px;width:1px;height:auto;
+  background:linear-gradient(var(--rule-strong),var(--rule));transform:none;border-radius:0;
+}
+#workflow .steps-v .step:last-child::before{display:none}
+#workflow .steps-v .step-num{
+  width:36px;height:36px;border-radius:50%;flex-shrink:0;
+  background:#fff;color:var(--green-active);border:1px solid var(--rule-strong);
+  box-shadow:0 0 0 5px var(--paper);
+  transition:background .25s ease,color .25s ease,border-color .25s ease;
+}
+#workflow .steps-v .step:hover .step-num{background:var(--green);border-color:var(--green);color:#fff}
+#workflow .steps-v .step h3{font-size:19px;font-weight:700;letter-spacing:-.015em;margin:4px 0 8px}
+#workflow .steps-v .step p{font-size:14px;line-height:1.9;max-width:34em}
+#workflow .workflow-grid{align-items:center}
+.wf-stage{border-color:var(--surface-edge);background:linear-gradient(155deg,#f7faf5,#ecf3ed)}
+
+/* ---------- Modes: part colours as the code ---------- */
+.mode{padding:36px 34px 30px}
+.mode::before{
+  content:"";position:absolute;left:0;right:0;top:0;height:3px;opacity:.9;
+}
+.mode-jig::before{background:linear-gradient(90deg,var(--base-blue),#7fa0c2)}
+.mode-stencil::before{background:linear-gradient(90deg,var(--cover-amber),#ecba78)}
+.mode h3{font-family:var(--type-display);font-size:24px;font-weight:750;letter-spacing:-.025em}
+.mode li{border-top:1px solid var(--rule)}
+.mode-guide{background:#fff;border-color:var(--surface-edge);border-radius:14px}
+
+/* ---------- Features ---------- */
+.feat h3{font-size:17px;font-weight:700}
+.feat-icon{background:#fff;border:1px solid var(--rule-strong);box-shadow:0 1px 2px #1f382c0f;border-radius:10px}
+.feat-icon svg{stroke:var(--green-active)}
+
+/* ---------- Download: original green band and glass cards; only the heading follows the new system ---------- */
+.dl-sec .sec-head{display:block;text-align:center;max-width:620px;margin:0 auto 48px}
+.dl-sec .sec-tag{justify-content:center;color:#BFE0D0}
+.dl-sec .sec-tag::before{color:#fff}
+.dl-sec .sec-tag::after{background:#ffffff59}
+.dl-sec .sec-head h2{margin:18px 0 14px}
+.dl-sec .sec-head p{margin:0;color:#D6EAE0}
+
+/* ---------- FAQ: heading left, ruled list right ---------- */
+#faq>.wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.7fr);column-gap:72px;align-items:start}
+#faq .sec-head{display:block;margin:0;position:sticky;top:104px}
+#faq .faq{max-width:none;margin:0;border-top:1px solid var(--rule-strong)}
+#faq .faq details{
+  border:0;border-bottom:1px solid var(--rule);border-radius:0;margin:0;background:transparent;box-shadow:none;
+}
+#faq .faq details:hover{border-bottom-color:var(--rule-strong)}
+#faq .faq summary{padding:24px 4px;font-size:16px;font-weight:600;transition:color .2s ease}
+#faq .faq summary:hover,#faq .faq details[open] summary{color:var(--green-active)}
+#faq .faq summary::after{
+  width:28px;height:28px;border-radius:50%;border:1px solid var(--rule-strong);
+  display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;
+}
+#faq .faq details .faq-content p{padding:0 48px 26px 4px}
+
+/* ---------- Footer ---------- */
+footer{border-top:1px solid var(--rule);background:var(--paper);padding:52px 0 44px}
+.foot-brand{font-size:17px;letter-spacing:-.01em}
+.foot-links a{transition:color .15s ease}
+.foot-copy{
+  font-size:12px;color:var(--ink-3);font-variant-numeric:tabular-nums;
+  border-top:1px solid var(--rule);padding-top:22px;margin-top:18px;
+}
+
+/* ---------- Responsive ---------- */
+@media(max-width:1100px) and (min-width:901px){
+  .hero h1{font-size:44px}
+}
+@media(max-width:900px){
+  section{padding-block:76px}
+  .hero-inner{padding:60px 28px 48px}
+  .hero h1{font-size:clamp(34px,6vw,46px)}
+  .hero-specs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .hero-specs>div{padding:18px 20px 20px}
+  .hero-specs>div:nth-child(odd){border-left:0;padding-left:0}
+  .hero-specs>div:nth-child(n+3){border-top:1px solid var(--rule)}
+  .sec-head{grid-template-columns:minmax(0,1fr);margin-bottom:36px}
+  .sec-head p{grid-column:1;margin:14px 0 0;max-width:38em}
+  .story-heading>p{max-width:none}
+  #faq>.wrap{grid-template-columns:minmax(0,1fr);row-gap:28px}
+  #faq .sec-head{position:static}
+}
+@media(max-width:700px){
+  section{padding-block:60px}
+  .hero-inner{padding:48px 22px 40px}
+  .hero h1{font-size:clamp(31px,8.4vw,40px);line-height:1.2;margin:22px 0 18px}
+  .hero-sub{font-size:14.5px}
+  .hero-specs dt{font-size:18px}
+  .hero-specs dd{font-size:12px}
+  .sec-head h2,.story-heading h2{font-size:28px}
+  .sec-tag{font-size:10px;letter-spacing:1.8px}
+  .mode{padding:30px 22px 24px}.mode h3{font-size:21px}
+  #workflow .steps-v .step{gap:16px;padding-bottom:28px}
+  #workflow .steps-v .step h3{font-size:17px}
+  #workflow .steps-v .step p{font-size:13px}
+  #faq .faq summary{padding:20px 2px;font-size:15px}
+  #faq .faq details .faq-content p{padding:0 2px 22px}
+  footer{padding:36px 0 32px}
+}
+@media(max-width:370px){
+  .hero-inner{padding-inline:18px}
+  .hero-specs dt{font-size:16px}
+}
