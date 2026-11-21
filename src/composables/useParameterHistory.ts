@@ -6,7 +6,8 @@ import { apertureSnapshot, type ApertureSnapshot } from "../lib/pad-overrides";
 // Keep only small parameter values. Never copy Gerber geometry into history.
 const HISTORY_KEYS = [...PRESET_KEYS, "pcbSizeX", "pcbSizeY", "pcbThickness",
   "stencilSizeX", "stencilSizeY", "stencilLip", "jigSize", "platterHeight", "platterMargin",
-  "componentReliefEnabled", "jigPrintSide", "componentReliefRegions"] as const;
+  "componentReliefEnabled", "jigPrintSide", "componentReliefRegions",
+  "stencilPlacementEnabled", "stencilPlacements"] as const;
 export type ParameterSnapshot = Pick<AppConfig, typeof HISTORY_KEYS[number]> & { apertures: ApertureSnapshot };
 // Share immutable serialized editing plans across scalar history steps. A
 // restore still receives its own decoded copy, never an object held by history.

@@ -16,7 +16,7 @@ export const useWorkSessionStore = defineStore('work-session', () => {
   const reliefPlans = computed(() => JSON.stringify(config.config.componentReliefRegions));
   const current = computed<ExportSnapshot>(() => Object.entries(config.config).map(([key, value]) => {
     if (key === 'pryNotchSides') return normalizePryNotchSides(config.config.pryNotchSides).join(',');
-    if (key === 'panelGrid') return JSON.stringify(value);
+    if (key === 'panelGrid' || key === 'stencilPlacements') return JSON.stringify(value);
     if (key === 'componentReliefRegions') return reliefPlans.value;
     // Choosing a mode on the empty welcome screen is not an edit.
     if (key === 'appMode' && !config.config.gerberFilename && !config.config.pcbOutlinePoints.length

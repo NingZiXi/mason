@@ -62,6 +62,8 @@ interface ReliefConfig {
   jigPrintSide: JigPrintSide;
   insertHeight: number;
   pcbThickness: number;
+  /** A board placed on the stencil is also generated for its printing side. */
+  stencilPlacementEnabled?: boolean;
 }
 
 export function activeReliefRegions(config: ReliefConfig): ComponentReliefRegion[] {
@@ -78,7 +80,8 @@ export function effectiveInsertHeight(config: ReliefConfig): number {
 }
 
 export function effectiveJigPrintSide(config: ReliefConfig): JigPrintSide {
-  return config.appMode === 'jig' && config.componentReliefEnabled ? config.jigPrintSide : 'top';
+  return config.appMode === 'jig' && (config.componentReliefEnabled || config.stencilPlacementEnabled)
+    ? config.jigPrintSide : 'top';
 }
 
 /** Flip about the board X axis, matching the tray, its holes and both pad masks. */

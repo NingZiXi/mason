@@ -10,6 +10,7 @@ import InlineHelp from "./InlineHelp.vue";
 import ClampPlanPreview from "./ClampPlanPreview.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
 import ComponentReliefForm from './ComponentReliefForm.vue';
+import StencilPlacementForm from './StencilPlacementForm.vue';
 import { ejectHoleLimits, resolveEjectHoleSize } from '../lib/eject-hole';
 import { effectiveInsertHeight } from '../lib/component-relief';
 import PryNotchPicker from "./PryNotchPicker.vue";
@@ -335,6 +336,8 @@ function applyPreset(id: string) {
       </div>
     </MotionCollapse>
     </section>
+
+    <StencilPlacementForm />
 
     <section class="parameter-section lip-section" :aria-label="t('config.platterLipGroup')">
       <div class="section-label lip-section-heading">{{ t('config.platterLipGroup') }}</div>

@@ -204,6 +204,19 @@ def compute_frame_poly(p):
     return frame_poly
 
 
+def slot_half_extents(p, slot_poly):
+    """Half extents of the platter that must contain the PCB slot, and its centre.
+
+    Normally the platter is centred on the slot. When the board is placed off
+    the stencil centre (pcb_placed), the platter, window and stencil stay
+    centred on the jig and the half extents become the slot's reach from it.
+    """
+    minx, miny, maxx, maxy = slot_poly.bounds
+    if p.get("pcb_placed", False):
+        return max(-minx, maxx), max(-miny, maxy), 0.0, 0.0
+    return (maxx - minx) / 2, (maxy - miny) / 2, (minx + maxx) / 2, (miny + maxy) / 2
+
+
 def plater_radius(p, slot_poly, frame_poly=None):
     """凸台逐轴外扩量与圆角半径 —— get_polys / build_cover 共用,
     物理约束『凸台顶面 ⊇ PCB 槽』且『钢网外缘 - 唇 = 凸台外缘』的单一来源。
@@ -217,9 +230,7 @@ def plater_radius(p, slot_poly, frame_poly=None):
 
     返回 (margin_x, margin_y, r):逐轴外扩量(相对槽半宽)与凸台圆角半径。
     """
-    minx, miny, maxx, maxy = slot_poly.bounds
-    slot_hx = (maxx - minx) / 2
-    slot_hy = (maxy - miny) / 2
+    slot_hx, slot_hy, _cx, _cy = slot_half_extents(p, slot_poly)
     lip = float(p.get("stencil_lip", 0.0) or 0.0)
     margin_min = float(p.get("platter_margin", 0.0) or 0.0)
     shx, shy = stencil_half_xy(p)
@@ -303,9 +314,7 @@ def get_polys(p):
     # —— 不跟随板框形状:异形板(圆/异形轮廓)的托盘面仍是规整矩形,
     # 且钢网是矩形,矩形凸台四边支撑唇均匀一致。
     margin_x, margin_y, r = plater_radius(p, slot_poly, frame_poly=frame_poly)
-    minx, miny, maxx, maxy = slot_poly.bounds
-    cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
-    slot_hx, slot_hy = (maxx - minx) / 2, (maxy - miny) / 2
+    slot_hx, slot_hy, cx, cy = slot_half_extents(p, slot_poly)
     half_x = slot_hx + margin_x  # = platter_half_x
     half_y = slot_hy + margin_y  # = platter_half_y
     platter_poly = rounded_rect_poly(
@@ -594,6 +603,76 @@ def _jig_component_params(p):
         blind_depths = [region["depth"] for region in normalized_regions if not region.get("through", False)]
         result["insert_height"] = (max(requested_h, board_t + max(blind_depths) + COMPONENT_RELIEF_FLOOR)
                                    if blind_depths else requested_h)
+    return result
+
+
+def _board_placement(p):
+    """Validated board placement on the stencil, or None for a centred board.
+
+    pcb_placement = {"x", "y", "quarter"}: the printing-view board is turned by
+    quarter × 90° counter-clockwise, then moved by (x, y) mm from the stencil
+    centre. It comes from a photo of the stencil or from manual entry.
+    """
+    placement = p.get("pcb_placement")
+    if placement is None:
+        return None
+    if not isinstance(placement, dict):
+        raise ValueError("PCB 在钢网上的位置格式不正确")
+    x, y, quarter = placement.get("x"), placement.get("y"), placement.get("quarter", 0)
+    for value in (x, y):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or abs(value) > 300):
+            raise ValueError("PCB 在钢网上的偏移必须为 -300~300 mm 的有效数值")
+    if isinstance(quarter, bool) or quarter not in (0, 1, 2, 3):
+        raise ValueError("PCB 在钢网上的旋转必须为 0/90/180/270 度")
+    return float(x), float(y), int(quarter)
+
+
+def _place_xy(x, y, placement):
+    dx, dy, quarter = placement
+    for _ in range(quarter):
+        x, y = -y, x
+    return [x + dx, y + dy]
+
+
+def _jig_placed_params(p):
+    """Jig inputs in jig coordinates: printing-view board moved to its stencil position.
+
+    Component relief is oriented first (canonical regions stay in imported
+    top-view coordinates for the editor). A placed board is always oriented
+    for its printing side, because the bottom-side copy on a stencil is only
+    found under the flipped board, with or without relief pockets.
+    """
+    result = _jig_component_params(p)
+    placement = _board_placement(p)
+    if placement is None:
+        return result
+    result = dict(result)
+    side = p.get("jig_print_side", "top")
+    if side not in ("top", "bottom"):
+        raise ValueError("刷锡面必须为 top 或 bottom")
+    outline = [list(point) for point in result.get("pcb_outline_points", [])]
+    holes = [[list(point) for point in ring] for ring in result.get("pcb_outline_holes", [])]
+    if len(outline) < 3:
+        w, h = float(result["pcb_size_x"]) / 2, float(result["pcb_size_y"]) / 2
+        outline = [[-w, -h], [w, -h], [w, h], [-w, h]]
+    elif side == "bottom" and not result.get("component_relief_enabled", False):
+        # Relief-enabled params were already flipped by _jig_component_params.
+        outline = [[x, -y] for x, y in outline]
+        holes = [[[x, -y] for x, y in ring] for ring in holes]
+    result["pcb_outline_points"] = [_place_xy(x, y, placement) for x, y in outline]
+    result["pcb_outline_holes"] = [[_place_xy(x, y, placement) for x, y in ring] for ring in holes]
+    regions = []
+    for region in result.get("component_relief_regions", []):
+        region = dict(region)
+        if region["shape"] == "polygon":
+            region["points"] = [_place_xy(x, y, placement) for x, y in region["points"]]
+        region["x"], region["y"] = _place_xy(region["x"], region["y"], placement)
+        if placement[2] % 2 == 1:
+            region["width"], region["height"] = region["height"], region["width"]
+        regions.append(region)
+    result["component_relief_regions"] = regions
+    result["pcb_placed"] = True
     return result
 
 
@@ -944,7 +1023,7 @@ def validate_component_relief(p):
     """
     try:
         _requested_eject_hole_diameter(p.get("eject_hole_diameter", 0))
-        normalized = dict(_jig_component_params(p))
+        normalized = dict(_jig_placed_params(p))
         slot_poly, platter_poly, _, _ = get_polys(normalized)
         eject = _eject_hole_geometry(slot_poly, normalized.get("eject_slot_width", 22.0),
                                      normalized.get("eject_hole_diameter", 0))
@@ -1200,7 +1279,7 @@ def merge_component_relief(p, gap=1.0, selected_ids=None):
 
 def build_insert(p):
     """PCB 托盘:底板 + 凸台(PCB 齐平槽)+ 梯形取放缺口 + 底部圆形顶出孔 + 4 角 boss + 内孔挖穿"""
-    p = _jig_component_params(p)
+    p = _jig_placed_params(p)
     jig = p["jig_size"]
     total_h = p["insert_height"]
     # 凸台高度 ≡ 底座板厚(不接受独立的 platter_height):
@@ -1304,7 +1383,7 @@ def build_insert(p):
 def build_cover(p):
     """A 面顶盖:45° 全高倒角印刷窗口(压钢网边缘,钢网夹在盖板与凸台顶面之间)
     + 4 角定位柱过孔 + 周圈夹紧螺丝过孔"""
-    p = _jig_component_params(p)
+    p = _jig_placed_params(p)
     jig = p["jig_size"]
     cover_h = p["top_cover_height"]
     r_out = p.get("outer_corner_radius", 5.0)
@@ -1361,7 +1440,7 @@ def build_base(p):
     (GB/T 5277 + GB/T 6170);用户在高级区手动覆盖 peri_screw_d /
     nut_across_flats / nut_height 时以覆盖值为准。
     """
-    p = _jig_component_params(p)
+    p = _jig_placed_params(p)
     jig = p["jig_size"]
     base_h = p["base_height"]
     r_out = p.get("outer_corner_radius", 5.0)

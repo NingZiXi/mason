@@ -16,6 +16,7 @@ import { useParameterHistory } from "../composables/useParameterHistory";
 import { setPadOverrides, type ApertureOverride, type PadSide } from "../lib/pad-overrides";
 import { emptyReliefPlans, effectiveInsertHeight, materializeReliefDepths, type ComponentReliefPlans, type ComponentReliefRegion, type JigPrintSide } from '../lib/component-relief';
 import { positioningPostLayout } from '../lib/positioning-post-layout';
+import { emptyPlacementPlans, placedBoardBounds, type BoardPlacement, type StencilPlacementPlans } from '../lib/stencil-placement';
 
 export type AppMode = "jig" | "stencil";
 
@@ -34,6 +35,10 @@ export interface AppConfig {
   /** Default for newly drawn or automatically generated pockets (mm). */
   componentReliefDepth: number;
   componentReliefRegions: ComponentReliefPlans;
+  /** Board-specific: the board is not centred on the stencil (jig mode). */
+  stencilPlacementEnabled: boolean;
+  /** Board position on the stencil per printing side, from a stencil photo or manual entry. */
+  stencilPlacements: StencilPlacementPlans;
 
   // 钢网参数(夹具模式用:展示用;窗口由凸台推导)
   /** 钢网外缘长(X 向,mm)—— 与 stencilSizeY 一起决定矩形钢网外形 */
@@ -164,6 +169,8 @@ export const DEFAULT: AppConfig = {
   jigPrintSide: 'top',
   componentReliefDepth: 3,
   componentReliefRegions: emptyReliefPlans(),
+  stencilPlacementEnabled: false,
+  stencilPlacements: emptyPlacementPlans(),
   stencilSizeX: 100,
   stencilSizeY: 100,
   stencilThickness: 0.3,
@@ -272,8 +279,17 @@ export const STRUCTURE_PRESETS: StructurePreset[] = [
   },
 ];
 
-/** PCB 槽半宽(X/Y 两轴,与 Python get_polys 同源) */
+/** PCB 槽半宽(X/Y 两轴,与 Python get_polys 同源)
+ *  A board placed off the stencil centre reports its reach from the jig centre,
+ *  matching Python slot_half_extents: the platter stays centred and must contain it. */
 export function slotHalfXY(c: AppConfig): { hx: number; hy: number } {
+  const placed = placedBoardBounds(c);
+  if (placed) {
+    return {
+      hx: Math.max(-placed.minX, placed.maxX) + c.pcbPocketClearance,
+      hy: Math.max(-placed.minY, placed.maxY) + c.pcbPocketClearance,
+    };
+  }
   return {
     hx: c.pcbSizeX / 2 + c.pcbPocketClearance,
     hy: c.pcbSizeY / 2 + c.pcbPocketClearance,
@@ -504,6 +520,10 @@ export const useConfigStore = defineStore("config", () => {
       config.value.stencilSizeY,
       config.value.stencilLip,
       config.value.windowGap,
+      config.value.stencilPlacementEnabled,
+      config.value.stencilPlacements,
+      config.value.jigPrintSide,
+      config.value.pcbOutlinePoints,
       // 周圈螺丝与角定位柱尺寸影响夹紧下限/角柱约束,变化时重算 jigSize
       config.value.periScrewD,
       config.value.cornerScrewD,
@@ -538,6 +558,9 @@ export const useConfigStore = defineStore("config", () => {
       config.value.stencilSizeY,
       config.value.stencilLip,
       config.value.windowGap,
+      config.value.stencilPlacementEnabled,
+      config.value.stencilPlacements,
+      config.value.jigPrintSide,
     ],
     () => {
       if (restoringParameters) return;
@@ -590,6 +613,13 @@ export const useConfigStore = defineStore("config", () => {
         key: "config.warnings.stencilTooSmall",
         params: { s: shortVal, n: shortNeed, axis: shortSide },
       });
+    }
+
+    // A placed board must lie on the sheet, or the stencil cannot cover it.
+    const placed = c.appMode === 'jig' ? placedBoardBounds(c) : null;
+    if (placed && (placed.minX < -c.stencilSizeX / 2 - 0.01 || placed.maxX > c.stencilSizeX / 2 + 0.01
+      || placed.minY < -c.stencilSizeY / 2 - 0.01 || placed.maxY > c.stencilSizeY / 2 + 0.01)) {
+      list.push({ key: "config.warnings.placementOffSheet" });
     }
 
     // 夹具必须能夹住钢网:钢网外缘落在周圈螺丝孔内侧且不碰孔壁
@@ -715,7 +745,10 @@ export const useConfigStore = defineStore("config", () => {
 
     // Relief coordinates belong to one board and must never leak to a different
     // import, panel scope or selected child board. Mode switches keep this plan.
-    if (c.pcbOutlinePoints !== v.outlinePoints) resetComponentRelief();
+    if (c.pcbOutlinePoints !== v.outlinePoints) {
+      resetComponentRelief();
+      resetStencilPlacement();
+    }
 
     c.pcbSizeX = Math.round(v.width * 100) / 100;
     c.pcbSizeY = Math.round(v.height * 100) / 100;
@@ -815,12 +848,30 @@ export const useConfigStore = defineStore("config", () => {
     config.value.panelMode = "panel";
     config.value.panelBoardIndex = null;
     resetComponentRelief();
+    resetStencilPlacement();
   }
 
   function resetComponentRelief() {
     config.value.componentReliefEnabled = false;
     config.value.jigPrintSide = 'top';
     config.value.componentReliefRegions = emptyReliefPlans();
+  }
+
+  function resetStencilPlacement() {
+    config.value.stencilPlacementEnabled = false;
+    config.value.stencilPlacements = emptyPlacementPlans();
+  }
+
+  /** Replace both sides' positions at once (a photo yields both), as one undo step. */
+  function setStencilPlacements(plans: StencilPlacementPlans, enable = true) {
+    history.breakGroup();
+    config.value.stencilPlacements = { top: plans.top ? { ...plans.top } : null, bottom: plans.bottom ? { ...plans.bottom } : null };
+    if (enable) config.value.stencilPlacementEnabled = true;
+  }
+
+  function setStencilPlacement(side: JigPrintSide, placement: BoardPlacement | null) {
+    const c = config.value;
+    c.stencilPlacements = { ...c.stencilPlacements, [side]: placement ? { ...placement } : null };
   }
 
   function setComponentReliefRegions(regions: ComponentReliefRegion[]) {
@@ -995,6 +1046,8 @@ export const useConfigStore = defineStore("config", () => {
     resetApertureOverrides,
     setComponentReliefRegions,
     setComponentReliefDefaultDepth,
+    setStencilPlacements,
+    setStencilPlacement,
     panelBoards,
     panelOverview,
     selectedPanelBoard,
