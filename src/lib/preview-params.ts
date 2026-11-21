@@ -1,6 +1,7 @@
 import { computed, watch, type ComputedRef, type WatchStopHandle } from 'vue';
 import type { AppConfig } from '../stores/config';
-import { activeReliefRegions } from './component-relief';
+import { activeReliefRegions, effectiveJigPrintSide } from './component-relief';
+import { activeBoardPlacement, enginePlacement } from './stencil-placement';
 import { apertureSnapshot } from './pad-overrides';
 import { buildScadParams, enginePads, modelParamsHash, scadPartHash, type ImportedGeometryKeys } from './model-params';
 
@@ -48,6 +49,12 @@ function reliefGeometryKey(c: AppConfig): string | null {
     }))]) : null;
 }
 
+/** A placed board regenerates every jig part; its side decides the board's flip. */
+function placementGeometryKey(c: AppConfig): string | null {
+  const placement = c.appMode === 'jig' ? enginePlacement(activeBoardPlacement(c)) : null;
+  return placement ? JSON.stringify([effectiveJigPrintSide(c), placement]) : null;
+}
+
 export function previewGeometrySource(c: AppConfig,
   apertureKey = JSON.stringify(apertureSnapshot(c.stencilPadsTop, c.stencilPadsBottom)),
   reliefKey = reliefGeometryKey(c),
@@ -61,7 +68,7 @@ export function previewGeometrySource(c: AppConfig,
     c.platterCornerRadius, c.ejectSlotWidth,
     c.appMode === 'jig' && c.ejectSlotWidth > 0 ? c.ejectHoleDiameter : 0,
     c.cornerScrewD, c.postClearance, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap,
-    c.pryNotchSides.join(','), c.pryNotchScale, reliefKey,
+    c.pryNotchSides.join(','), c.pryNotchScale, reliefKey, placementGeometryKey(c),
     c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius,
     c.stencilFrameShape, c.pocketClearance,
     c.stencilTaper, c.stencilStagger, c.stencilStaggerGap, c.stencilStaggerOffset,

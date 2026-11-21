@@ -45,6 +45,17 @@ pub struct ComponentReliefRegion {
 
 fn is_false(value: &bool) -> bool { !value }
 
+/// Jig-mode board position on an off-centre or multi-board stencil (mm, quarter turns).
+/// The printing-view board is turned `quarter` × 90° counter-clockwise, then moved
+/// by (x, y) from the stencil centre.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PcbPlacement {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub quarter: u8,
+}
+
 /// 与前端 TS 类型保持一致的参数结构(v2 结构:参考商用钢网夹)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScadParams {
@@ -69,6 +80,9 @@ pub struct ScadParams {
     pub jig_print_side: JigPrintSide,
     #[serde(default)]
     pub component_relief_regions: Vec<ComponentReliefRegion>,
+    /// Board position on the stencil; omitted keeps the board centred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pcb_placement: Option<PcbPlacement>,
     /// 钢网外缘长/宽(mm,可为矩形)—— 独立模式。
     /// 0 = 非独立模式(钢网外框由板框+边框宽推导)
     #[serde(default)]
@@ -800,6 +814,24 @@ mod parameter_tests {
         assert_eq!(serialized["component_relief_depth"], json!(5.5));
         raw["jig_print_side"] = json!("invalid");
         assert!(serde_json::from_value::<ScadParams>(raw).is_err());
+    }
+
+    #[test]
+    fn pcb_placement_is_optional_and_roundtrips() {
+        let mut raw = json!({
+            "pcb_size_x": 20, "pcb_size_y": 30, "pcb_thickness": 1.6,
+            "pcb_pocket_clearance": 0.2, "screw_spacing": 40,
+            "base_height": 4, "top_cover_height": 4, "jig_size": 140
+        });
+        let centred: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(centred.pcb_placement, None);
+        assert!(serde_json::to_value(centred).unwrap().get("pcb_placement").is_none());
+        raw["pcb_placement"] = json!({"x": -10.5, "y": 0.9, "quarter": 2});
+        let placed: ScadParams = serde_json::from_value(raw.clone()).unwrap();
+        assert_eq!(placed.pcb_placement, Some(PcbPlacement { x: -10.5, y: 0.9, quarter: 2 }));
+        assert_eq!(serde_json::to_value(placed).unwrap()["pcb_placement"], raw["pcb_placement"]);
+        raw["pcb_placement"] = json!(null);
+        assert_eq!(serde_json::from_value::<ScadParams>(raw).unwrap().pcb_placement, None);
     }
 
     #[test]

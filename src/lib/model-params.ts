@@ -1,6 +1,7 @@
 import type { AppConfig } from "../stores/config";
 import type { PadPolygon } from "./gerber/pads";
 import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide, reliefRegionDepth } from './component-relief';
+import { activeBoardPlacement, enginePlacement } from './stencil-placement';
 
 // Image polarity applies to the whole pad; part polarity and holes apply inside it.
 export const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride }) => ({
@@ -35,6 +36,7 @@ export function modelParamsHash(c: AppConfig, keys?: ImportedGeometryKeys) {
       c.appMode === 'jig' && c.ejectSlotWidth > 0 ? c.ejectHoleDiameter : 0,
       c.cornerScrewD, c.postClearance, c.periScrewD, c.outerCornerRadius, c.stencilLip, c.windowGap],
     notch: [c.pryNotchSides, c.pryNotchScale],
+    placement: c.appMode === 'jig' ? [effectiveJigPrintSide(c), enginePlacement(activeBoardPlacement(c))] : null,
     relief: c.appMode === 'jig' && c.componentReliefEnabled
       ? [c.jigPrintSide, activeReliefRegions(c).map(region => reliefGeometry(region, c.componentReliefDepth))] : null,
     stencil: [c.stencilThickness, c.padShrink, c.stencilFrameWidth, c.stencilCornerRadius, c.stencilFrameShape, c.pocketClearance,
@@ -67,6 +69,7 @@ export function buildScadParams(c: AppConfig, top = enginePads(c.stencilPadsTop)
     component_relief_depth: c.componentReliefDepth,
     component_relief_regions: activeReliefRegions(c),
     jig_print_side: effectiveJigPrintSide(c),
+    pcb_placement: c.appMode === 'jig' ? enginePlacement(activeBoardPlacement(c)) : null,
     platter_height: c.platterHeight,
     stencil_lip: c.stencilLip,
     window_gap: c.windowGap,

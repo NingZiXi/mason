@@ -51,7 +51,7 @@ function setup(aspect = 4 / 3) {
     const displayedPartHashes = new Map(), JIG_PARTS = ['insert', 'base', 'cover'];
     const stlCache = { value: Object.fromEntries(JIG_PARTS.map(part => [part, { paramsHash: part }])) };
     const getOrParseGeometry = () => {};
-    const effectiveInsertHeight = () => 10, effectiveJigPrintSide = () => 'top';
+    const effectiveInsertHeight = () => 10, effectiveJigPrintSide = () => 'top', activeBoardPlacement = () => null;
     const showAssemblyPcb = { value: true }, showAssemblyStencil = { value: true }, inspectRelief = { value: false };
     const explosionPercent = { value: 0 };
     let displayedExplosion = 0;

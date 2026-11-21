@@ -15,6 +15,7 @@ import { cacheStlPart, clearStlCache, type StlCacheEntry } from "../lib/stl-cach
 import { animateJigVisibility, buildJigAssembly, disposeJigAssembly, inheritJigVisibility, recolorJigAssembly,
   setJigExplosion, setJigPartsOpacity, setJigReliefInspection, setJigVisibility, stepJigVisibility } from "../lib/jig-assembly";
 import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide } from '../lib/component-relief';
+import { activeBoardPlacement } from '../lib/stencil-placement';
 import { getModelPalette } from "../lib/model-palette";
 import { usePartMetrics, type PartMetrics } from "../composables/usePartMetrics";
 import { useCompletionFeedback } from "../composables/useCompletionFeedback";
@@ -590,12 +591,14 @@ function applyAssembly(parameterUpdate: boolean) {
     room.dispose();
     generator.dispose();
   }
+  const placement = activeBoardPlacement(store.config);
   const group = buildJigAssembly({
     insert: getOrParseGeometry("insert", stlCache.value.insert.bytes, stlCache.value.insert.paramsHash),
     base: getOrParseGeometry("base", stlCache.value.base.bytes, stlCache.value.base.paramsHash),
     cover: getOrParseGeometry("cover", stlCache.value.cover.bytes, stlCache.value.cover.paramsHash),
   }, { ...store.config, insertHeight: effectiveInsertHeight(store.config),
-    jigPrintSide: store.config.componentReliefEnabled ? effectiveJigPrintSide(store.config) : undefined,
+    jigPrintSide: store.config.componentReliefEnabled || placement ? effectiveJigPrintSide(store.config) : undefined,
+    placement,
     screwPositions: store.screwPositions, environmentMap: pcbEnvironment?.texture, palette: modelPalette.value });
   const sameBoard = framedBoardOutline === store.config.pcbOutlinePoints;
   const smoothFraming = sameBoard && !!(currentMesh.value || currentAssembly.value);

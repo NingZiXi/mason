@@ -3,6 +3,7 @@ import { computed, useId } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useConfigStore } from '../stores/config';
 import { clampPlan, pcbPlanPath } from '../lib/clamp-plan';
+import { activeBoardPlacement, placeBoardRing } from '../lib/stencil-placement';
 
 const store = useConfigStore();
 const { t } = useI18n();
@@ -10,8 +11,15 @@ const id = useId();
 const maskId = `${id}-grip`;
 const plan = computed(() => clampPlan(store.config));
 // Cached independently: moving the lip slider never rebuilds imported vertices.
-const pcbPath = computed(() => pcbPlanPath(store.config.pcbOutlinePoints,
-  store.config.pcbOutlineHoles, store.config.pcbSizeX, store.config.pcbSizeY));
+const pcbPath = computed(() => {
+  const c = store.config;
+  const placement = activeBoardPlacement(c);
+  if (!placement) return pcbPlanPath(c.pcbOutlinePoints, c.pcbOutlineHoles, c.pcbSizeX, c.pcbSizeY);
+  const w = c.pcbSizeX / 2, h = c.pcbSizeY / 2;
+  const outline = c.pcbOutlinePoints.length >= 3 ? c.pcbOutlinePoints : [[-w, -h], [w, -h], [w, h], [-w, h]] as Array<[number, number]>;
+  return pcbPlanPath(placeBoardRing(outline, c.jigPrintSide, placement),
+    c.pcbOutlineHoles.map(ring => placeBoardRing(ring, c.jigPrintSide, placement)), c.pcbSizeX, c.pcbSizeY);
+});
 const grip = computed(() => Math.abs(plan.value.gripX - plan.value.gripY) < .01
   ? plan.value.gripX.toFixed(1)
   : `X ${plan.value.gripX.toFixed(1)} / Y ${plan.value.gripY.toFixed(1)}`);

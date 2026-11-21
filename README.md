@@ -50,6 +50,7 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Jig size auto-calculated from stencil size (5mm steps); base and cover reusable for same-size PCBs
 - Full irregular PCB outline reproduction with adjustable pocket clearance
 - Double-sided paste printing: choose the print side, estimate relief areas from underside pads with an adjustable allowance, or draw rectangles, circles, and polygons. Generated areas are appended, preserve manual work, and can be undone. Check actual component outlines and set depth or through cuts individually or in batches. Merge selected areas with matching cut modes and depths into one enclosing rectangle, including the space between them; the tray retains bare-board support and thickens as needed.
+- Off-centre stencils: when both sides, or several copies of a small board, are cut side by side on one stencil, photograph the stencil on paper and Mason finds each copy by matching the Gerber paste openings to the photo. The tray pocket moves and turns to hold the board under its openings, while the stencil and frames stay centred; offsets and rotation can also be entered by hand.
 
 ### PCB Stencil Mode
 - All-in-one stencil: PCB outer frame + top PCB pocket (depth = PCB thickness) + thin stencil layer at pocket bottom

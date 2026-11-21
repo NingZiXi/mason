@@ -32,6 +32,7 @@ ALL_TESTS = [
     "test_corner_radius.py",  # 零圆角直角边界与三部件生成
     "test_holes.py",
     "test_component_relief.py",  # 第二面元件避空、支撑面、镜像和托盘高度
+    "test_stencil_placement.py",  # board placed off the stencil centre (photo alignment)
     "test_irregular.py",
     "test_hex_nut.py",        # B 面底座 M3 六角螺母沉孔
 ]
