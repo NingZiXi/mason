@@ -3,7 +3,7 @@ import { computed, effectScope, nextTick, ref, shallowRef } from 'vue';
 import { useStencilInspection, type InspectionRequest } from '../useStencilInspection';
 import type { StencilInspection } from '../../lib/stencil-inspection';
 
-const result = (n: number): StencilInspection => ({ side: 'top', mirrored: true, outline: [], original: [], openings: [], filtered: [], pads: [],
+const result = (n: number): StencilInspection => ({ side: 'top', mirrored: true, outline: [], original: [], openings: [], filtered: [], pads: [], overlaps: [],
   summary: { sourcePads: n, filteredPads: 0, openings: n, invalidPads: 0 } });
 const snapshot = (key: string): InspectionRequest<{}> => ({ key, part: 'stencil_top', params: {} });
 const scopes: ReturnType<typeof effectScope>[] = [];

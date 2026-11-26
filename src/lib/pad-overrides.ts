@@ -1,10 +1,22 @@
 import type { PadPolygon } from './gerber/pads';
-import type { PanelVariant } from './gerber/panel';
-import type { GerberVariants } from './gerber/panel';
+import type { GerberVariants, PanelVariant } from './gerber/panel';
 
 export type ApertureOverride = NonNullable<PadPolygon['apertureOverride']>;
+export const APERTURE_SCALE_MIN = 50;
+export const APERTURE_SCALE_ORIGINAL = 100;
+export const APERTURE_SCALE_MAX = 200;
+
+/** The UI shows how much of the original size remains; saved settings use the amount removed. */
+export function defaultApertureScaleFromShrink(shrink: number) {
+  return Math.max(APERTURE_SCALE_MIN, APERTURE_SCALE_ORIGINAL - Math.max(0, Number.isFinite(shrink) ? shrink : 0));
+}
 export type PadSide = 'top' | 'bottom';
-export interface ApertureSnapshot { top: Array<[number, ApertureOverride]>; bottom: Array<[number, ApertureOverride]> }
+export interface ApertureSnapshot {
+  top: Array<[number, ApertureOverride]>;
+  bottom: Array<[number, ApertureOverride]>;
+  topScales: Array<[number, number]>;
+  bottomScales: Array<[number, number]>;
+}
 const close = (a: number, b: number) => Math.abs(a - b) < 1e-5;
 
 /** Compare in the original Gerber coordinate system. Panel and child boards
@@ -21,21 +33,18 @@ function samePad(a: PadPolygon, ac: PanelVariant['center'], b: PadPolygon, bc: P
   });
 }
 
-/** Mutate only decision metadata, keeping large geometry arrays and history
- * context stable. Synchronize the same physical pad across panel scopes. */
-/** Index selected locations once instead of scanning every panel for each pad.
- * A large box selection stays linear in the imported geometry size. */
-export function setPadOverrides(pads: PadPolygon[], indices: readonly number[], value: ApertureOverride | undefined,
-  side: PadSide, variants: GerberVariants | null, active: PanelVariant | null) {
-  const selected = [...new Set(indices)].filter(index => Number.isInteger(index) && pads[index]?.polarity === 'D')
-    .map(index => pads[index]);
-  if (!selected.length) return;
-  const assign = (target: PadPolygon) => {
-    if (target.apertureOverride === value) return;
-    if (value) target.apertureOverride = value;
-    else delete target.apertureOverride;
-  };
-  selected.forEach(assign);
+/** Index the edited positions once. Match the same physical pad across board
+ * scopes without replacing any pad objects or their geometry arrays. */
+function syncPadEdits<T>(pads: PadPolygon[], edits: Iterable<readonly [number, T]>,
+  assign: (pad: PadPolygon, value: T) => void, side: PadSide, variants: GerberVariants | null,
+  active: PanelVariant | null) {
+  const selected = new Map<PadPolygon, T>();
+  for (const [index, value] of edits) {
+    const pad = Number.isInteger(index) ? pads[index] : undefined;
+    if (pad?.polarity === 'D') selected.set(pad, value);
+  }
+  if (!selected.size) return;
+  for (const [pad, value] of selected) assign(pad, value);
   if (!variants || !active) return;
   const cell = .1;
   const bucket = (x: number, y: number) => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`;
@@ -60,33 +69,64 @@ export function setPadOverrides(pads: PadPolygon[], indices: readonly number[], 
     }
     return [point[0] + center.x, point[1] + center.y] as const;
   };
-  const locations = new Map<string, PadPolygon[]>();
-  for (const pad of selected) {
-    const [x, y] = anchor(pad, active.center);
+  const locations = new Map<string, Array<[PadPolygon, T]>>();
+  for (const edit of selected) {
+    const [x, y] = anchor(edit[0], active.center);
     const key = bucket(x, y);
     const entries = locations.get(key) ?? [];
-    entries.push(pad); locations.set(key, entries);
+    entries.push(edit); locations.set(key, entries);
   }
   const field = side === 'top' ? 'topPads' : 'bottomPads';
-  const selectedObjects = new Set(selected);
   for (const variant of new Set([variants.panel, variants.single, ...(variants.boards ?? [])])) {
     for (const candidate of variant[field] ?? []) {
-      if (selectedObjects.has(candidate)) continue;
+      if (selected.has(candidate) || candidate.polarity !== 'D') continue;
       const [x, y] = anchor(candidate, variant.center);
-      let matched = false;
-      for (const dx of [-cell, 0, cell]) {
+      // Check neighboring cells to catch floating point drift around bin edges.
+      search: for (const dx of [-cell, 0, cell]) {
         for (const dy of [-cell, 0, cell]) {
-          if (locations.get(bucket(x + dx, y + dy))?.some(pad => samePad(pad, active.center, candidate, variant.center))) matched = true;
+          const match = locations.get(bucket(x + dx, y + dy))?.find(([pad]) =>
+            samePad(pad, active.center, candidate, variant.center));
+          if (match) {
+            assign(candidate, match[1]);
+            break search;
+          }
         }
       }
-      if (matched) assign(candidate);
     }
   }
 }
 
-/** History copies only sparse decisions, never Gerber vertices. */
+export function setPadOverrides(pads: PadPolygon[], indices: readonly number[], value: ApertureOverride | undefined,
+  side: PadSide, variants: GerberVariants | null, active: PanelVariant | null) {
+  syncPadEdits(pads, indices.map(index => [index, value] as const), (pad, override) => {
+    if (pad.apertureOverride === override) return;
+    if (override === undefined) delete pad.apertureOverride;
+    else pad.apertureOverride = override;
+  }, side, variants, active);
+}
+
+export function setPadScales(pads: PadPolygon[], edits: Iterable<readonly [number, number | undefined]>,
+  side: PadSide, variants: GerberVariants | null, active: PanelVariant | null) {
+  syncPadEdits(pads, edits, (pad, scale) => {
+    if (pad.apertureScale === scale) return;
+    if (scale === undefined) delete pad.apertureScale;
+    else if (Number.isInteger(scale) && scale >= APERTURE_SCALE_MIN && scale <= APERTURE_SCALE_MAX) {
+      pad.apertureScale = scale;
+    }
+  }, side, variants, active);
+}
+
+/** History copies only sparse pad edits, never Gerber vertices. */
 export function apertureSnapshot(top: PadPolygon[], bottom: PadPolygon[]): ApertureSnapshot {
-  const snapshot = (pads: PadPolygon[]) => pads.flatMap((pad, i): Array<[number, ApertureOverride]> =>
-    pad.apertureOverride ? [[i, pad.apertureOverride]] : []);
-  return { top: snapshot(top), bottom: snapshot(bottom) };
+  const snapshot = (pads: PadPolygon[]) => {
+    const decisions: Array<[number, ApertureOverride]> = [];
+    const scales: Array<[number, number]> = [];
+    pads.forEach((pad, index) => {
+      if (pad.apertureOverride) decisions.push([index, pad.apertureOverride]);
+      if (pad.apertureScale !== undefined) scales.push([index, pad.apertureScale]);
+    });
+    return { decisions, scales };
+  };
+  const topEdits = snapshot(top), bottomEdits = snapshot(bottom);
+  return { top: topEdits.decisions, bottom: bottomEdits.decisions, topScales: topEdits.scales, bottomScales: bottomEdits.scales };
 }

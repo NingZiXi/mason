@@ -3,9 +3,10 @@ import type { PadPolygon } from "./gerber/pads";
 import { activeReliefRegions, effectiveInsertHeight, effectiveJigPrintSide, reliefRegionDepth } from './component-relief';
 
 // Image polarity applies to the whole pad; part polarity and holes apply inside it.
-export const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride }) => ({
+export const enginePads = (pads: PadPolygon[]) => pads.map(({ type, polarity, parts, padRole, padRoleSource, apertureOverride, apertureScale }) => ({
   type, polarity, parts, ...(padRole ? { padRole } : {}), ...(padRoleSource ? { padRoleSource } : {}),
   ...(apertureOverride ? { apertureOverride } : {}),
+  ...(polarity === 'D' && apertureScale !== undefined ? { apertureScale } : {}),
 }));
 
 // A through cut ignores its remembered blind-pocket depth. Normalize missing

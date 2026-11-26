@@ -61,6 +61,7 @@ from shapely.errors import ShapelyError
 from shapely.ops import unary_union as shapely_union
 from shapely.affinity import scale as shapely_scale_aff
 from shapely.affinity import translate as shapely_translate
+from shapely.strtree import STRtree
 
 # ---------------------------------------------------------------------------
 # 公共几何工具
@@ -1895,9 +1896,43 @@ def _compose_exposures(entries):
     return shapely_union([]) if material is None else material
 
 
-def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
+def _pad_aperture_scale(pad):
+    """A present 100 means original size, overriding global shrink."""
+    scale = pad.get("apertureScale") if isinstance(pad, dict) else None
+    if type(scale) in (int, float) and 50 <= scale <= 200 and scale == round(scale):
+        return int(scale)
+    return None
+
+
+def _rect_edge_lengths(rect):
+    if rect.geom_type != "Polygon":
+        return 0.0, 0.0
+    points = rect.exterior.coords
+    return sorted((math.dist(points[0], points[1]), math.dist(points[1], points[2])))
+
+
+def _shape_stencil_pad(geom, polarity, factor):
+    if factor != 1:
+        geom = shapely_scale_aff(geom, xfact=factor, yfact=factor, origin="centroid")
+        if geom.is_empty or geom.area < 1e-6:
+            return geom
+    # Round-ended or concave single dark pads gain square corners without
+    # shifting their original orientation. Keep holed and multipart macros.
+    if polarity == "D" and geom.geom_type == "Polygon" and not geom.interiors:
+        rect = geom.minimum_rotated_rectangle
+        short, long = _rect_edge_lengths(rect)
+        if short > 1e-6:
+            hull_area = geom.convex_hull.area
+            if long / short > 1.15 or (hull_area > 1e-9 and geom.area / hull_area < 0.92):
+                geom = rect
+    # Limit OCC mesh complexity without losing holes or disconnected pieces.
+    return geom.simplify(0.02, preserve_topology=True)
+
+
+def _prepare_stencil_pads(p, side, pocket_poly, audit=False, overlap_inputs=None):
     """Shared aperture pipeline for manufacturing and the 2D inspection view."""
     pad_shrink = float(p.get("pad_shrink", 0.0)) / 100.0
+    global_factor = max(0.05, 1.0 - pad_shrink) if pad_shrink > 0 else 1.0
     do_stagger = bool(p.get("stencil_stagger", False))      # 密脚错排
     stagger_gap = float(p.get("stencil_stagger_gap", 0.55))
     stagger_off = float(p.get("stencil_stagger_offset", 0.15))
@@ -1908,12 +1943,6 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
     do_grid = bool(p.get("stencil_grid", False))           # 大孔开网格
     grid_size = float(p.get("stencil_grid_size", 2.0))
     grid_bar = float(p.get("stencil_grid_bar", 0.5))
-    # 焊盘方形化始终开启:钢网厂激光切割出直角矩形,锡膏释放更好;
-    # PCB 焊盘视觉上是方的,但 EDA 导出 paste 层可能用 O(长圆)光圈
-    # 或带圆角的宏,统一按包围盒转直角矩形。仅对拉长形(长宽比>1.15)
-    # 生效,圆/方焊盘不变。
-    do_square = True
-
     # 焊盘来源:top 兜底读旧字段 stencil_pads;bottom 只读 stencil_pads_bottom
     if side == "bottom":
         pads_list = p.get("stencil_pads_bottom", [])
@@ -1925,6 +1954,7 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
     tp_sources, tp_candidates, tp_roles = [], [], []
     source_indices, original, filtered = [], [], []
     overrides, manual_closures, source_shapes = {}, [], {}
+    enlarged = {}
     for source_index, pad in enumerate(pads_list):
         parts, pad_pol = _pad_to_parts(pad)
         if not parts:
@@ -1961,51 +1991,15 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
         if audit:
             original.append((geom, pad_pol, source_index))
         tp_candidate = filter_tp and _is_test_point_candidate(pad, geom, tp_max_dia)
-        if pad_shrink > 0:
-            s = max(0.05, 1.0 - pad_shrink)
-            geom = shapely_scale_aff(geom, xfact=s, yfact=s, origin="centroid")
-            if geom.is_empty or geom.area < 1e-6:
-                continue
-        # 焊盘方形化(在 simplify 之前做):simplify(0.02) 会移除长圆形
-        # 圆弧上的顶点,导致 bounds 收缩、中心偏移。
-        # 用最小旋转外接矩形(MRR)代替轴对齐 bounds:保持焊盘原始旋转
-        # 方向(斜放的电容/电阻不被转正),只补全圆角/缺口。
-        # 触发条件(满足任一):
-        #   1) 拉长形(MRR 长宽比 > 1.15):O 光圈/圆角矩形 → 直角矩形
-        #   2) 有凹陷(面积 < 凸包面积 92%):C 形/开槽焊盘 → 补全矩形
-        #      (部分 EDA 工具在锡膏层生成带缺口的 region,钢网应开全孔)
-        # 圆/方焊盘不变形。
-        # Only a simple dark opening may gain square corners. Replacing a
-        # holed/multipart macro with its bounding rectangle destroys its clear
-        # islands or joins separate openings; clear image masks must stay exact.
-        if do_square and pad_pol == "D" and geom.geom_type == "Polygon" and not geom.interiors:
-            mrr = geom.minimum_rotated_rectangle
-            mrr_pts = list(mrr.exterior.coords)
-            # MRR 两条相邻边长 → 长宽
-            e1 = math.hypot(mrr_pts[1][0] - mrr_pts[0][0],
-                            mrr_pts[1][1] - mrr_pts[0][1])
-            e2 = math.hypot(mrr_pts[2][0] - mrr_pts[1][0],
-                            mrr_pts[2][1] - mrr_pts[1][1])
-            bw, bh = max(e1, e2), min(e1, e2)
-            if min(bw, bh) > 1e-6:
-                elongated = bw / bh > 1.15
-                # 有凹陷的单连通焊盘(C 形/开槽):面积 < 凸包 92% 且无内孔。
-                # MultiPolygon/带内孔几何已在上方排除,保持原貌。
-                concave = False
-                if geom.geom_type == "Polygon":
-                    has_holes = len(list(geom.interiors)) > 0
-                    if not has_holes:
-                        ch_area = geom.convex_hull.area
-                        if ch_area > 1e-9:
-                            concave = geom.area / ch_area < 0.92
-                if elongated or concave:
-                    geom = mrr
-        # 简化 0.02mm:圆孔 16~32 顶点 → ~6-8 顶点,孔壁面数减半,
-        # OCC 网格化耗时与面数成正比(0.3ms/面);0.02mm 远低于锡膏
-        # 印刷公差(±0.05mm)和打印机分辨率(FDM 0.4 喷嘴/树脂 0.05)
-        geom = geom.simplify(0.02, preserve_topology=True)
+        # A closed pad keeps its saved scale for reopening. Its closure mask
+        # stays the same as before, so the saved scale cannot cover neighbours.
+        scale = _pad_aperture_scale(pad) if pad_pol == "D" and decision != "closed" else None
+        factor = global_factor if scale is None else scale / 100
+        geom = _shape_stencil_pad(geom, pad_pol, factor)
         if geom.is_empty or geom.area < 1e-6:
             continue
+        if overlap_inputs is not None and factor > global_factor:
+            enlarged[source_index] = source_geom
         pad_geoms.append((geom, pad_pol))
         source_indices.append(source_index)
         if filter_tp:
@@ -2024,7 +2018,7 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
                 role = "component"
             tp_roles.append(role)
 
-    entry_sources = {id(entry): index for entry, index in zip(pad_geoms, source_indices)} if overrides else {}
+    entry_sources = {id(entry): index for entry, index in zip(pad_geoms, source_indices)} if overrides or enlarged else {}
     if filter_tp:
         kept = _filter_test_point_pads(pad_geoms, tp_sources, tp_candidates, tp_iso, tp_roles)
         if audit:
@@ -2047,13 +2041,35 @@ def _prepare_stencil_pads(p, side, pocket_poly, audit=False):
                 kept.append(entry)
         pad_geoms = kept
 
+    baseline = {}
+    if enlarged:
+        tracked_indices = [entry_sources[id(entry)] for entry in pad_geoms]
+        baseline = {index: _shape_stencil_pad(enlarged[index], "D", global_factor)
+                    for index in tracked_indices if index in enlarged}
+
     # 密脚错排(隔位 ±法向偏移)
     if do_stagger and len(pad_geoms) >= 3:
-        pad_geoms = _stagger_pad_geoms(pad_geoms, stagger_gap, stagger_off)
+        staggered = _stagger_pad_geoms(pad_geoms, stagger_gap, stagger_off)
+        if baseline:
+            # Keep the actual stagger offset fixed when comparing the same
+            # opening without its local enlargement.
+            for index, before, after in zip(tracked_indices, pad_geoms, staggered):
+                if index in baseline and before is not after:
+                    from_center, to_center = before[0].centroid, after[0].centroid
+                    baseline[index] = shapely_translate(baseline[index],
+                                                       to_center.x - from_center.x,
+                                                       to_center.y - from_center.y)
+        pad_geoms = staggered
     # 大孔开网格(只对 D 极性开口;C 极性是恢复材料,不网格化)
     if do_grid:
         pad_geoms = [((_grid_pad_geom(g, grid_size, grid_bar) if pol == "D"
                        else g), pol) for g, pol in pad_geoms]
+        if baseline:
+            baseline = {index: _grid_pad_geom(g, grid_size, grid_bar) if not g.is_empty else g
+                        for index, g in baseline.items()}
+
+    if baseline:
+        overlap_inputs.append((list(zip(tracked_indices, pad_geoms)), baseline))
 
     # Mixed image polarity must be composited before manufacturing. Keeping all
     # clear masks until the end would erase later dark refills. Ordinary all-D
@@ -2085,6 +2101,53 @@ def _inspection_polygons(geom):
             for polygon in _inspection_polygons(child)]
 
 
+def _inspection_overlaps(entries, baseline, clip):
+    """Report additional, positive-area intersections introduced by local enlargement.
+
+    The same area can belong to several pairs when three or more pads overlap.
+    Touching only at an edge/point has no polygon and does not count here.
+    """
+    dark = [(index, g) for index, (g, pol) in entries if pol == "D" and not g.is_empty]
+    if len(dark) < 2 or clip.is_empty:
+        return []
+    clears = [(index, g) for index, (g, pol) in entries if pol == "C" and not g.is_empty]
+    dark_tree = STRtree([g for _, g in dark])
+    clear_tree = STRtree([g for _, g in clears]) if clears else None
+    conflicts = []
+    for i, (index, geom) in enumerate(dark):
+        if index not in baseline:
+            continue
+        previous_geom = baseline[index]
+        for j in dark_tree.query(geom, predicate="intersects"):
+            other_index, other = dark[j]
+            if i == j or (j < i and other_index in baseline):
+                continue
+            previous_other = baseline.get(other_index, other)
+            # Duplicate Gerber flashes enlarged together still make one hole.
+            if (other_index in baseline and geom.bounds == other.bounds
+                    and previous_geom.equals(previous_other) and geom.equals(other)):
+                continue
+            overlap = geom.intersection(other)
+            if overlap.area < 1e-6:
+                continue
+            previous = previous_geom.intersection(previous_other)
+            overlap = overlap.difference(previous).intersection(clip)
+            if overlap.area < 1e-6:
+                continue
+            first = min(index, other_index)
+            if clear_tree is not None:
+                # A later clear removes the contribution of the earlier dark
+                # pad, even if a still later dark pad fills the same area again.
+                masks = [clears[k][1] for k in clear_tree.query(overlap)
+                         if clears[k][0] > first]
+                if masks:
+                    overlap = overlap.difference(shapely_union(masks))
+            if overlap.area >= 1e-6:
+                conflicts.append({"sourceIndices": [first, max(index, other_index)],
+                                  "polygons": _inspection_polygons(overlap)})
+    return sorted(conflicts, key=lambda item: item["sourceIndices"])
+
+
 def inspect_stencil(p, side="top"):
     """Return actual aperture masks without OCC solids, meshing or file IO.
 
@@ -2094,15 +2157,31 @@ def inspect_stencil(p, side="top"):
     if side not in ("top", "bottom"):
         raise ValueError("Unknown stencil side")
     base, pocket = _stencil_board_polys(p, side)
-    dark, clear, original, filtered = _prepare_stencil_pads(p, side, pocket, audit=True)
+    overlap_inputs = []
+    dark, clear, original, filtered = _prepare_stencil_pads(
+        p, side, pocket, audit=True, overlap_inputs=overlap_inputs)
     frame = compute_frame_poly(p)
     if side == "top":
         frame = shapely_scale_aff(frame, xfact=1.0, yfact=-1.0)
-    original_dark = [g for g, pol, _ in original if pol == "D"]
     raw = _compose_exposures((g, pol) for g, pol, _ in original)
-    final = shapely_union(dark).difference(shapely_union(clear)).intersection(frame)
+    closed = shapely_union(clear)
+    final = shapely_union(dark).difference(closed).intersection(frame)
     openings = _inspection_polygons(final)
     pads_list = p.get("stencil_pads_bottom", []) if side == "bottom" else p.get("stencil_pads_top", p.get("stencil_pads", []))
+    pads = []
+    for g, pol, index in original:
+        if pol != "D":
+            continue
+        pad = pads_list[index]
+        min_x, min_y, max_x, max_y = g.bounds
+        pads.append({"sourceIndex": index, "polygons": _inspection_polygons(g),
+                     "width": max_x - min_x, "height": max_y - min_y,
+                     "shortEdge": _rect_edge_lengths(g.minimum_rotated_rectangle)[0], "area": g.area,
+                     "decision": pad.get("apertureOverride", "auto") if isinstance(pad, dict) else "auto"})
+    overlaps = []
+    if overlap_inputs:
+        entries, baseline = overlap_inputs[0]
+        overlaps = _inspection_overlaps(entries, baseline, pocket.intersection(frame).difference(closed))
     return {
         "side": side, "mirrored": side == "top",
         "outline": _inspection_polygons(base),
@@ -2111,11 +2190,8 @@ def inspect_stencil(p, side="top"):
                       "polygons": _inspection_polygons(g),
                       "width": g.bounds[2] - g.bounds[0], "height": g.bounds[3] - g.bounds[1]}
                      for g, index, reason in filtered],
-        "pads": [{"sourceIndex": index, "polygons": _inspection_polygons(g),
-                  "width": g.bounds[2] - g.bounds[0], "height": g.bounds[3] - g.bounds[1],
-                  "decision": pads_list[index].get("apertureOverride", "auto") if isinstance(pads_list[index], dict) else "auto"}
-                 for g, pol, index in original if pol == "D"],
-        "summary": {"sourcePads": len(original_dark), "filteredPads": len(filtered),
+        "pads": pads, "overlaps": overlaps,
+        "summary": {"sourcePads": len(pads), "filteredPads": len(filtered),
                     "openings": len(openings), "invalidPads": len(pads_list) - len(original)},
     }
 

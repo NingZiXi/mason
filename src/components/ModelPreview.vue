@@ -2369,7 +2369,7 @@ watch(partTabs, (tabs) => {
 
 <template>
   <div class="preview-wrapper" :class="{ 'is-dark': ui.resolvedTheme === 'dark' }" :style="paletteStyles">
-    <div class="preview-header">
+    <div class="preview-header" :class="{ 'is-inspection': inspectionOpen }">
       <div class="preview-modes" data-mode-motion="tools" role="group" :aria-label="t('preview.viewModes')">
         <LiquidSegmentTrack class="tab-group" :aria-label="t('preview.singleParts')">
           <button
@@ -2378,10 +2378,15 @@ watch(partTabs, (tabs) => {
             class="tab-btn"
             :class="{ active: activePart === tab.name }"
             :aria-pressed="activePart === tab.name"
+            :aria-label="inspectionOpen ? tab.label : undefined"
             @click="activePart = tab.name"
           >
             <span class="tab-dot" :style="{ background: tab.color }" />
-            {{ tab.label }}
+            <template v-if="inspectionOpen">
+              <span class="tab-label-full">{{ tab.label }}</span>
+              <span class="tab-label-short" aria-hidden="true">{{ t(tab.name === 'stencil_bottom' ? 'stencil.bottomShort' : 'stencil.topShort') }}</span>
+            </template>
+            <template v-else>{{ tab.label }}</template>
           </button>
         </LiquidSegmentTrack>
         <span class="mode-divider" aria-hidden="true" />
@@ -2391,7 +2396,7 @@ watch(partTabs, (tabs) => {
           @activate="inspectionOpen = !inspectionOpen" />
       </div>
       <div class="header-actions">
-        <button :class="{ 'view-action-hidden': inspectionOpen, 'is-complete': refreshCompleted }" class="action-btn"
+        <button v-if="!inspectionOpen" :class="{ 'is-complete': refreshCompleted }" class="action-btn"
           @click="refreshAll" :disabled="refreshing || !canUseModel"
           :aria-busy="refreshing" :aria-label="t('preview.refresh')">
           <ActionStatusIcon :state="refreshState">
@@ -2406,7 +2411,7 @@ watch(partTabs, (tabs) => {
             <span :class="{ 'is-visible': refreshState === 'success' }">{{ t('preview.refreshed') }}</span>
           </span>
         </button>
-        <button ref="metricsButton" :class="{ 'view-action-hidden': inspectionOpen, active: showMetrics }" class="action-btn" :aria-pressed="showMetrics" :disabled="!showMetrics && (!showModelTools || !canUseModel)" @click="toggleMetrics" v-app-tooltip="t('preview.printInfo')">
+        <button v-if="!inspectionOpen" ref="metricsButton" :class="{ active: showMetrics }" class="action-btn" :aria-pressed="showMetrics" :disabled="!showMetrics && (!showModelTools || !canUseModel)" @click="toggleMetrics" v-app-tooltip="t('preview.printInfo')">
           <svg viewBox="0 0 16 16" width="14" height="14">
             <path d="M8 1.5l5.5 3.1v6.8L8 14.5l-5.5-3.1V4.6zM8 8l5.5-3.1M8 8v6.5M8 8L2.5 4.9"
               fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
@@ -2446,7 +2451,7 @@ watch(partTabs, (tabs) => {
           </template>
           </el-dropdown>
         </div>
-        <span class="action-announcement" role="status">{{ exportProgress ? exportButtonLabel : refreshCompleted ? t('preview.refreshed') : '' }}</span>
+        <span class="action-announcement" role="status">{{ exportProgress ? exportButtonLabel : !inspectionOpen && refreshCompleted ? t('preview.refreshed') : '' }}</span>
       </div>
     </div>
 
@@ -2719,6 +2724,33 @@ watch(partTabs, (tabs) => {
   flex-wrap: wrap;
   box-shadow: none;
   z-index: 1;
+}
+
+/* The 2D header keeps the layer switch and navigation quiet beside Export. */
+.preview-header.is-inspection {
+  min-height: 48px;
+  padding-block: 7px;
+  padding-inline: 12px;
+  gap: 8px;
+  container: inspection-preview-header / inline-size;
+}
+.preview-header.is-inspection .preview-modes { gap: 6px; }
+.preview-header.is-inspection .tab-btn { padding: 4px 7px; }
+.preview-header.is-inspection .tab-label-short { display: none; }
+.preview-header.is-inspection .assembly-mode-btn.active {
+  min-height: 30px;
+  padding: 5px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.preview-header.is-inspection .assembly-mode-btn.active:hover:enabled {
+  background: var(--bg-overlay-l1);
+  color: var(--interaction-ink, var(--bg-brand));
+}
+@container inspection-preview-header (max-width: 470px) {
+  .preview-header.is-inspection .tab-label-full { display: none; }
+  .preview-header.is-inspection .tab-label-short { display: inline; }
 }
 
 /* Tab Group */
@@ -3003,7 +3035,6 @@ watch(partTabs, (tabs) => {
 }
 
 /* Canvas:背景用径向渐变模拟"工作台"顶光,模型区有纵深感 */
-.view-action-hidden { visibility: hidden; }
 .inspection-surface { position: absolute; inset: 0 0 0 var(--preview-inset, 0px); z-index: 11;
   opacity: 0; visibility: hidden; transition: opacity 160ms ease-in-out, visibility 0s 160ms; }
 .inspection-surface.presented { opacity: 1; visibility: visible; transition-delay: 0s; }

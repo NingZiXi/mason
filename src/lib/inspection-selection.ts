@@ -71,6 +71,32 @@ export function padsInSelection(pads: readonly SelectionPad[], rect: SelectionRe
   }).map(pad => pad.sourceIndex);
 }
 
+export type PadSizeMetric = 'shortEdge' | 'area';
+
+export const padSizeFractionDigits = { shortEdge: 3, area: 4 } as const;
+
+/** Only use thresholds that add pads. Round up at display precision, ignoring
+ * floating-point noise from rotated geometry at a bucket boundary. */
+export function indexPadSizes(pads: readonly InspectionPad[], metric: PadSizeMetric) {
+  const resolution = 10 ** padSizeFractionDigits[metric];
+  const buckets = new Map<number, number[]>();
+  for (const pad of pads) {
+    const size = pad[metric];
+    if (!Number.isFinite(size) || size <= 0) continue;
+    const bucket = Math.max(1, Math.ceil((size - 1e-9) * resolution));
+    const ids = buckets.get(bucket);
+    if (ids) ids.push(pad.sourceIndex);
+    else buckets.set(bucket, [pad.sourceIndex]);
+  }
+  // Store each ID once. A step includes the prefix up to its cumulative count.
+  const padIds: number[] = [];
+  const steps = [...buckets.keys()].sort((a, b) => a - b).map(bucket => {
+    for (const id of buckets.get(bucket)!) padIds.push(id);
+    return { limit: bucket / resolution, count: padIds.length };
+  });
+  return { steps, padIds };
+}
+
 export function mergeSelection(current: readonly number[], hits: readonly number[], operation: SelectionOperation) {
   const result = new Set(operation === 'replace' ? [] : current);
   for (const index of new Set(hits)) {

@@ -105,7 +105,7 @@ describe('session-only unexported work reminder', () => {
     expect(session.hasUnexportedChanges).toBe(true);
   });
 
-  it('tracks in-place aperture decisions on either side and notch-array edits', async () => {
+  it('tracks in-place aperture decisions, scale overrides and notch-array edits', async () => {
     const { session, config } = await setup();
     const pad: PadPolygon = { type: 'rect', polarity: 'D', cx: 0, cy: 0,
       parts: [{ polarity: 'D', points: [[0, 0], [1, 0], [1, 1]] }] };
@@ -118,6 +118,10 @@ describe('session-only unexported work reminder', () => {
     config.setApertureOverride('bottom', 0, 'open');
     expect(session.hasUnexportedChanges).toBe(true);
     session.markExported(session.captureExport());
+    config.setApertureScales('bottom', [0], 135);
+    expect(session.hasUnexportedChanges).toBe(true);
+    config.setApertureScales('bottom', [0]);
+    expect(session.hasUnexportedChanges).toBe(false);
     config.config.pryNotchSides.push('left');
     expect(session.hasUnexportedChanges).toBe(true);
   });

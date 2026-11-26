@@ -624,6 +624,157 @@ def _topology_stencil_params(side, pads):
 
 
 @pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_local_aperture_percentages_match_the_actual_steel_layer(side):
+    from shapely.ops import unary_union
+
+    # The percentage is relative to the original pad, independent of shrink.
+    positions = [-4, -1.5, 1.5, 4]
+    scales = [None, 100, 50, 200]
+    pads = [_paste_pad(shapely_box(x - .4, 2.6, x + .4, 3.4), 'rect') for x in positions]
+    for pad, value in zip(pads, scales):
+        if value is not None:
+            pad['apertureScale'] = value
+    params = dict(_topology_stencil_params(side, pads), pad_shrink=25)
+    expected = unary_union([shapely_box(x - r, 3 - r, x + r, 3 + r)
+                            for x, r in zip(positions, [.3, .4, .2, .8])])
+    _assert_inspection_and_solid_apertures(params, side, expected)
+
+
+@pytest.mark.parametrize('value', [True, '150', 150.5, 49, 201, float('inf'), float('nan')])
+def test_invalid_local_aperture_percentages_inherit_global_shrink(value):
+    pad = dict(_paste_pad(shapely_box(-1, -1, 1, 1), 'rect'), apertureScale=value)
+    params = dict(_topology_stencil_params('bottom', [pad]), pad_shrink=25)
+    report = jg.inspect_stencil(params, 'bottom')
+    assert _inspection_geom(report['openings']).equals(shapely_box(-.75, -.75, .75, .75))
+    assert report['overlaps'] == []
+
+
+def test_aperture_size_metrics_use_original_rotated_geometry_with_holes():
+    geom = shapely_rotate(shapely_box(-2, -.5, 2, .5).difference(shapely_box(-.5, -.25, .5, .25)), 37)
+    pad = dict(_paste_pad(geom, 'macro'), apertureScale=150)
+    params = dict(_topology_stencil_params('top', [pad]), pad_shrink=25)
+    result, = jg.inspect_stencil(params)['pads']
+    assert result['shortEdge'] == pytest.approx(1)
+    assert result['area'] == pytest.approx(3.5)
+    assert result['width'] == pytest.approx(geom.bounds[2] - geom.bounds[0])
+    assert result['height'] == pytest.approx(geom.bounds[3] - geom.bounds[1])
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
+def test_later_scaled_aperture_reports_the_new_intersection_with_an_earlier_pad(side):
+    first = _paste_pad(shapely_box(-1, 2, 0, 3), 'rect')
+    later = _paste_pad(shapely_box(.25, 2, 1.25, 3), 'rect')
+    params = _topology_stencil_params(side, [first, later])
+    later['apertureScale'] = 150  # The two apertures just touch.
+    assert jg.inspect_stencil(params, side)['overlaps'] == []
+    later['apertureScale'] = 175
+    overlap, = jg.inspect_stencil(params, side)['overlaps']
+    assert overlap['sourceIndices'] == [0, 1]
+    min_y, max_y = (-3, -2) if side == 'top' else (2, 3)
+    assert _inspection_geom(overlap['polygons']).equals(shapely_box(-.125, min_y, 0, max_y))
+
+
+def test_warnings_highlight_only_additional_overlap_and_keep_each_pair_once():
+    first = dict(_paste_pad(shapely_box(-1, 2, 0, 3), 'rect'), apertureScale=200)
+    later = dict(_paste_pad(shapely_box(.25, 2, 1.25, 3), 'rect'), apertureScale=200)
+    third = _paste_pad(shapely_box(.125, 2, .375, 3), 'rect')
+    contained = _paste_pad(shapely_box(-.875, 2.25, -.625, 2.75), 'rect')
+    params = _topology_stencil_params('bottom', [first, later, third, contained])
+    pairs = jg.inspect_stencil(params, 'bottom')['overlaps']
+    # The entirely contained pad's original overlap is unchanged. The third
+    # and second pads already overlap on the right of x=.25; omit that part.
+    assert [row['sourceIndices'] for row in pairs] == [[0, 1], [0, 2], [1, 2]]
+    assert _inspection_geom(pairs[-1]['polygons']).equals(shapely_box(.125, 2, .25, 3))
+
+
+def test_unscaled_apertures_keep_their_original_overlap_without_a_warning():
+    first = _paste_pad(shapely_box(-1, 2, 0, 3), 'rect')
+    later = _paste_pad(shapely_box(-.25, 2, .75, 3), 'rect')
+    params = _topology_stencil_params('bottom', [first, later])
+    report = jg.inspect_stencil(params, 'bottom')
+    assert len(report['openings']) == 1
+    assert report['overlaps'] == []
+
+
+def test_identically_enlarged_duplicate_gerber_flashes_do_not_report_an_overlap():
+    outline = shapely_box(-1, 2, 1, 3)
+    first = dict(_paste_pad(outline, 'rect'), apertureScale=150)
+    duplicate = dict(_paste_pad(outline.reverse(), 'rect'), apertureScale=150)
+    params = _topology_stencil_params('bottom', [first, duplicate])
+    report = jg.inspect_stencil(params, 'bottom')
+    assert report['overlaps'] == []
+    assert report['summary']['sourcePads'] == 2
+    assert _inspection_geom(report['openings']).equals(shapely_box(-1.5, 1.75, 1.5, 3.25))
+
+
+def test_overlap_attribution_respects_clear_exposures_and_later_refill():
+    first = _paste_pad(shapely_box(-1, 2, 0, 3), 'rect')
+    later = dict(_paste_pad(shapely_box(.25, 2, 1.25, 3), 'rect'), apertureScale=175)
+    clear = _paste_pad(shapely_box(-.25, 1.9, .125, 3.1), 'rect', 'C')
+    params = _topology_stencil_params('bottom', [first, clear, later])
+    report = jg.inspect_stencil(params, 'bottom')
+    assert report['overlaps'] == []
+    assert _inspection_geom(report['openings']).contains(ShapelyPoint(-.06, 2.5))
+    # A leading clear does not remove a contribution that has yet to be drawn.
+    params['stencil_pads_bottom'] = [clear, first, later]
+    warning, = jg.inspect_stencil(params, 'bottom')['overlaps']
+    assert warning['sourceIndices'] == [1, 2]
+
+
+def test_overlap_ignores_filtered_and_manually_closed_regions():
+    first = dict(_paste_pad(shapely_box(-1, 2, 0, 3), 'rect'), padRole='testpoint')
+    later = dict(_paste_pad(shapely_box(.25, 2, 1.25, 3), 'rect'), apertureScale=175)
+    params = dict(_topology_stencil_params('bottom', [first, later]), stencil_filter_test_points=True)
+    assert jg.inspect_stencil(params, 'bottom')['overlaps'] == []
+    first['apertureOverride'] = 'open'
+    assert len(jg.inspect_stencil(params, 'bottom')['overlaps']) == 1
+    closure = dict(_paste_pad(shapely_box(-.25, 1.9, .125, 3.1), 'rect'), apertureOverride='closed')
+    params['stencil_pads_bottom'].append(closure)
+    report = jg.inspect_stencil(params, 'bottom')
+    assert report['overlaps'] == []
+    assert not _inspection_geom(report['openings']).contains(ShapelyPoint(-.06, 2.5))
+
+
+def test_closed_pad_saved_scale_only_affects_openings_once_reopened():
+    closed = dict(_paste_pad(shapely_box(-1, 2, 0, 3), 'rect'), apertureOverride='closed', apertureScale=200)
+    neighbour_geom = shapely_box(.25, 2, 1.25, 3)
+    params = _topology_stencil_params('bottom', [closed, _paste_pad(neighbour_geom, 'rect')])
+    report = jg.inspect_stencil(params, 'bottom')
+    assert _inspection_geom(report['openings']).equals(neighbour_geom)
+    assert report['overlaps'] == []
+    closed['apertureOverride'] = 'open'
+    report = jg.inspect_stencil(params, 'bottom')
+    assert len(report['overlaps']) == 1
+    assert _inspection_geom(report['openings']).area == pytest.approx(4.75)
+
+
+def test_overlap_outside_the_manufactured_pocket_is_not_reported():
+    first = _paste_pad(shapely_box(9.5, 2, 10.5, 3), 'rect')
+    later = dict(_paste_pad(shapely_box(10.8, 2, 11.8, 3), 'rect'), apertureScale=200)
+    params = dict(_topology_stencil_params('bottom', [first, later]), pocket_clearance=0)
+    report = jg.inspect_stencil(params, 'bottom')
+    assert _inspection_geom(report['openings']).equals(shapely_box(9.5, 2, 10, 3))
+    assert report['overlaps'] == []
+
+
+def test_overlap_follows_printable_grid_and_stagger_geometry():
+    large = dict(_paste_pad(shapely_box(-1, -1, 1, 1), 'rect'), apertureScale=200)
+    small = _paste_pad(shapely_box(1.6, -.15, 1.9, .15), 'rect')
+    params = _topology_stencil_params('bottom', [large, small])
+    assert len(jg.inspect_stencil(params, 'bottom')['overlaps']) == 1
+    params.update(stencil_grid=True, stencil_grid_size=2.5, stencil_grid_bar=.5)
+    # The smaller pad falls inside the large pad's horizontal grid bar.
+    assert jg.inspect_stencil(params, 'bottom')['overlaps'] == []
+
+    row = [_paste_pad(shapely_box(x - .15, -.07, x + .15, .07), 'rect') for x in (0, .4, .8)]
+    row[0]['apertureScale'] = 200
+    params = _topology_stencil_params('bottom', row)
+    assert len(jg.inspect_stencil(params, 'bottom')['overlaps']) == 1
+    params.update(stencil_stagger=True, stencil_stagger_gap=.55, stencil_stagger_offset=.15)
+    assert jg.inspect_stencil(params, 'bottom')['overlaps'] == []
+
+
+@pytest.mark.parametrize('side', ['top', 'bottom'])
 @pytest.mark.parametrize('topology', ['hole', 'multipart', 'local_clear'])
 def test_square_conversion_preserves_macro_holes_and_separate_openings(side, topology):
     from shapely.ops import unary_union

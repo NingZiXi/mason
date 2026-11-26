@@ -9,6 +9,7 @@ import * as config from '../../stores/config';
 import * as focusParameter from '../focus-parameter-control';
 import * as ejectHole from '../eject-hole';
 import * as componentRelief from '../component-relief';
+import * as padOverrides from '../pad-overrides';
 import { useConfigStore, type AppMode } from '../../stores/config';
 
 // Compile actual browser templates rather than Vitest's SSR-only SFC output.
@@ -24,11 +25,12 @@ function loadForm(name: 'ConfigForm' | 'StencilForm'): Component {
   const resolveImport = (dependency: string): unknown => {
     if (dependency === 'vue') return Vue;
     if (dependency === 'element-plus') return { ElSwitch: empty };
-    if (dependency === 'vue-i18n') return { useI18n: () => ({ t: (key: string) => key }) };
+    if (dependency === 'vue-i18n') return { useI18n: () => ({ locale: ref('en-US'), t: (key: string) => key }) };
     if (dependency.endsWith('/stores/config')) return config;
     if (dependency.endsWith('/lib/focus-parameter-control')) return focusParameter;
     if (dependency.endsWith('/lib/eject-hole')) return ejectHole;
     if (dependency.endsWith('/lib/component-relief')) return componentRelief;
+    if (dependency.endsWith('/lib/pad-overrides')) return padOverrides;
     if (dependency.endsWith('/directives/app-tooltip')) return { vAppTooltip: {} };
     if (dependency.endsWith('.vue')) return { __esModule: true, default:
       /\/(MotionCollapse|InlineHelp)\.vue$/.test(dependency) ? passSlots : empty };
@@ -79,6 +81,12 @@ function mountForms(initialMode: AppMode) {
         onInput: (value: number | null) => emit('update:modelValue', value) });
     },
   });
+  const slider = defineComponent({ props: ['modelValue'], emits: ['update:modelValue'],
+    setup(props, { emit }) {
+      return () => h('input', { type: 'range', value: props.modelValue,
+        onInput: (value: number) => emit('update:modelValue', value) });
+    },
+  });
   const parent = defineComponent({ setup: () => () => h(mode.value === 'jig' ? ConfigForm : StencilForm, {
     advancedOpen: advancedOpen.value[mode.value],
     'onUpdate:advancedOpen': (value: boolean) => { advancedOpen.value[mode.value] = value; },
@@ -87,7 +95,8 @@ function mountForms(initialMode: AppMode) {
   const app = renderer.createApp(parent);
   app.use(pinia);
   app.component('ElInputNumber', input);
-  for (const name of ['ElSlider', 'ElCheckbox', 'ElSelect', 'ElOption']) app.component(name, { render: () => null });
+  app.component('ElSlider', slider);
+  for (const name of ['ElCheckbox', 'ElSelect', 'ElOption']) app.component(name, empty);
   app.mount(root);
   mounted.push(() => app.unmount());
   const button = (label: string) => all(root).find(element => element.tag === 'button' && text(element).includes(label))!;
@@ -99,6 +108,25 @@ function mountForms(initialMode: AppMode) {
 }
 
 describe('parameter form editing', () => {
+  it('preserves a fractional preset until the user adjusts the global opening scale', async () => {
+    const store = useConfigStore();
+    store.config.padShrink = 12.5;
+    const form = mountForms('stencil');
+    const slider = all(form.root).find(element => element.tag === 'input' && element.props.type === 'range'
+      && element.props.id === 'stencil-default-scale')!;
+    const scaleLabel = () => text(all(form.root).find(element => element.props.class === 'aperture-default-value')!);
+    await nextTick();
+    expect(slider?.props.value).toBe(87.5);
+    expect(scaleLabel()).toBe('87.5%');
+    expect(store.config.padShrink).toBe(12.5);
+
+    (slider.props.onInput as (value: number) => void)(80);
+    await nextTick();
+    expect(store.config.padShrink).toBe(20);
+    expect(slider.props.value).toBe(80);
+    expect(scaleLabel()).toBe('80%');
+  });
+
   it('keeps the selected thickness preset when the input is focused or cleared', async () => {
     const store = useConfigStore();
     store.config.stencilThickness = 0.2;

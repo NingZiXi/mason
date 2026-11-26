@@ -20,7 +20,7 @@ function setup() {
     releasePointerCapture: (id: number) => captures.delete(id), focus: vi.fn(),
   };
   const rect = { style: { display: 'none' }, setAttribute: (key: string, value: string) => rectAttrs.set(key, value) };
-  const pads: InspectionPad[] = [-3, 3].map((x, index) => ({ sourceIndex: index + 5, decision: 'auto', width: 1, height: 1,
+  const pads: InspectionPad[] = [-3, 3].map((x, index) => ({ sourceIndex: index + 5, decision: 'auto', width: 1, height: 1, shortEdge: 1, area: 1,
     polygons: [{ outer: [[x - .5, -.5], [x + .5, -.5], [x + .5, .5], [x - .5, .5]], holes: [] }] }));
   const select = vi.fn((ids: number[]) => { selected = ids; });
   const gesture = vi.fn();

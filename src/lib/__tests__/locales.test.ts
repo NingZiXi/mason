@@ -118,7 +118,8 @@ describe('complete and valid UI translations', () => {
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
     i18n.global.locale.value = locale as typeof i18n.global.locale.value;
     for (const [key, value] of Object.entries(translated)) {
-      const params = (text: string) => [...text.matchAll(/\{([a-zA-Z]\w*)\}/g)].map(match => match[1]).sort();
+      // Languages can use different numbers of plural forms for the same arguments.
+      const params = (text: string) => [...new Set(Array.from(text.matchAll(/\{([a-zA-Z]\w*)\}/g), match => match[1]))].sort();
       expect(value.trim(), key).not.toBe('');
       expect(params(value), key).toEqual(params(reference[key]));
       const named = Object.fromEntries(params(value).map(name => [name, '7']));
@@ -126,6 +127,15 @@ describe('complete and valid UI translations', () => {
     }
     expect(errors).not.toHaveBeenCalled();
     expect(warnings).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [1, 'Select 1 pad', '1 pad has a custom scale'],
+    [2, 'Select 2 pads', '2 pads have a custom scale'],
+  ] as const)('renders English aperture counts for %i pad(s)', (n, selection, overrides) => {
+    i18n.global.locale.value = 'en';
+    expect(i18n.global.t('inspection.selectSizeMatches', { n }, n)).toBe(selection);
+    expect(i18n.global.t('stencil.apertureOverrideCount', { n }, n)).toBe(overrides);
   });
 });
 

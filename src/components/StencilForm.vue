@@ -5,12 +5,13 @@ import { useConfigStore } from "../stores/config";
 import PanelScopePicker from "./PanelScopePicker.vue";
 import MotionCollapse from "./MotionCollapse.vue";
 import { focusParameterControl } from "../lib/focus-parameter-control";
+import { APERTURE_SCALE_MIN, APERTURE_SCALE_ORIGINAL, defaultApertureScaleFromShrink } from "../lib/pad-overrides";
 import InlineHelp from "./InlineHelp.vue";
 import SlidingIndicator from "./SlidingIndicator.vue";
 import PryNotchPicker from "./PryNotchPicker.vue";
 
 const store = useConfigStore();
-const { t } = useI18n();
+const { locale, t } = useI18n();
 const c = computed(() => store.config);
 
 // 厚度预设
@@ -57,7 +58,22 @@ const totalThickness = computed(() =>
   (c.value.pcbThickness + c.value.stencilThickness).toFixed(2)
 );
 
-const percentText = (value: number) => `${value}%`;
+const defaultApertureScale = computed(() => defaultApertureScaleFromShrink(c.value.padShrink));
+const apertureScaleFormat = computed(() => new Intl.NumberFormat(locale.value, { style: 'percent', maximumFractionDigits: 2 }));
+const percentText = (value: number) => apertureScaleFormat.value.format(value / APERTURE_SCALE_ORIGINAL);
+function updateDefaultApertureScale(value: number | number[] | null | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return;
+  const scale = Math.min(APERTURE_SCALE_ORIGINAL, Math.max(APERTURE_SCALE_MIN, value));
+  updateNumber('padShrink', APERTURE_SCALE_ORIGINAL - scale);
+}
+
+const apertureOverrideCount = computed(() => {
+  let count = 0;
+  for (const pads of [c.value.stencilPadsTop, c.value.stencilPadsBottom]) {
+    for (const pad of pads) if (pad.apertureScale !== undefined) count++;
+  }
+  return count;
+});
 
 const topPadCount = computed(() => c.value.stencilPadsTop.length);
 const bottomPadCount = computed(() => c.value.stencilPadsBottom.length);
@@ -161,27 +177,28 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
       </div>
     </div>
 
-    <!-- 焊盘缩小 -->
     <div class="field">
-      <InlineHelp id="stencil-pad-shrink-help" topic="padShrink" :label="t('stencil.padShrink')">
-        <label for="stencil-pad-shrink" class="field-label" @click.prevent="focusParameterControl">{{ t('stencil.padShrink') }}</label>
+      <InlineHelp id="stencil-default-scale-help" topic="padShrink" :label="t('stencil.apertureDefaultScale')">
+        <label for="stencil-default-scale" class="field-label" @click.prevent="focusParameterControl">{{ t('stencil.apertureDefaultScale') }}</label>
+        <template #trailing>
+          <span class="aperture-default-value" aria-hidden="true">{{ percentText(defaultApertureScale) }}</span>
+        </template>
         <template #control>
-          <div class="pad-shrink-controls">
-            <el-slider id="stencil-pad-shrink" :aria-label="t('stencil.padShrink')"
-              v-model="c.padShrink"
-              :min="0"
-              :max="50"
-              :step="1"
-              :format-tooltip="percentText"
-              :format-value-text="percentText"
+          <div class="aperture-default-controls">
+            <el-slider id="stencil-default-scale" :aria-label="t('stencil.apertureDefaultScale')"
+              :model-value="defaultApertureScale"
+              :min="APERTURE_SCALE_MIN" :max="APERTURE_SCALE_ORIGINAL" :step="1"
+              :format-tooltip="percentText" :format-value-text="percentText"
+              @update:model-value="updateDefaultApertureScale"
             />
-            <el-input-number class="pad-shrink-input" :aria-label="`${t('stencil.padShrink')} (%)`"
-              :model-value="c.padShrink" :value-on-clear="c.padShrink"
-              :min="0" :max="50" :step="1" :precision="0" size="small"
-              @update:model-value="updateNumber('padShrink', $event)">
-              <template #suffix><span class="pad-shrink-unit" aria-hidden="true">%</span></template>
-            </el-input-number>
+            <div class="aperture-default-endpoints" aria-hidden="true">
+              <span>{{ percentText(APERTURE_SCALE_MIN) }}</span>
+              <span>{{ t('inspection.scaleOriginal', { value: percentText(APERTURE_SCALE_ORIGINAL) }) }}</span>
+            </div>
           </div>
+          <p v-if="apertureOverrideCount" class="summary-note aperture-default-note">
+            {{ t('stencil.apertureOverrideCount', { n: apertureOverrideCount }, apertureOverrideCount) }}
+          </p>
         </template>
       </InlineHelp>
       <div v-if="topPadCount || bottomPadCount" class="pad-summary">
@@ -513,17 +530,30 @@ const showAdvanced = defineModel<boolean>('advancedOpen', { default: false });
 .preset-val { display: inline-flex; align-items: baseline; gap: 3px; font-size: var(--body-sm-font-size); line-height: var(--body-sm-line-height); color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .preset-val small { font-size: inherit; color: var(--text-tertiary); }
 
-.pad-shrink-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  padding-inline-start: 10px;
+.aperture-default-controls { padding-inline: 9px; }
+.aperture-default-value {
+  min-width: 5ch;
+  padding: 2px 7px;
+  border-radius: var(--radius-inner);
+  background: var(--control-selection-surface);
+  color: var(--text-default);
+  font-size: var(--body-sm-font-size);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--body-md-line-height);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
-.pad-shrink-input { width: 104px; }
-.pad-shrink-input :deep(.el-input__inner) { text-align: end; }
-.pad-shrink-input :deep(.el-input__suffix-inner > :first-child) { margin-inline-start: 2px; }
-.pad-shrink-unit { color: var(--text-secondary); font-size: var(--body-sm-font-size); }
+.aperture-default-endpoints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1px 6px;
+  color: var(--text-secondary);
+  font-size: var(--body-sm-font-size);
+  line-height: var(--body-sm-line-height);
+  font-variant-numeric: tabular-nums;
+}
+.aperture-default-note { margin-block-start: 6px; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 /* 外框形状切换(跟随板形 / 矩形) */
 .shape-row { --selection-background: var(--control-selection-surface); --selection-border: var(--bg-brand); --selection-shadow: none; --selection-radius: var(--radius-control); position: relative; isolation: isolate; display: flex; gap: 6px; }

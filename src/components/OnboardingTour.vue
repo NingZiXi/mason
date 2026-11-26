@@ -8,22 +8,61 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const current = ref(0);
 const copyPrefix = computed(() => props.context === "inspection" ? "inspection.tour" : "onboarding");
-const steps = computed(() => props.context === "inspection" ? [
-  { key: "select", selector: ".selection-label", placement: "bottom" as const },
-  { key: "decide", selector: ".decision-controls", placement: "bottom" as const },
-  { key: "compare", selector: ".inspection-segments", placement: "bottom" as const },
+type Step = { key: string; selector: string; fallback?: string; placement: "top" | "bottom" | "left" | "right" };
+const steps = computed<Step[]>(() => props.context === "inspection" ? [
+  { key: "select", selector: ".pad-hit", placement: "bottom" },
+  { key: "decide", selector: ".inspection-sidebar-heading", fallback: ".inspection-sidebar-toggle", placement: "bottom" },
+  { key: "compare", selector: ".inspection-segments", placement: "bottom" },
 ] : [
-  { key: "modes", selector: ".mode-switch", placement: "bottom" as const },
-  { key: "import", selector: "#slot-gerber .dropzone, #slot-gerber .result-header", placement: "right" as const },
-  { key: props.mode === "jig" ? "jigParams" : "stencilParams", selector: props.mode === "jig" ? ".stencil-size-section" : "#slot-stencil .slot-header", placement: "right" as const },
-  { key: "preview", selector: ".preview-modes", placement: "bottom" as const },
-  { key: "export", selector: ".export-actions", placement: "bottom" as const },
+  { key: "modes", selector: ".mode-switch", placement: "bottom" },
+  { key: "import", selector: "#slot-gerber .dropzone, #slot-gerber .result-header", placement: "right" },
+  { key: props.mode === "jig" ? "jigParams" : "stencilParams", selector: props.mode === "jig" ? ".stencil-size-section" : "#slot-stencil .slot-header", placement: "right" },
+  { key: "preview", selector: ".preview-modes", placement: "bottom" },
+  { key: "export", selector: ".export-actions", placement: "bottom" },
 ]);
 
-// The sidebar clips its contents. Position its scroll before Tour measures a
-// target, even when that target happens to lie inside the window's viewport.
-function target(selector: string) {
-  const element = (props.root ?? document).querySelector<HTMLElement>(selector);
+function visibleInspectionTarget(element: HTMLElement | null): boolean {
+  if (!element || element.closest('[inert], [aria-hidden="true"]')) return false;
+  const { visibility, opacity } = getComputedStyle(element);
+  if (visibility !== "visible" || opacity === "0") return false;
+  const rect = element.getBoundingClientRect();
+  const scope = props.root?.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0
+    && rect.right > Math.max(0, scope?.left ?? 0)
+    && rect.bottom > Math.max(0, scope?.top ?? 0)
+    && rect.left < Math.min(window.innerWidth, scope?.right ?? window.innerWidth)
+    && rect.top < Math.min(window.innerHeight, scope?.bottom ?? window.innerHeight);
+}
+
+function visiblePad(root: HTMLElement | Document, selector: string) {
+  const canvas = root.querySelector(".inspection-canvas")?.getBoundingClientRect();
+  if (!canvas) return null;
+  const sidebar = root.querySelector<HTMLElement>(".inspection-sidebar.is-open");
+  const right = Math.min(window.innerWidth, canvas.right,
+    visibleInspectionTarget(sidebar) ? sidebar!.getBoundingClientRect().left : Infinity);
+  for (const pad of root.querySelectorAll<HTMLElement>(selector)) {
+    const { left, top, right: padEnd, bottom, width, height } = pad.getBoundingClientRect();
+    if (!width || !height || left < Math.max(0, canvas.left) || padEnd > right
+      || top < Math.max(0, canvas.top) || bottom > Math.min(window.innerHeight, canvas.bottom)) continue;
+    // A board-wide target can push the guide off screen. Anchor it to a pad
+    // with space for the card, or let the tour center itself when zoomed in.
+    if (Math.max(top, window.innerHeight - bottom) >= 265) return pad;
+  }
+  return null;
+}
+
+function target({ key, selector, fallback }: Step) {
+  const root = props.root ?? document;
+  if (props.context === "inspection" && key === "select") return visiblePad(root, selector);
+  const element = root.querySelector<HTMLElement>(selector);
+  if (props.context === "inspection") {
+    if (visibleInspectionTarget(element)) return element;
+    const alternative = fallback ? root.querySelector<HTMLElement>(fallback) : null;
+    return visibleInspectionTarget(alternative) ? alternative : null;
+  }
+
+  // The main sidebar clips its contents, even inside the window's viewport.
+  // Scroll it before Tour measures the target.
   const sidebar = element?.closest<HTMLElement>(".app-sidebar");
   if (element && sidebar) {
     const rect = element.getBoundingClientRect();
@@ -41,7 +80,7 @@ function target(selector: string) {
     :mask="{ color: 'rgba(28, 27, 31, .48)' }" :scroll-into-view-options="false"
     :content-style="{ width: '350px', maxWidth: 'calc(100vw - 32px)' }" @close="emit('close')">
     <ElTourStep v-for="(step, index) in steps" :key="step.key"
-      :target="step.selector ? () => target(step.selector) : undefined" :placement="step.placement"
+      :target="() => target(step)" :placement="step.placement"
       :title="t(`${copyPrefix}.${step.key}Title`)" :show-close="false"
       :prev-button-props="{ children: t('onboarding.previous') }"
       :next-button-props="{ children: t(index === steps.length - 1 ? `${copyPrefix}.finish` : 'onboarding.next') }">

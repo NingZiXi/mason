@@ -89,32 +89,39 @@ describe('preview parameter serialization cache', () => {
 });
 
 describe('effective preview geometry changes', () => {
-  it('refreshes after in-place opening decisions and their undo/redo without replacing imported arrays', async () => {
-    setActivePinia(createPinia());
-    const store = useConfigStore();
-    store.config.appMode = 'stencil';
-    store.config.stencilPadsTop = [{ type: 'rect', cx: 0, cy: 0, polarity: 'D', parts: [] }];
-    await nextTick();
-    store.clearParameterHistory();
-    const pads = store.config.stencilPadsTop;
-    let changed = 0;
-    const stop = watchPreviewGeometryChanges(() => store.config, () => ++changed);
-    store.setApertureOverrides('top', [0], 'closed');
-    await nextTick();
-    expect(changed).toBe(1);
-    expect(pads[0].apertureOverride).toBe('closed');
-    await store.undo();
-    expect(changed).toBe(2);
-    expect(pads[0].apertureOverride).toBeUndefined();
-    await store.redo();
-    expect(changed).toBe(3);
-    expect(pads[0].apertureOverride).toBe('closed');
-    expect(store.config.stencilPadsTop).toBe(pads);
-    store.setApertureOverrides('top', [0], 'closed');
-    await nextTick();
-    expect(changed).toBe(3);
-    stop();
-  });
+  it.each(['opening decision', 'aperture scale'] as const)(
+    'refreshes after an in-place %s edit and its undo/redo without replacing imported arrays', async (kind) => {
+      setActivePinia(createPinia());
+      const store = useConfigStore();
+      store.config.appMode = 'stencil';
+      store.config.padShrink = 15;
+      store.config.stencilPadsTop = [{ type: 'rect', cx: 0, cy: 0, polarity: 'D', parts: [] }];
+      await nextTick();
+      store.clearParameterHistory();
+      const pads = store.config.stencilPadsTop;
+      const isScale = kind === 'aperture scale';
+      const field = isScale ? 'apertureScale' : 'apertureOverride';
+      const value = isScale ? 100 : 'closed';
+      const edit = () => isScale ? store.setApertureScales('top', [0], 100) : store.setApertureOverrides('top', [0], 'closed');
+      let changed = 0;
+      const stop = watchPreviewGeometryChanges(() => store.config, () => ++changed);
+      edit();
+      await nextTick();
+      expect(changed).toBe(1);
+      expect(pads[0][field]).toBe(value);
+      await store.undo();
+      expect(changed).toBe(2);
+      expect(pads[0][field]).toBeUndefined();
+      await store.redo();
+      expect(changed).toBe(3);
+      expect(pads[0][field]).toBe(value);
+      expect(store.config.stencilPadsTop).toBe(pads);
+      edit();
+      await nextTick();
+      expect(changed).toBe(3);
+      stop();
+    },
+  );
 
   it('does not reread pad decisions during scalar slider changes', async () => {
     const c = config();

@@ -10,15 +10,19 @@ import { setPadOverrides } from '../pad-overrides';
 
 beforeEach(() => setActivePinia(createPinia()));
 
-function setup() {
+function makeImport() {
   const pads = extractPads('%FSLAX45Y45*%\n%MOMM*%\n%ADD10C,1.8*%\nD10*\nX1000000Y1000000D03*\nX3000000Y1000000D03*\nM02*').pads;
   const outline = (x: number, width: number) => ({ points: [[x, 0], [x + width, 0], [x + width, 20], [x, 20]] as [number, number][],
     holes: [], bbox: { minX: x, minY: 0, maxX: x + width, maxY: 20 } });
   const panel = makePanelVariant(outline(0, 40), pads, pads);
   const first = makePanelVariant(outline(0, 20), pads, pads), second = makePanelVariant(outline(20, 20), pads, pads);
+  return { filename: 'mixed.zip', isPanel: true, hasPads: true, mode: 'panel' as const,
+    variants: { panel, single: first, boards: [first, second] } };
+}
+
+function setup() {
   const store = useConfigStore();
-  store.applyGerberImport({ filename: 'mixed.zip', isPanel: true, hasPads: true, mode: 'panel',
-    variants: { panel, single: first, boards: [first, second] } });
+  store.applyGerberImport(makeImport());
   return store;
 }
 
@@ -70,6 +74,70 @@ describe('manual aperture decisions', () => {
     expect(single.topPads![2].parts[0].holes).toHaveLength(1);
     setPadOverrides(single.topPads!, [0], undefined, 'top', { panel, single, hasPads: true }, single);
     expect(panel.topPads!.map(pad => pad.apertureOverride)).toEqual([undefined, undefined, 'closed']);
+  });
+
+  it('synchronizes scales only to matching top-side geometry across panel scopes', () => {
+    const store = setup();
+    store.setApertureScales('top', [0], 125);
+    expect(store.config.stencilPadsTop.map(pad => pad.apertureScale)).toEqual([125, undefined]);
+    expect(store.panelBoards.map(board => board.topPads![0].apertureScale)).toEqual([125, undefined]);
+    expect(store.config.stencilPadsBottom.every(pad => pad.apertureScale === undefined)).toBe(true);
+    store.setApertureScales('top', [0], undefined);
+    expect(store.panelBoards.every(board => board.topPads![0].apertureScale === undefined)).toBe(true);
+  });
+
+  it('does not carry scales or their history into a fresh import of the same board', async () => {
+    const store = setup();
+    await nextTick();
+    store.setApertureScales('top', [0], 140);
+    store.setApertureScales('bottom', [1], 70);
+    await nextTick();
+    expect(store.canUndo).toBe(true);
+    const oldPad = store.config.stencilPadsTop[0];
+
+    store.applyGerberImport(makeImport());
+    await nextTick();
+    const importedPad = store.config.stencilPadsTop[0];
+    expect([importedPad.cx, importedPad.cy, importedPad.parts]).toEqual([oldPad.cx, oldPad.cy, oldPad.parts]);
+    expect(importedPad.apertureScale).toBeUndefined();
+    expect(store.config.stencilPadsBottom[1].apertureScale).toBeUndefined();
+    expect(store.canUndo).toBe(false);
+    await store.undo();
+    expect(importedPad.apertureScale).toBeUndefined();
+    store.setPanelBoard(0);
+    expect(store.config.stencilPadsTop[0].apertureScale).toBeUndefined();
+  });
+
+  it('undoes a mixed-scale batch as one edit and distinguishes 100% from global scaling', async () => {
+    const store = setup();
+    await nextTick();
+    const scales = () => store.config.stencilPadsTop.map(pad => pad.apertureScale);
+    store.setApertureScales('top', [0], 80);
+    store.setApertureScales('top', [1], 140);
+    await nextTick();
+    store.setApertureScales('top', [0, 1], 100);
+    await nextTick();
+    expect(scales()).toEqual([100, 100]);
+    store.setApertureScales('top', [0, 1]);
+    await nextTick();
+    expect(scales()).toEqual([undefined, undefined]);
+    await store.undo();
+    expect(scales()).toEqual([100, 100]);
+    await store.undo();
+    expect(scales()).toEqual([80, 140]);
+    expect(store.panelBoards.map(board => board.topPads![0].apertureScale)).toEqual([80, 140]);
+    await store.redo();
+    expect(scales()).toEqual([100, 100]);
+  });
+
+  it('rejects out-of-range or fractional scale edits', () => {
+    const store = setup();
+    store.setApertureScales('top', [0], 150);
+    store.setApertureScales('top', [0], 201);
+    store.setApertureScales('top', [0], 99.5);
+    expect(store.config.stencilPadsTop[0].apertureScale).toBe(150);
+    store.setApertureScales('top', [0], 49);
+    expect(store.config.stencilPadsTop[0].apertureScale).toBe(150);
   });
 
   it('keeps duplicate flashes of the same physical pad consistent in the active scope', () => {
@@ -124,18 +192,37 @@ describe('manual aperture decisions', () => {
     await nextTick();
     const geometry = store.config.stencilPadsTop;
     store.setApertureOverride('top', 0, 'open');
+    store.setApertureScales('top', [0], 125);
     await nextTick();
     store.setApertureOverride('top', 1, 'closed');
     await store.undo();
     expect(store.config.stencilPadsTop.map(p => p.apertureOverride)).toEqual(['open', undefined]);
+    expect(store.config.stencilPadsTop[0].apertureScale).toBe(125);
     expect(store.config.stencilPadsTop).toBe(geometry);
     await store.redo();
     expect(store.config.stencilPadsTop[1].apertureOverride).toBe('closed');
+    store.setApertureScales('top', [0], 150);
+    await nextTick();
+    await store.undo();
+    expect(store.config.stencilPadsTop[0].apertureScale).toBe(125);
+    await store.redo();
+    expect(store.config.stencilPadsTop[0].apertureScale).toBe(150);
     store.resetApertureOverrides('top');
     await store.undo();
     expect(store.config.stencilPadsTop.map(p => p.apertureOverride)).toEqual(['open', 'closed']);
     await store.redo();
     expect(store.config.stencilPadsTop.every(p => !p.apertureOverride)).toBe(true);
+  });
+
+  it('transports per-pad scales and invalidates only the correct stencil side', () => {
+    const store = setup();
+    const before = buildScadParams(store.config);
+    store.setApertureScales('top', [0], 150);
+    const after = buildScadParams(store.config);
+    expect(after.stencil_pads_top[0].apertureScale).toBe(150);
+    expect(scadPartHash(after, 'stencil_top')).not.toBe(scadPartHash(before, 'stencil_top'));
+    expect(scadPartHash(after, 'stencil_bottom')).toBe(scadPartHash(before, 'stencil_bottom'));
+    expect(scadPartHash(after, 'insert')).toBe(scadPartHash(before, 'insert'));
   });
 
   it('transports decisions to the engine and invalidates only the correct stencil side', () => {

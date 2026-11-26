@@ -13,7 +13,7 @@ import type { GerberVariants, PanelMode } from "../lib/gerber/panel";
 import { getPanelBoards, resolvePanelSelection } from "../lib/gerber/panel";
 import { readPresetSettings } from "../lib/config-presets";
 import { useParameterHistory } from "../composables/useParameterHistory";
-import { setPadOverrides, type ApertureOverride, type PadSide } from "../lib/pad-overrides";
+import { setPadOverrides, setPadScales, type ApertureOverride, type PadSide } from "../lib/pad-overrides";
 import { emptyReliefPlans, effectiveInsertHeight, materializeReliefDepths, type ComponentReliefPlans, type ComponentReliefRegion, type JigPrintSide } from '../lib/component-relief';
 import { positioningPostLayout } from '../lib/positioning-post-layout';
 
@@ -786,6 +786,18 @@ export const useConfigStore = defineStore("config", () => {
     setPadOverrides(pads, indices, value, side, variants, active);
   }
 
+  function changePadScales(side: PadSide, edits: ReadonlyArray<readonly [number, number | undefined]>) {
+    const pads = side === 'top' ? config.value.stencilPadsTop : config.value.stencilPadsBottom;
+    const variants = gerberVariants.value;
+    const active = variants ? resolvePanelSelection(variants, config.value.panelMode, config.value.panelBoardIndex).variant : null;
+    if (edits.length) setPadScales(pads, edits, side, variants, active);
+  }
+
+  function setApertureScales(side: PadSide, indices: readonly number[], value?: number) {
+    history.breakGroup();
+    changePadScales(side, indices.map(index => [index, value] as const));
+  }
+
   function setApertureOverride(side: PadSide, index: number, value?: ApertureOverride) {
     setApertureOverrides(side, [index], value);
   }
@@ -960,6 +972,12 @@ export const useConfigStore = defineStore("config", () => {
             const indices = pads.flatMap((pad, index) => pad.apertureOverride !== overrides.get(index) && overrides.get(index) === value ? [index] : []);
             changePadOverrides(side, indices, value);
           }
+          const scales = new Map(side === 'top' ? apertures.topScales : apertures.bottomScales);
+          const scaleEdits = pads.flatMap((pad, index) => {
+            const scale = scales.get(index);
+            return pad.apertureScale !== scale ? [[index, scale] as const] : [];
+          });
+          changePadScales(side, scaleEdits);
         }
         await nextTick();
       } finally { restoringParameters = false; }
@@ -992,6 +1010,7 @@ export const useConfigStore = defineStore("config", () => {
     setPanelBoard,
     setApertureOverride,
     setApertureOverrides,
+    setApertureScales,
     resetApertureOverrides,
     setComponentReliefRegions,
     setComponentReliefDefaultDepth,

@@ -58,6 +58,7 @@ The core design goal is a minimal workflow of "drag in Gerber → export STL", w
 - Test-point filtering (on by default): combines Gerber purpose attributes, optional `FlyingProbeTesting.json` component/pin data, and isolated-circle geometry. Component pins, nearby circles and regular rows are protected; check the preview results.
 - 2D aperture inspection: compare source pads, actual apertures and overlays, with automatic filtering reasons
 - Manual apertures: edit only in Source pads; left-click or box-select to open, close or reset pads, right-drag to pan and scroll to zoom. Supports undo/redo and synchronization between panel and board scopes
+- Aperture scaling: Set the default aperture scale (50–100%) in the sidebar. In 2D inspection, select pads on the canvas or use **Select by size** in the right-hand **Inspection tools** panel to select by original short edge or area. Drag the individual scale slider (50–200%) to see the outline live, then click Apply. Choose 100% for the original size, or Restore default so the pads follow the sidebar value again. Check new overlaps in the overlay.
 - Post-processing options: dense pin staggering, large-hole grid
 - Outer frame shape switchable between "follow board shape" and "rectangle", with adjustable corner radius
 - Trapezoidal pick-and-place notch for easy PCB removal from the pocket
@@ -132,7 +133,7 @@ Installer artifacts are in `src-tauri/target/release/bundle/` (Windows: `.msi` /
 1. Switch to "PCB Stencil" mode
 2. Drag in a Gerber ZIP (must contain `.GTP` / `.GBP` paste mask layer)
 3. Select stencil layer thickness preset (Resin 0.15mm / Standard 0.2mm / FDM 0.3mm)
-4. (Optional) Adjust pad shrink ratio, frame width, outer corner radius, pick-and-place notch, etc.
+4. (Optional) Adjust default aperture scale, frame width, outer corner radius, pick-and-place notch, etc.
 5. Check aperture positions and filtering in 2D inspection, edit if needed, then review the 3D model
 6. Export STL for slicing and printing, or STEP for further CAD editing
 
@@ -187,9 +188,12 @@ cd src-tauri && cargo check
 
 # Python geometry end-to-end verification (build123d)
 python python/tests/run_all.py
+
+python -m pip install pytest
+python -m pytest python/test_jig_generator.py -q
 ```
 
-Geometry verification tests cover: screw layout consistency, three-part geometry and hole positions, irregular board outlines, stencil pad openings, notch depth and direction, B-side hex nut countersink, etc. — 11 test scripts in total.
+Geometry verification covers screw layout, part geometry, irregular board outlines, stencil openings, notches, nut pockets, and component clearance. The separate pytest suite covers regressions such as per-pad aperture scaling.
 
 CI runs all checks via GitHub Actions on every push / PR.
 

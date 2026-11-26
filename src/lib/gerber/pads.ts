@@ -46,6 +46,8 @@ export interface PadPolygon {
   componentRef?: string;
   /** User decision takes precedence over automatic test-point filtering. */
   apertureOverride?: "open" | "closed";
+  /** Opening multiplier in percent: overrides global shrink; 100 keeps the original size. */
+  apertureScale?: number;
   /** 部件列表(宏光圈可产生多个,含极性与内孔) */
   parts: PadPart[];
 }
