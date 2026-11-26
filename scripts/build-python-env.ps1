@@ -28,7 +28,9 @@ $embedZip = Join-Path $tmp "python-embed.zip"
 Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip" -OutFile $embedZip -UseBasicParsing
 
 Write-Host "==> 解压..."
-Expand-Archive -Path $embedZip -DestinationPath $dest -Force
+# The destination was just recreated, so no overwrite overload is needed.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::ExtractToDirectory($embedZip, $dest)
 
 # 嵌入式发行版默认禁用 site:改 ._pth 启用,并把 Lib\site-packages 加进搜索路径
 Write-Host "==> 启用 site-packages..."
