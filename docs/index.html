@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网</title>
-<meta name="description" content="Mason 是一款开源桌面工具：拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。Windows / macOS / Linux 全平台，内置引擎零配置。" />
+<title>Mason 泥瓦匠｜PCB 钢网与夹具生成器</title>
+<meta name="description" content="Mason 泥瓦匠是一款开源 PCB 钢网与夹具生成器。导入嘉立创等 EDA 工具导出的 Gerber ZIP，生成可 3D 打印的锡膏钢网与定位夹具。支持 Windows、macOS 和 Linux。" />
 <meta name="keywords" content="钢网夹具,PCB钢网,3D打印钢网,Gerber转钢网,锡膏印刷,嘉立创钢网,Mason泥瓦匠,开源PCB工具" />
 <link rel="canonical" href="https://ningzixi.github.io/mason/" />
 <!-- Open Graph / Twitter 分享卡片 -->
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Mason 泥瓦匠" />
-<meta property="og:title" content="Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网" />
-<meta property="og:description" content="拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。开源 · 免费 · 跨平台 · 零云依赖。" />
+<meta property="og:title" content="Mason 泥瓦匠｜PCB 钢网与夹具生成器" />
+<meta property="og:description" content="Mason 泥瓦匠是一款开源 PCB 钢网与夹具生成器。导入嘉立创等 EDA 工具导出的 Gerber ZIP，生成可 3D 打印的锡膏钢网与定位夹具。支持 Windows、macOS 和 Linux。" />
 <meta property="og:url" content="https://ningzixi.github.io/mason/" />
 <meta property="og:image" content="https://ningzixi.github.io/mason/assets/og.png" />
 <meta property="og:image:width" content="1024" />
 <meta property="og:image:height" content="640" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网" />
-<meta name="twitter:description" content="拖入 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。开源 · 跨平台。" />
+<meta name="twitter:title" content="Mason 泥瓦匠｜PCB 钢网与夹具生成器" />
+<meta name="twitter:description" content="Mason 泥瓦匠是一款开源 PCB 钢网与夹具生成器。导入嘉立创等 EDA 工具导出的 Gerber ZIP，生成可 3D 打印的锡膏钢网与定位夹具。支持 Windows、macOS 和 Linux。" />
 <meta name="twitter:image" content="https://ningzixi.github.io/mason/assets/og.png" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M14 14 L50 14 L50 26 L26 26 L26 38 L50 38 L50 50 L14 50' fill='none' stroke='%233E7D62' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='14' cy='14' r='5' fill='%233E7D62'/%3E%3Ccircle cx='14' cy='50' r='5' fill='%23E07A3C'/%3E%3C/svg%3E" />
 <style>
@@ -1037,8 +1037,7 @@
       <span class="eyebrow"><i></i><span data-i18n="hero.eyebrow">开源 · 免费 · 跨平台</span></span>
       <h1><span data-i18n="hero.h1a">Gerber 到 3D 打印 —</span><br /><span class="hl" data-i18n="hero.h1b">两种模式全搞定</span></h1>
       <p class="hero-sub" data-i18n="hero.sub">
-        从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具</b>（PCB 托盘 / B 面底座 / 金属钢网 / A 面顶盖），
-        也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。
+        <b>Mason 泥瓦匠</b>是一款开源 PCB 钢网与夹具生成器。导入 Gerber ZIP，即可生成可 3D 打印的<b>一体式锡膏钢网</b>，或制作配合金属钢网使用的<b>定位夹具</b>。
       </p>
       <div class="hero-cta">
         <a class="btn btn-primary" id="hero-primary" href="https://github.com/NingZiXi/mason/releases/latest/download/Mason-windows-x64-setup.exe" target="_blank" rel="noopener">
@@ -1681,8 +1680,8 @@
   ========================================================== */
   var I18N = {
     zh: {
-      "meta.title": "Mason 泥瓦匠 — 从 Gerber 到 3D 打印钢网",
-      "meta.desc": "Mason 是一款开源桌面工具：拖入嘉立创 Gerber ZIP，一键生成可 3D 打印的 PCB 锡膏印刷钢网与夹具。Windows / macOS / Linux 全平台，内置引擎零配置。",
+      "meta.title": "Mason 泥瓦匠｜PCB 钢网与夹具生成器",
+      "meta.desc": "Mason 泥瓦匠是一款开源 PCB 钢网与夹具生成器。导入嘉立创等 EDA 工具导出的 Gerber ZIP，生成可 3D 打印的锡膏钢网与定位夹具。支持 Windows、macOS 和 Linux。",
       "nav.showcase": "界面",
       "nav.workflow": "工作流程",
       "nav.modes": "两种模式",
@@ -1695,7 +1694,7 @@
       "specs.open": "开源免费 · Windows / macOS / Linux",
       "hero.h1a": "Gerber 到 3D 打印 —",
       "hero.h1b": "两种模式全搞定",
-      "hero.sub": "从嘉立创 Gerber ZIP 出发，既可生成 <b>钢网夹具</b>（托盘 / B 面底座 / 金属钢网 / A 面顶盖），也可直接打印 <b>一体式 PCB 钢网</b>。自研解析器 · 参数化 CAD · 实时预览 · 零云依赖。",
+      "hero.sub": "<b>Mason 泥瓦匠</b>是一款开源 PCB 钢网与夹具生成器。导入 Gerber ZIP，即可生成可 3D 打印的<b>一体式锡膏钢网</b>，或制作配合金属钢网使用的<b>定位夹具</b>。",
       "hero.source": "查看源码",
       "hero.cta": "免费下载 · ",
       "hero.verPrefix": "最新版本：",
@@ -1807,8 +1806,8 @@
       "footer.tagline": "从 Gerber 到 3D 打印钢网"
     },
     en: {
-      "meta.title": "Mason — Gerber to 3D-Printed Stencils",
-      "meta.desc": "Mason is an open-source desktop tool: drop in a JLCPCB Gerber ZIP and generate 3D-printable PCB solder-paste stencils and jigs in one click. Windows / macOS / Linux, zero setup.",
+      "meta.title": "Mason — PCB Stencil & Jig Generator",
+      "meta.desc": "Mason is an open-source PCB stencil and jig generator for Windows, macOS, and Linux. Import a Gerber ZIP and create 3D-printable solder paste stencils and alignment jigs.",
       "nav.showcase": "Screens",
       "nav.workflow": "Workflow",
       "nav.modes": "Two Modes",
@@ -1821,7 +1820,7 @@
       "specs.open": "Free and open source · Windows / macOS / Linux",
       "hero.h1a": "Gerber to 3D Print —",
       "hero.h1b": "Two Modes, One Tool",
-      "hero.sub": "Start from a JLCPCB Gerber ZIP and generate either a <b>stencil jig</b> (tray / B-side base / metal stencil / A-side cover) or a <b>one-piece PCB stencil</b>. Custom parser · Parametric CAD · Real-time preview · Zero cloud.",
+      "hero.sub": "<b>Mason</b> is an open-source PCB stencil and jig generator. Import a Gerber ZIP to make a 3D-printable <b>solder paste stencil</b> or a <b>jig</b> that holds a metal stencil in place.",
       "hero.source": "View Source",
       "hero.cta": "Free Download · ",
       "hero.verPrefix": "Latest: ",
@@ -1977,8 +1976,12 @@
     try { localStorage.setItem("mason_lang", l); } catch (e) {}
     document.documentElement.setAttribute("lang", l === "zh" ? "zh-CN" : "en");
     document.title = t("meta.title");
-    var metaDesc = document.querySelector('meta[name="description"]');
-    if (metaDesc) metaDesc.setAttribute("content", t("meta.desc"));
+    document.querySelectorAll('meta[property="og:title"], meta[name="twitter:title"]').forEach(function (el) {
+      el.setAttribute("content", t("meta.title"));
+    });
+    document.querySelectorAll('meta[name="description"], meta[property="og:description"], meta[name="twitter:description"]').forEach(function (el) {
+      el.setAttribute("content", t("meta.desc"));
+    });
     document.querySelectorAll("[data-i18n]").forEach(function (el) {
       var key = el.getAttribute("data-i18n");
       if (I18N[l][key] != null) el.innerHTML = I18N[l][key];
